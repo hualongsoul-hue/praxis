@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from praxis.config.subsystems import GatewayConfig
+from praxis.config.schemas import GatewayConfig
 from praxis.exceptions import (
     AuthenticationError,
     BudgetExceededError,

@@ -15,7 +15,7 @@
                     └───────────────┬─────────────────┘
                                     │
                     ┌───────────────▼─────────────────┐
-                    │  Phase 13: S12 生命周期管理       │
+                    │  Phase 13: S12 会话管理           │
                     └───────────────┬─────────────────┘
                                     │
                     ┌───────────────▼─────────────────┐
@@ -67,9 +67,9 @@ Phase 16: 集成测试与收尾优化
 ## Phase 1: 项目初始化与基础架构
 
 **目标**：搭建项目脚手架、依赖管理、目录结构和共享基础设施，使项目处于可编译可运行状态。
-**对应需求**：PRD § 2.4 子系统总览、§ 11 技术栈约束
+**对应需求**：PRD § 2.4 组件总览、§ 11 技术栈约束
 **前置依赖**：无
-**完成标志**：`uv run python -c "import praxis"` 成功执行；pytest 可运行空测试套件；14 个子包目录结构就位。
+**完成标志**：`uv run python -c "import praxis"` 成功执行；pytest 可运行空测试套件；14 个组件包目录结构就位。
 
 ### 任务清单
 
@@ -77,15 +77,15 @@ Phase 16: 集成测试与收尾优化
   - 输出物：`pyproject.toml`、`uv.lock`
   - 验证：`uv sync` 成功完成，无依赖冲突
 
-- [ ] **1.2** 创建 14 个子系统的包目录结构，每个子系统独立子包，包含 `__init__.py`
-  - 输出物：`src/praxis/config/`、`src/praxis/telemetry/`、`src/praxis/persistence/`、`src/praxis/gateway/`、`src/praxis/tools/`、`src/praxis/memory/`、`src/praxis/context/`、`src/praxis/guardrails/`、`src/praxis/recovery/`、`src/praxis/verification/`、`src/praxis/orchestrator/`、`src/praxis/lifecycle/`、`src/praxis/subagent/`、`src/praxis/skills/`
+- [ ] **1.2** 创建 14 个组件的包目录结构，每个组件独立子包，包含 `__init__.py`
+  - 输出物：`src/praxis/config/`、`src/praxis/telemetry/`、`src/praxis/persistence/`、`src/praxis/gateway/`、`src/praxis/tools/`、`src/praxis/memory/`、`src/praxis/context/`、`src/praxis/guardrails/`、`src/praxis/recovery/`、`src/praxis/verification/`、`src/praxis/orchestrator/`、`src/praxis/session/`、`src/praxis/subagent/`、`src/praxis/skills/`
   - 验证：`from praxis.config import *` 等 14 个导入均无报错
 
-- [ ] **1.3** 创建共享数据模型基础包 `praxis.models`，定义跨子系统共享的基础模型（`Message`、`ToolCall`、`ToolResult`、`ModelResponse`、`ModelResponseChunk` 等）
+- [ ] **1.3** 创建共享数据模型基础包 `praxis.models`，定义跨组件共享的基础模型（`Message`、`ToolCall`、`ToolResult`、`ModelResponse`、`ModelResponseChunk` 等）
   - 输出物：`src/praxis/models/__init__.py`、`src/praxis/models/messages.py`、`src/praxis/models/tools.py`、`src/praxis/models/responses.py`
   - 验证：所有模型类可正常实例化和序列化
 
-- [ ] **1.4** 定义全局异常体系和通用协议（Protocol）——Praxis 内部异常基类、各子系统异常分类、通用接口协议
+- [ ] **1.4** 定义全局异常体系和通用协议（Protocol）——Praxis 内部异常基类、各组件异常分类、通用接口协议
   - 输出物：`src/praxis/exceptions.py`、`src/praxis/protocols.py`
   - 验证：异常类可正常抛出和捕获；Protocol 类型检查通过
 
@@ -97,24 +97,24 @@ Phase 16: 集成测试与收尾优化
 
 ## Phase 2: S1 配置系统
 
-**目标**：实现全局配置加载、验证和分发，为所有后续子系统提供配置基础。
+**目标**：实现全局配置加载、验证和分发，为所有后续组件提供配置基础。
 **对应需求**：PRD § 3.1 S1 配置系统（F1.1 ~ F1.3）
 **前置依赖**：Phase 1
 **完成标志**：可通过 YAML 文件 + 环境变量加载完整 `PraxisConfig`，配置校验失败时报告具体错误。
 
 ### 任务清单
 
-- [ ] **2.1** 实现 `PraxisConfig` 顶层配置模型（Pydantic Settings），包含每个子系统的配置切片字段
+- [ ] **2.1** 实现 `PraxisConfig` 顶层配置模型（Pydantic Settings），包含每个组件的配置切片字段
   - 输出物：`src/praxis/config/settings.py`
-  - 验证：`PraxisConfig()` 可用默认值实例化，所有子系统配置切片可访问
+  - 验证：`PraxisConfig()` 可用默认值实例化，所有组件配置切片可访问
 
 - [ ] **2.2** 实现分层配置加载——默认值 → YAML 配置文件 → 环境变量 → 命令行参数，按优先级合并
   - 输出物：`src/praxis/config/loader.py`
   - 验证：创建测试 YAML 文件并设置环境变量，验证优先级覆盖行为正确
 
-- [ ] **2.3** 实现子系统配置隔离——每个子系统独立 Section，命名空间隔离，子系统仅可访问自身配置
-  - 输出物：`src/praxis/config/subsystems.py`（各子系统配置 Schema 定义）
-  - 验证：调用 `get_subsystem_config("gateway")` 返回 S4 配置切片，无法获取其他子系统配置
+- [ ] **2.3** 实现组件配置隔离——每个组件独立 Section，命名空间隔离，组件仅可访问自身配置
+  - 输出物：`src/praxis/config/schemas.py`（各组件配置 Schema 定义）
+  - 验证：调用 `get_component_config("gateway")` 返回 S4 配置切片，无法获取其他组件配置
 
 - [ ] **2.4** 实现配置验证与热更新——启动时全量校验、自定义验证器注册、运行时 `reload_config` 发射变更事件
   - 输出物：`src/praxis/config/validation.py`
@@ -124,14 +124,14 @@ Phase 16: 集成测试与收尾优化
 
 ## Phase 3: S2 遥测系统 + S3 持久化引擎
 
-**目标**：建立可观测性基础设施和统一存储层，为上层子系统提供日志、指标、追踪和持久化能力。
+**目标**：建立可观测性基础设施和统一存储层，为上层组件提供日志、指标、追踪和持久化能力。
 **对应需求**：PRD § 3.2 S2（F2.1 ~ F2.4）、§ 3.3 S3（F3.1 ~ F3.3）
 **前置依赖**：Phase 2（S1 配置）
 **完成标志**：结构化日志可输出 JSON 格式；指标可采集和导出；SQLite 后端可执行 CRUD 和检查点操作。
 
 ### 任务清单
 
-- [ ] **3.1** S2：实现结构化日志框架——`get_logger(name)` 返回结构化 Logger，每条日志包含时间戳、级别、子系统名、会话 ID、轮次号，支持 JSON 和人类可读两种格式，级别按子系统配置
+- [ ] **3.1** S2：实现结构化日志框架——`get_logger(name)` 返回结构化 Logger，每条日志包含时间戳、级别、组件名、会话 ID、轮次号，支持 JSON 和人类可读两种格式，级别按组件配置
   - 输出物：`src/praxis/telemetry/logger.py`
   - 验证：调用 `get_logger("gateway").info("test")` 输出格式化 JSON 日志
 
@@ -139,7 +139,7 @@ Phase 16: 集成测试与收尾优化
   - 输出物：`src/praxis/telemetry/metrics.py`
   - 验证：发射多个指标后导出 Prometheus 文本格式，内容完整
 
-- [ ] **3.3** S2：实现分布式追踪——`start_span(name, parent?)` 创建 Span 上下文，每个 Span 携带子系统名/操作类型/耗时/状态码，支持 OpenTelemetry 协议导出
+- [ ] **3.3** S2：实现分布式追踪——`start_span(name, parent?)` 创建 Span 上下文，每个 Span 携带组件名/操作类型/耗时/状态码，支持 OpenTelemetry 协议导出
   - 输出物：`src/praxis/telemetry/tracing.py`
   - 验证：创建父子 Span 关系链，追踪数据可正确序列化
 
@@ -151,7 +151,7 @@ Phase 16: 集成测试与收尾优化
   - 输出物：`src/praxis/persistence/store.py`、`src/praxis/persistence/backends/sqlite.py`、`src/praxis/persistence/backends/redis.py`、`src/praxis/persistence/backends/filesystem.py`
   - 验证：SQLite 后端通过完整 CRUD 测试；配置切换后端后接口行为一致
 
-- [ ] **3.6** S3：实现检查点管理与命名空间隔离——`save_checkpoint/load_checkpoint` 支持完整状态快照序列化/反序列化，按会话 ID 列出历史检查点，命名空间隔离不同子系统和会话数据
+- [ ] **3.6** S3：实现检查点管理与命名空间隔离——`save_checkpoint/load_checkpoint` 支持完整状态快照序列化/反序列化，按会话 ID 列出历史检查点，命名空间隔离不同组件和会话数据
   - 输出物：`src/praxis/persistence/checkpoint.py`、`src/praxis/persistence/namespace.py`
   - 验证：保存检查点后可完整恢复状态；不同命名空间数据互不干扰
 
@@ -287,8 +287,8 @@ Phase 16: 集成测试与收尾优化
   - 输出物：`src/praxis/memory/scratchpad.py`
   - 验证：写入后读取 Scratchpad 内容一致；重启后通过 S3 恢复
 
-- [ ] **7.6** 实现记忆生命周期管理——时间衰减（可配置衰减曲线）、动态遗忘（低相关性标记 INACTIVE）、版本历史（关键事实更新保留版本链）、不可变审计（ACTIVE/INACTIVE/SUPERSEDED 状态标记，完整变更历史），通过 S2 记录使用统计
-  - 输出物：`src/praxis/memory/lifecycle.py`
+- [ ] **7.6** 实现记忆保留与版本管理——时间衰减（可配置衰减曲线）、动态遗忘（低相关性标记 INACTIVE）、版本历史（关键事实更新保留版本链）、不可变审计（ACTIVE/INACTIVE/SUPERSEDED 状态标记，完整变更历史），通过 S2 记录使用统计
+  - 输出物：`src/praxis/memory/retention.py`
   - 验证：记忆更新后旧版本可追溯；长期未检索记忆被标记 INACTIVE
 
 ---
@@ -384,8 +384,8 @@ Phase 16: 集成测试与收尾优化
   - 输出物：`src/praxis/skills/tools_bridge.py`
   - 验证：激活含脚本的技能后，脚本工具出现在 S5 工具注册表中
 
-- [ ] **10.6** 实现技能生命周期管理——`register_skill/unregister_skill` 运行时热加载，版本管理（多版本共存、升级、回退），使用统计（S2 记录触发次数/成功率/上下文消耗），索引缓存通过 S3 持久化
-  - 输出物：`src/praxis/skills/lifecycle.py`
+- [ ] **10.6** 实现技能统一管理——`register_skill/unregister_skill` 运行时热加载，版本管理（多版本共存、升级、回退），使用统计（S2 记录触发次数/成功率/上下文消耗），索引缓存通过 S3 持久化
+  - 输出物：`src/praxis/skills/manager.py`
   - 验证：运行时注册新技能后 `get_skill_index()` 立即返回更新列表
 
 ---
@@ -423,7 +423,7 @@ Phase 16: 集成测试与收尾优化
 
 ## Phase 12: S11 编排循环
 
-**目标**：实现 TAO/ReAct 核心循环，协调所有子系统完成完整 Agent 轮次。
+**目标**：实现 TAO/ReAct 核心循环，协调所有组件完成完整 Agent 轮次。
 **对应需求**：PRD § 7.1 S11（F11.1 ~ F11.6）
 **前置依赖**：Phase 4（S4）、Phase 5（S5）、Phase 6（S8+S9）、Phase 7~8（S6）、Phase 9（S10）、Phase 10（S14）、Phase 11（S7）
 **完成标志**：`run` 接口可完整执行多轮 TAO 循环（Prompt 组装 → LLM 推理 → 工具执行 → 终止判定）；事件流实时输出。
@@ -456,33 +456,33 @@ Phase 16: 集成测试与收尾优化
 
 ---
 
-## Phase 13: S12 生命周期管理
+## Phase 13: S12 会话管理
 
-**目标**：实现会话全生命周期管理——创建、运行、检查点、恢复、时间旅行，为长时间运行 Agent 提供状态持续性。
+**目标**：实现会话全流程管理——创建、运行、检查点、恢复、时间旅行，为长时间运行 Agent 提供状态持续性。
 **对应需求**：PRD § 7.2 S12（F12.1 ~ F12.5）
 **前置依赖**：Phase 12（S11 编排循环）
 **完成标志**：完整会话可创建/运行/暂停/恢复；检查点自动保存并可回退。
 
 ### 任务清单
 
-- [ ] **13.1** 实现会话初始化——`create_session` 创建新会话时初始化所有子系统实例（S4~S11、S14），注入配置，加载项目级记忆/工具/权限，生成会话 ID 和初始检查点
-  - 输出物：`src/praxis/lifecycle/session.py`
-  - 验证：`create_session` 返回 Session 对象，所有子系统实例可访问
+- [ ] **13.1** 实现会话初始化——`create_session` 创建新会话时初始化所有组件实例（S4~S11、S14），注入配置，加载项目级记忆/工具/权限，生成会话 ID 和初始检查点
+  - 输出物：`src/praxis/session/core.py`
+  - 验证：`create_session` 返回 Session 对象，所有组件实例可访问
 
-- [ ] **13.2** 实现会话恢复——`resume_session` 从 S3 加载检查点，恢复 S6 记忆状态（自动从游标继续后台处理）、S7 上下文状态，重建无状态子系统，验证完整性
-  - 输出物：`src/praxis/lifecycle/resume.py`
+- [ ] **13.2** 实现会话恢复——`resume_session` 从 S3 加载检查点，恢复 S6 记忆状态（自动从游标继续后台处理）、S7 上下文状态，重建无状态组件，验证完整性
+  - 输出物：`src/praxis/session/resume.py`
   - 验证：保存检查点后终止会话，`resume_session` 恢复后上下文完整
 
 - [ ] **13.3** 实现自动检查点——每次 S11 循环终止后自动保存，检查点包含会话元数据 + S6/S7/S11 状态快照，通过 S3 写入，延迟 <200ms
-  - 输出物：`src/praxis/lifecycle/checkpoint.py`
+  - 输出物：`src/praxis/session/checkpoint.py`
   - 验证：完成一轮对话后检查点自动保存；写入耗时 <200ms
 
 - [ ] **13.4** 实现跨上下文窗口续接——两阶段模式（初始化 + 增量进度），标准热身序列（检查目录 → 读进度文件 → 验证基础功能 → 开始工作），长时间任务支持（一次一功能、干净状态、增量前进）
-  - 输出物：`src/praxis/lifecycle/continuation.py`
+  - 输出物：`src/praxis/session/continuation.py`
   - 验证：新会话执行初始化阶段；恢复会话执行热身序列后继续工作
 
 - [ ] **13.5** 实现时间旅行调试——`rollback` 回退到任意历史检查点，`list_checkpoints` 查看历史，回退后 S6/S7/S11 状态全部恢复，可从回退点重新运行
-  - 输出物：`src/praxis/lifecycle/time_travel.py`
+  - 输出物：`src/praxis/session/time_travel.py`
   - 验证：执行 5 轮后回退到第 3 轮检查点，状态完全恢复；从第 3 轮重新运行产生不同路径
 
 ---
@@ -508,7 +508,7 @@ Phase 16: 集成测试与收尾优化
   - 输出物：`src/praxis/subagent/fork.py`
   - 验证：Fork 两个子代理并行执行，结果正确聚合
 
-- [ ] **14.4** 实现上下文隔离与结果聚合——每个子代理独立子系统实例集，子代理间不共享可变状态，遥测关联父追踪链路，结果聚合 + 冲突协调
+- [ ] **14.4** 实现上下文隔离与结果聚合——每个子代理独立组件实例集，子代理间不共享可变状态，遥测关联父追踪链路，结果聚合 + 冲突协调
   - 输出物：`src/praxis/subagent/isolation.py`、`src/praxis/subagent/aggregation.py`
   - 验证：子代理的状态变更不影响主代理；冲突结果被标记
 
@@ -547,8 +547,8 @@ Phase 16: 集成测试与收尾优化
   - 输出物：`src/praxis/tools/mcp/elicitation.py`、`src/praxis/tools/mcp/sampling.py`、`src/praxis/tools/mcp/roots.py`
   - 验证：MCP Server 发起 Elicitation 请求后正确转发给用户；Sampling 请求通过 S4 完成
 
-- [ ] **15.6** 实现 MCP 服务器生命周期管理——初始化阶段能力协商、崩溃自动重连、会话状态检查点（S3）、独立安全边界
-  - 输出物：`src/praxis/tools/mcp/lifecycle.py`
+- [ ] **15.6** 实现 MCP 服务器连接管理——初始化阶段能力协商、崩溃自动重连、会话状态检查点（S3）、独立安全边界
+  - 输出物：`src/praxis/tools/mcp/connection.py`
   - 验证：MCP Server 崩溃后自动重连；重连后状态恢复
 
 - [ ] **15.7** 实现 MCP 授权与 Tasks——OAuth 2.0/PKCE 授权流程、Token 管理、Protected Resource Metadata 发现，以及实验性 MCP Tasks 原语支持
@@ -559,8 +559,8 @@ Phase 16: 集成测试与收尾优化
 
 ## Phase 16: 集成测试与收尾优化
 
-**目标**：端到端验证所有子系统协作、性能基准、非功能需求达标，完成发布准备。
-**对应需求**：PRD § 8 跨子系统调用链（场景一~八）、§ 9 非功能需求
+**目标**：端到端验证所有组件协作、性能基准、非功能需求达标，完成发布准备。
+**对应需求**：PRD § 8 跨组件调用链（场景一~八）、§ 9 非功能需求
 **前置依赖**：Phase 1 ~ Phase 15 全部完成
 **完成标志**：8 个 PRD 场景全部通过端到端测试；性能指标满足 PRD 要求；可发布 v1.0。
 
@@ -570,8 +570,8 @@ Phase 16: 集成测试与收尾优化
   - 输出物：`tests/e2e/test_scenario_*.py`（8 个场景测试文件）
   - 验证：8 个场景测试全部通过
 
-- [ ] **16.2** 跨子系统集成测试——验证依赖链路完整性（S12→S11→S7→S6→S4→S2→S1），验证状态传递和接口契约
-  - 输出物：`tests/integration/test_subsystem_chain.py`
+- [ ] **16.2** 跨组件集成测试——验证依赖链路完整性（S12→S11→S7→S6→S4→S2→S1），验证状态传递和接口契约
+  - 输出物：`tests/integration/test_component_chain.py`
   - 验证：完整调用链路无断裂，返回值类型匹配接口契约
 
 - [ ] **16.3** 性能基准测试——循环开销 <50ms、工具延迟 <100ms、检查点写入 <200ms、压缩 <5s、Prompt 组装 <20ms、护栏裁决 <10ms

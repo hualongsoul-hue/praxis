@@ -2,7 +2,7 @@
 
 import pytest
 
-from praxis.config.subsystems import PersistenceConfig
+from praxis.config.schemas import PersistenceConfig
 from praxis.models.persistence import Checkpoint
 from praxis.persistence.checkpoint import CheckpointManager
 from praxis.persistence.namespace import NamespaceManager

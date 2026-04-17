@@ -9,7 +9,7 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
-from praxis.config.subsystems import OrchestratorConfig
+from praxis.config.schemas import OrchestratorConfig
 from praxis.context.assembler import PromptAssembler
 from praxis.context.tool_injection import ToolInjector
 from praxis.gateway.chat import chat
@@ -32,7 +32,7 @@ from praxis.orchestrator.parser import OutputParser
 from praxis.orchestrator.strategy import LoopStrategy
 from praxis.orchestrator.termination import TerminationManager
 from praxis.orchestrator.tool_coordination import ToolCoordinator
-from praxis.skills.lifecycle import SkillLifecycleManager
+from praxis.skills.manager import SkillManager
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
 from praxis.verification.registry import VerifierRegistry
@@ -63,7 +63,7 @@ class OrchestrationLoop:
         tool_injector: ToolInjector | None = None,
         memory: MemoryPipeline | None = None,
         verifier_registry: VerifierRegistry | None = None,
-        skill_manager: SkillLifecycleManager | None = None,
+        skill_manager: SkillManager | None = None,
     ) -> None:
         self.config = config
         self.gateway = gateway

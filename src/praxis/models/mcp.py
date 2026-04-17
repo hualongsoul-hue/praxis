@@ -1,4 +1,4 @@
-"""MCP 集成数据模型——S5 MCP 子系统共享类型。"""
+"""MCP 集成数据模型——S5 MCP 组件共享类型。"""
 
 from enum import Enum
 from typing import Any

@@ -10,11 +10,11 @@ from pydantic import Field
 from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
-from praxis.config.subsystems import (
+from praxis.config.schemas import (
     ContextConfig,
     GatewayConfig,
     GuardrailsConfig,
-    LifecycleConfig,
+    SessionConfig,
     MemoryConfig,
     OrchestratorConfig,
     PersistenceConfig,
@@ -64,7 +64,7 @@ class YamlFileSource(PydanticBaseSettingsSource):
 
 
 class PraxisConfig(BaseSettings):
-    """Praxis 顶层配置，包含所有子系统配置切片。
+    """Praxis 顶层配置，包含所有组件配置切片。
 
     环境变量前缀：``PRAXIS_``，嵌套分隔符：``__``。
     示例：``PRAXIS_TELEMETRY__LOG_LEVEL=DEBUG``。
@@ -86,7 +86,7 @@ class PraxisConfig(BaseSettings):
     recovery: RecoveryConfig = Field(default_factory=RecoveryConfig)
     verification: VerificationConfig = Field(default_factory=VerificationConfig)
     orchestrator: OrchestratorConfig = Field(default_factory=OrchestratorConfig)
-    lifecycle: LifecycleConfig = Field(default_factory=LifecycleConfig)
+    session: SessionConfig = Field(default_factory=SessionConfig)
     subagent: SubagentConfig = Field(default_factory=SubagentConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
 

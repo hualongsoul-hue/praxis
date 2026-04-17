@@ -8,7 +8,7 @@ Token 超过阈值（默认 80%）自动触发，
 
 from typing import Any
 
-from praxis.config.subsystems import ContextConfig
+from praxis.config.schemas import ContextConfig
 from praxis.gateway.metering import get_token_count
 from praxis.gateway.router import GatewayRouter
 from praxis.gateway.tasks import summarize

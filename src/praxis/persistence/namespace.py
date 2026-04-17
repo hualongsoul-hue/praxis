@@ -1,7 +1,7 @@
 """命名空间隔离管理。
 
-不同子系统的数据通过命名空间隔离，
-同一子系统的不同会话通过会话 ID 隔离。
+不同组件的数据通过命名空间隔离，
+同一组件的不同会话通过会话 ID 隔离。
 """
 
 from praxis.persistence.store import PersistenceStore

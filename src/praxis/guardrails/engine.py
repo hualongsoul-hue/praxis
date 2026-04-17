@@ -119,7 +119,7 @@ class GuardrailEngine:
 
         await record_audit(AuditEvent(
             event_type="guardrail_verdict",
-            subsystem="guardrails",
+            component="guardrails",
             action=operation,
             details=details,
         ))

@@ -1,27 +1,27 @@
 """会话恢复。
 
 resume_session 从 S3 加载检查点，
-恢复 S6 记忆状态、S7 上下文状态，重建无状态子系统，验证完整性。
+恢复 S6 记忆状态、S7 上下文状态，重建无状态组件，验证完整性。
 """
 
 from typing import Any
 
-from praxis.lifecycle.checkpoint import CheckpointManager
-from praxis.lifecycle.session import Session, SessionFactory
+from praxis.session.checkpoint import CheckpointManager
+from praxis.session.core import Session, SessionFactory
 from praxis.memory.pipeline import MemoryPipeline
-from praxis.models.lifecycle import (
+from praxis.models.session import (
     ContinuationPhase,
     SessionMetadata,
     SessionSnapshot,
     SessionStatus,
 )
 from praxis.guardrails.engine import GuardrailEngine
-from praxis.skills.lifecycle import SkillLifecycleManager
+from praxis.skills.manager import SkillManager
 from praxis.telemetry.logger import get_logger
 from praxis.tools.registry import ToolRegistry
 from praxis.verification.registry import VerifierRegistry
 
-log = get_logger("lifecycle.resume")
+log = get_logger("session.resume")
 
 
 class SessionResumer:
@@ -46,7 +46,7 @@ class SessionResumer:
         model: str = "default",
         checkpoint_id: str | None = None,
         memory: MemoryPipeline | None = None,
-        skill_manager: SkillLifecycleManager | None = None,
+        skill_manager: SkillManager | None = None,
         verifier_registry: VerifierRegistry | None = None,
     ) -> Session | None:
         """从检查点恢复会话。
@@ -77,7 +77,7 @@ class SessionResumer:
 
         snapshot = await self.checkpoint_mgr.extract_snapshot(checkpoint)
 
-        # 创建新会话（重建无状态子系统）
+        # 创建新会话（重建无状态组件）
         session = self.factory.create_session(
             guardrails=guardrails,
             registry=registry,

@@ -6,7 +6,7 @@
 所有阈值通过 S1 配置。
 """
 
-from praxis.config.subsystems import OrchestratorConfig
+from praxis.config.schemas import OrchestratorConfig
 from praxis.models.context import TokenUsage
 from praxis.models.orchestrator import LoopState, TerminationReason
 from praxis.telemetry.logger import get_logger

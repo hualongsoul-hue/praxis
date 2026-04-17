@@ -1,4 +1,4 @@
-"""MCP 服务器生命周期管理。
+"""MCP 服务器连接管理。
 
 初始化阶段能力协商、崩溃自动重连、独立安全边界。
 """
@@ -20,7 +20,7 @@ from praxis.tools.mcp.roots import RootsManager
 from praxis.tools.mcp.tools import MCPToolsBridge
 from praxis.tools.mcp.transport import create_transport
 
-log = get_logger("tools.mcp.lifecycle")
+log = get_logger("tools.mcp.connection")
 
 
 class MCPServerConnection:
@@ -33,8 +33,8 @@ class MCPServerConnection:
         self.reconnect_count: int = 0
 
 
-class MCPLifecycleManager:
-    """MCP 服务器生命周期管理器。
+class MCPConnectionManager:
+    """MCP 服务器连接管理器。
 
     管理多个 MCP Server 的连接、能力协商、崩溃重连。
     """

@@ -8,7 +8,7 @@ from typing import Any
 
 from litellm import Router
 
-from praxis.config.subsystems import GatewayConfig
+from praxis.config.schemas import GatewayConfig
 from praxis.exceptions import GatewayError
 from praxis.gateway.callbacks import register_callbacks
 

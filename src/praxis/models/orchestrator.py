@@ -1,4 +1,4 @@
-"""编排循环数据模型——S11 跨子系统共享类型。"""
+"""编排循环数据模型——S11 跨组件共享类型。"""
 
 from enum import Enum
 from typing import Any

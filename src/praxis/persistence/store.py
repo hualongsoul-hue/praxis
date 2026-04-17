@@ -11,7 +11,7 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
-from praxis.config.subsystems import PersistenceConfig
+from praxis.config.schemas import PersistenceConfig
 from praxis.exceptions import PersistenceError
 from praxis.persistence.backends.filesystem import FilesystemBackend
 from praxis.persistence.backends.redis import RedisBackend
@@ -63,7 +63,7 @@ class StorageBackend(Protocol):
 class PersistenceStore:
     """统一持久化存储。
 
-    在 StorageBackend 上叠加 JSON 序列化/反序列化，对上层子系统屏蔽存储细节。
+    在 StorageBackend 上叠加 JSON 序列化/反序列化，对上层组件屏蔽存储细节。
     """
 
     def __init__(self, backend: StorageBackend) -> None:

@@ -1,4 +1,4 @@
-"""记忆生命周期管理。
+"""记忆保留与版本管理。
 
 时间衰减（可配置衰减曲线）、动态遗忘（低相关性标记 INACTIVE）、
 版本历史（关键事实更新保留版本链）、不可变审计。
@@ -18,13 +18,13 @@ from praxis.persistence.store import PersistenceStore
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
 
-log = get_logger("memory.lifecycle")
+log = get_logger("memory.retention")
 
 VERSION_NAMESPACE = "memory_versions"
 
 
-class LifecycleManager:
-    """记忆生命周期管理器。
+class RetentionManager:
+    """记忆保留与版本管理器。
 
     管理时间衰减、动态遗忘、版本历史和不可变审计。
     """
@@ -93,7 +93,7 @@ class LifecycleManager:
             reason=reason,
         )
         emit_metric(
-            "memory_lifecycle_inactive",
+            "memory_retention_inactive",
             1.0,
             {"memory_type": entry.memory_type.value},
             "counter",
@@ -133,7 +133,7 @@ class LifecycleManager:
             version=new_entry.version,
         )
         emit_metric(
-            "memory_lifecycle_superseded",
+            "memory_retention_superseded",
             1.0,
             {"memory_type": old_entry.memory_type.value},
             "counter",

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from praxis.config.subsystems import ContextConfig
+from praxis.config.schemas import ContextConfig
 from praxis.context.assembler import PromptAssembler
 from praxis.context.compaction import ContextCompactor
 from praxis.context.jit_retrieval import ContentLoader, JITRetriever

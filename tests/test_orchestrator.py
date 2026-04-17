@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from praxis.config.subsystems import OrchestratorConfig
+from praxis.config.schemas import OrchestratorConfig
 from praxis.models.context import TokenUsage
 from praxis.models.guardrails import GuardrailVerdict, VerdictType
 from praxis.models.orchestrator import (

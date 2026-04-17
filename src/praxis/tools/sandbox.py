@@ -5,7 +5,7 @@
 
 from pathlib import Path
 
-from praxis.config.subsystems import ToolsConfig
+from praxis.config.schemas import ToolsConfig
 from praxis.exceptions import SandboxViolationError
 
 

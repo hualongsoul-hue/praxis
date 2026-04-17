@@ -1,4 +1,4 @@
-"""模型网关相关数据模型——S4 内部及跨子系统共享。"""
+"""模型网关相关数据模型——S4 内部及跨组件共享。"""
 
 from pydantic import BaseModel, Field
 

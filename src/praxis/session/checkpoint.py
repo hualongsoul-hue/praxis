@@ -8,7 +8,7 @@
 import time
 from typing import Any
 
-from praxis.models.lifecycle import (
+from praxis.models.session import (
     CheckpointInfo,
     SessionMetadata,
     SessionSnapshot,
@@ -18,7 +18,7 @@ from praxis.persistence.store import PersistenceStore
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
 
-log = get_logger("lifecycle.checkpoint")
+log = get_logger("session.checkpoint")
 
 CHECKPOINT_NAMESPACE = "checkpoints"
 

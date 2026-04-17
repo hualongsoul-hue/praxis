@@ -2,7 +2,7 @@
 
 from praxis.tools.mcp.auth import MCPAuthManager, OAuthConfig, OAuthToken
 from praxis.tools.mcp.elicitation import ElicitationManager
-from praxis.tools.mcp.lifecycle import MCPLifecycleManager
+from praxis.tools.mcp.connection import MCPConnectionManager
 from praxis.tools.mcp.prompts import MCPPromptsBridge
 from praxis.tools.mcp.resources import MCPResourcesBridge
 from praxis.tools.mcp.roots import RootsManager
@@ -14,7 +14,7 @@ from praxis.tools.mcp.transport import create_transport
 __all__ = [
     "ElicitationManager",
     "MCPAuthManager",
-    "MCPLifecycleManager",
+    "MCPConnectionManager",
     "MCPPromptsBridge",
     "MCPResourcesBridge",
     "MCPTaskManager",

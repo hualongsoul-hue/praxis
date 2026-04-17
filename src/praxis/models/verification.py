@@ -1,4 +1,4 @@
-"""验证引擎数据模型——S10 跨子系统共享类型。"""
+"""验证引擎数据模型——S10 跨组件共享类型。"""
 
 from datetime import datetime, timezone
 from enum import Enum

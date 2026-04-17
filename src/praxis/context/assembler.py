@@ -8,7 +8,7 @@ XML/Markdown 标签分隔，关键内容放置首尾。
 
 from typing import Any
 
-from praxis.config.subsystems import ContextConfig
+from praxis.config.schemas import ContextConfig
 from praxis.gateway.metering import get_max_tokens, get_token_count
 from praxis.models.context import AssembledPrompt, TokenUsage, TurnContext
 from praxis.telemetry.logger import get_logger

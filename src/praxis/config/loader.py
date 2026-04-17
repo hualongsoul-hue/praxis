@@ -1,6 +1,6 @@
 """配置加载与分发。
 
-提供 load_config / get_subsystem_config / reload_config 三个核心接口。
+提供 load_config / get_component_config / reload_config 三个核心接口。
 """
 
 from pathlib import Path
@@ -55,25 +55,25 @@ def load_config(
     return current_config
 
 
-def get_subsystem_config(name: str) -> BaseModel:
-    """获取指定子系统的配置切片。
+def get_component_config(name: str) -> BaseModel:
+    """获取指定组件的配置切片。
 
-    子系统仅能通过此接口获取自身配置，实现命名空间隔离。
+    组件仅能通过此接口获取自身配置，实现命名空间隔离。
 
     Args:
-        name: 子系统配置字段名（如 ``"gateway"``、``"telemetry"``）。
+        name: 组件配置字段名（如 ``"gateway"``、``"telemetry"``）。
 
     Returns:
-        对应子系统的配置模型实例。
+        对应组件的配置模型实例。
 
     Raises:
-        ConfigError: 配置未加载或子系统名称无效。
+        ConfigError: 配置未加载或组件名称无效。
     """
     if current_config is None:
         raise ConfigError("配置未加载，请先调用 load_config()")
     if not hasattr(current_config, name):
         raise ConfigError(
-            f"未知的子系统配置: {name}",
+            f"未知的组件配置: {name}",
             details={"available": list(PraxisConfig.model_fields.keys())},
         )
     return getattr(current_config, name)

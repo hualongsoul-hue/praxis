@@ -1,4 +1,4 @@
-"""技能系统数据模型——S14 跨子系统共享类型。"""
+"""技能系统数据模型——S14 跨组件共享类型。"""
 
 from datetime import datetime, timezone
 from typing import Any

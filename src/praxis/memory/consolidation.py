@@ -9,7 +9,7 @@ from typing import Any
 
 from praxis.gateway.chat import chat
 from praxis.gateway.router import GatewayRouter
-from praxis.memory.lifecycle import LifecycleManager
+from praxis.memory.retention import RetentionManager
 from praxis.memory.vector_store import VectorStore
 from praxis.models.memory import (
     ConsolidationAction,
@@ -50,7 +50,7 @@ class ConsolidationResult:
 class MemoryConsolidator:
     """记忆整合器。
 
-    协调 VectorStore（语义搜索）、LifecycleManager（版本管理）
+    协调 VectorStore（语义搜索）、RetentionManager（版本管理）
     和 GatewayRouter（LLM 评估）。
     """
 
@@ -58,13 +58,13 @@ class MemoryConsolidator:
         self,
         gateway: GatewayRouter,
         vector_store: VectorStore,
-        lifecycle: LifecycleManager,
+        retention: RetentionManager,
         model: str | None = None,
         similarity_threshold: float = 0.75,
     ) -> None:
         self.gateway = gateway
         self.vector_store = vector_store
-        self.lifecycle = lifecycle
+        self.retention = retention
         self.model = model
         self.similarity_threshold = similarity_threshold
 
@@ -118,7 +118,7 @@ class MemoryConsolidator:
                     "source": "consolidation_update",
                 },
             )
-            await self.lifecycle.supersede(best_match, updated, decision.reasoning)
+            await self.retention.supersede(best_match, updated, decision.reasoning)
             await self.vector_store.remove(best_match.memory_id)
             await self.vector_store.add(updated)
             decision.matched_id = best_match.memory_id

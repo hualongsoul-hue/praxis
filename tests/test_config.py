@@ -8,7 +8,7 @@ import pytest
 
 from praxis.config import (
     PraxisConfig,
-    get_subsystem_config,
+    get_component_config,
     load_config,
     on_config_change,
     register_validator,
@@ -30,15 +30,15 @@ class TestPraxisConfig:
         assert config.recovery.max_retries == 3
         assert config.subagent.max_concurrent == 5
 
-    def test_all_subsystem_slices_accessible(self) -> None:
+    def test_all_component_slices_accessible(self) -> None:
         config = PraxisConfig()
-        subsystem_names = [
+        component_names = [
             "telemetry", "persistence", "gateway", "tools", "memory",
             "context", "guardrails", "recovery", "verification",
-            "orchestrator", "lifecycle", "subagent", "skills",
+            "orchestrator", "session", "subagent", "skills",
         ]
-        for name in subsystem_names:
-            assert hasattr(config, name), f"缺少子系统配置: {name}"
+        for name in component_names:
+            assert hasattr(config, name), f"缺少组件配置: {name}"
 
 
 class TestConfigLoading:
@@ -83,18 +83,18 @@ class TestConfigLoading:
             load_config("/nonexistent/path.yaml")
 
 
-class TestSubsystemIsolation:
-    """Task 2.3: 子系统配置隔离验证。"""
+class TestComponentIsolation:
+    """Task 2.3: 组件配置隔离验证。"""
 
-    def test_get_subsystem_config(self) -> None:
+    def test_get_component_config(self) -> None:
         load_config()
-        gw = get_subsystem_config("gateway")
+        gw = get_component_config("gateway")
         assert gw.timeout == 60.0
 
-    def test_unknown_subsystem_raises(self) -> None:
+    def test_unknown_component_raises(self) -> None:
         load_config()
-        with pytest.raises(ConfigError, match="未知的子系统配置"):
-            get_subsystem_config("nonexistent")
+        with pytest.raises(ConfigError, match="未知的组件配置"):
+            get_component_config("nonexistent")
 
     def test_config_not_loaded_raises(self) -> None:
         import praxis.config.loader as loader_mod
@@ -102,7 +102,7 @@ class TestSubsystemIsolation:
         loader_mod.current_config = None
         try:
             with pytest.raises(ConfigError, match="配置未加载"):
-                get_subsystem_config("gateway")
+                get_component_config("gateway")
         finally:
             loader_mod.current_config = saved
 

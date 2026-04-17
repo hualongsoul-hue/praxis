@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from praxis.gateway.chat import chat
 from praxis.gateway.router import GatewayRouter
-from praxis.memory.lifecycle import LifecycleManager
+from praxis.memory.retention import RetentionManager
 from praxis.memory.scope import ScopedMemoryStore
 from praxis.models.memory import (
     MemoryEntry,
@@ -67,7 +67,7 @@ class DreamConsolidator:
         self,
         gateway: GatewayRouter,
         scoped_store: ScopedMemoryStore,
-        lifecycle: LifecycleManager,
+        retention: RetentionManager,
         meta_store: PersistenceStore,
         model: str | None = None,
         min_hours_since_last: float = 24.0,
@@ -75,7 +75,7 @@ class DreamConsolidator:
     ) -> None:
         self.gateway = gateway
         self.scoped_store = scoped_store
-        self.lifecycle = lifecycle
+        self.retention = retention
         self.meta_store = meta_store
         self.model = model
         self.min_hours_since_last = min_hours_since_last
@@ -199,7 +199,7 @@ class DreamConsolidator:
         for mid in stale_ids:
             entry = entry_map.get(mid)
             if entry:
-                await self.lifecycle.mark_inactive(entry, "梦境整理: 陈旧记忆")
+                await self.retention.mark_inactive(entry, "梦境整理: 陈旧记忆")
                 count += 1
         return count
 
@@ -232,7 +232,7 @@ class DreamConsolidator:
             for mid in ids:
                 old = entry_map.get(mid)
                 if old:
-                    await self.lifecycle.mark_inactive(old, "梦境整理: 合并")
+                    await self.retention.mark_inactive(old, "梦境整理: 合并")
 
             await self.scoped_store.save(merged)
             count += 1

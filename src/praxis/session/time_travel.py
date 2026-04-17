@@ -6,17 +6,17 @@ list_checkpoints 查看历史，
 """
 
 from praxis.guardrails.engine import GuardrailEngine
-from praxis.lifecycle.checkpoint import CheckpointManager
-from praxis.lifecycle.resume import SessionResumer
-from praxis.lifecycle.session import Session
+from praxis.session.checkpoint import CheckpointManager
+from praxis.session.resume import SessionResumer
+from praxis.session.core import Session
 from praxis.memory.pipeline import MemoryPipeline
-from praxis.models.lifecycle import CheckpointInfo
-from praxis.skills.lifecycle import SkillLifecycleManager
+from praxis.models.session import CheckpointInfo
+from praxis.skills.manager import SkillManager
 from praxis.telemetry.logger import get_logger
 from praxis.tools.registry import ToolRegistry
 from praxis.verification.registry import VerifierRegistry
 
-log = get_logger("lifecycle.time_travel")
+log = get_logger("session.time_travel")
 
 
 class TimeTravelManager:
@@ -52,7 +52,7 @@ class TimeTravelManager:
         registry: ToolRegistry | None = None,
         model: str = "default",
         memory: MemoryPipeline | None = None,
-        skill_manager: SkillLifecycleManager | None = None,
+        skill_manager: SkillManager | None = None,
         verifier_registry: VerifierRegistry | None = None,
     ) -> Session | None:
         """回退到指定检查点。
@@ -108,7 +108,7 @@ class TimeTravelManager:
         registry: ToolRegistry | None = None,
         model: str = "default",
         memory: MemoryPipeline | None = None,
-        skill_manager: SkillLifecycleManager | None = None,
+        skill_manager: SkillManager | None = None,
         verifier_registry: VerifierRegistry | None = None,
     ) -> Session | None:
         """回退并清除后续检查点。

@@ -8,7 +8,7 @@ import threading
 from pathlib import Path
 from typing import Literal
 
-from praxis.config.subsystems import TelemetryConfig
+from praxis.config.schemas import TelemetryConfig
 
 MetricKey = tuple[str, tuple[tuple[str, str], ...]]
 

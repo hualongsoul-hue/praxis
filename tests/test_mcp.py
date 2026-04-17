@@ -26,7 +26,7 @@ from praxis.models.mcp import (
 )
 from praxis.tools.mcp.auth import MCPAuthManager, OAuthConfig, OAuthToken
 from praxis.tools.mcp.elicitation import ElicitationManager
-from praxis.tools.mcp.lifecycle import MCPLifecycleManager, MCPServerConnection
+from praxis.tools.mcp.connection import MCPConnectionManager, MCPServerConnection
 from praxis.tools.mcp.prompts import MCPPromptsBridge
 from praxis.tools.mcp.resources import MCPResourcesBridge
 from praxis.tools.mcp.roots import RootsManager
@@ -325,7 +325,7 @@ class TestRootsManager:
 # ── Task 15.6: Lifecycle ────────────────────────────────────────────────
 
 
-class TestMCPLifecycleManager:
+class TestMCPConnectionManager:
     """MCP 生命周期管理测试。"""
 
     async def test_connect_server(self) -> None:
@@ -335,7 +335,7 @@ class TestMCPLifecycleManager:
         prompts_bridge = MCPPromptsBridge()
         roots_mgr = RootsManager()
 
-        mgr = MCPLifecycleManager(tools_bridge, resources_bridge, prompts_bridge, roots_mgr)
+        mgr = MCPConnectionManager(tools_bridge, resources_bridge, prompts_bridge, roots_mgr)
         config = MCPServerConfig(name="test", transport=MCPTransportType.STDIO, command="echo")
         session = make_mock_session()
 
@@ -348,7 +348,7 @@ class TestMCPLifecycleManager:
     async def test_disconnect_server(self) -> None:
         registry = ToolRegistry()
         tools_bridge = MCPToolsBridge(registry)
-        mgr = MCPLifecycleManager(
+        mgr = MCPConnectionManager(
             tools_bridge, MCPResourcesBridge(), MCPPromptsBridge(), RootsManager()
         )
         config = MCPServerConfig(name="test", command="echo")
@@ -362,7 +362,7 @@ class TestMCPLifecycleManager:
     async def test_get_server_capabilities(self) -> None:
         registry = ToolRegistry()
         tools_bridge = MCPToolsBridge(registry)
-        mgr = MCPLifecycleManager(
+        mgr = MCPConnectionManager(
             tools_bridge, MCPResourcesBridge(), MCPPromptsBridge(), RootsManager()
         )
         config = MCPServerConfig(name="test", command="echo")
@@ -374,7 +374,7 @@ class TestMCPLifecycleManager:
         assert caps.tools is True
 
     async def test_nonexistent_capabilities(self) -> None:
-        mgr = MCPLifecycleManager(
+        mgr = MCPConnectionManager(
             MCPToolsBridge(ToolRegistry()),
             MCPResourcesBridge(),
             MCPPromptsBridge(),

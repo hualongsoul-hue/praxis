@@ -12,12 +12,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from praxis.config.subsystems import MemoryConfig, PersistenceConfig
+from praxis.config.schemas import MemoryConfig, PersistenceConfig
 from praxis.memory.background import BackgroundProcessor
 from praxis.memory.consolidation import ConsolidationResult, MemoryConsolidator
 from praxis.memory.dream import DreamConsolidator, DreamReport
 from praxis.memory.extraction import MemoryExtractor
-from praxis.memory.lifecycle import LifecycleManager
+from praxis.memory.retention import RetentionManager
 from praxis.memory.pipeline import MemoryPipeline
 from praxis.memory.retrieval import MemoryRetriever
 from praxis.memory.scope import ScopedMemoryStore
@@ -178,7 +178,7 @@ class TestConsolidation:
     async def test_add_no_similar(self, store: PersistenceStore) -> None:
         scoped = ScopedMemoryStore(store)
         vs = VectorStore(scoped, embed_func=mock_embed)
-        lifecycle = LifecycleManager(scoped, store)
+        lifecycle = RetentionManager(scoped, store)
         gw = make_mock_gateway()
 
         consolidator = MemoryConsolidator(gw, vs, lifecycle)
@@ -193,7 +193,7 @@ class TestConsolidation:
     async def test_noop_duplicate(self, store: PersistenceStore) -> None:
         scoped = ScopedMemoryStore(store)
         vs = VectorStore(scoped, embed_func=mock_embed)
-        lifecycle = LifecycleManager(scoped, store)
+        lifecycle = RetentionManager(scoped, store)
         gw = make_mock_gateway()
 
         scope = MemoryScope(scope_type=ScopeType.GLOBAL)
@@ -222,7 +222,7 @@ class TestConsolidation:
     async def test_update_existing(self, store: PersistenceStore) -> None:
         scoped = ScopedMemoryStore(store)
         vs = VectorStore(scoped, embed_func=mock_embed)
-        lifecycle = LifecycleManager(scoped, store)
+        lifecycle = RetentionManager(scoped, store)
         gw = make_mock_gateway()
 
         scope = MemoryScope(scope_type=ScopeType.GLOBAL)
@@ -266,7 +266,7 @@ class TestPipeline:
         retriever = MemoryRetriever(scoped, vs)
         gw = make_mock_gateway()
         extractor = MemoryExtractor(gw)
-        lifecycle = LifecycleManager(scoped, store)
+        lifecycle = RetentionManager(scoped, store)
         consolidator = MemoryConsolidator(gw, vs, lifecycle)
 
         pipeline = MemoryPipeline(
@@ -285,7 +285,7 @@ class TestPipeline:
         retriever = MemoryRetriever(scoped, vs)
         gw = make_mock_gateway()
         extractor = MemoryExtractor(gw)
-        lifecycle = LifecycleManager(scoped, store)
+        lifecycle = RetentionManager(scoped, store)
         consolidator = MemoryConsolidator(gw, vs, lifecycle)
 
         pipeline = MemoryPipeline(
@@ -304,7 +304,7 @@ class TestPipeline:
         retriever = MemoryRetriever(scoped, vs)
         gw = make_mock_gateway()
         extractor = MemoryExtractor(gw)
-        lifecycle = LifecycleManager(scoped, store)
+        lifecycle = RetentionManager(scoped, store)
         consolidator = MemoryConsolidator(gw, vs, lifecycle)
 
         pipeline = MemoryPipeline(
@@ -329,7 +329,7 @@ class TestPipeline:
         retriever = MemoryRetriever(scoped, vs)
         gw = make_mock_gateway()
         extractor = MemoryExtractor(gw)
-        lifecycle = LifecycleManager(scoped, store)
+        lifecycle = RetentionManager(scoped, store)
         consolidator = MemoryConsolidator(gw, vs, lifecycle)
 
         pipeline = MemoryPipeline(
@@ -356,7 +356,7 @@ class TestPipeline:
         retriever = MemoryRetriever(scoped, vs)
         gw = make_mock_gateway()
         extractor = MemoryExtractor(gw)
-        lifecycle = LifecycleManager(scoped, store)
+        lifecycle = RetentionManager(scoped, store)
         consolidator = MemoryConsolidator(gw, vs, lifecycle)
 
         pipeline = MemoryPipeline(
@@ -381,7 +381,7 @@ class TestBackground:
         retriever = MemoryRetriever(scoped, vs)
         gw = make_mock_gateway()
         extractor = MemoryExtractor(gw)
-        lifecycle = LifecycleManager(scoped, store)
+        lifecycle = RetentionManager(scoped, store)
         consolidator = MemoryConsolidator(gw, vs, lifecycle)
 
         pipeline = MemoryPipeline(
@@ -404,7 +404,7 @@ class TestBackground:
         retriever = MemoryRetriever(scoped, vs)
         gw = make_mock_gateway()
         extractor = MemoryExtractor(gw)
-        lifecycle = LifecycleManager(scoped, store)
+        lifecycle = RetentionManager(scoped, store)
         consolidator = MemoryConsolidator(gw, vs, lifecycle)
 
         pipeline = MemoryPipeline(
@@ -435,7 +435,7 @@ class TestBackground:
         retriever = MemoryRetriever(scoped, vs)
         gw = make_mock_gateway()
         extractor = MemoryExtractor(gw)
-        lifecycle = LifecycleManager(scoped, store)
+        lifecycle = RetentionManager(scoped, store)
         consolidator = MemoryConsolidator(gw, vs, lifecycle)
 
         pipeline = MemoryPipeline(
@@ -458,7 +458,7 @@ class TestDream:
 
     async def test_should_run_first_time(self, store: PersistenceStore) -> None:
         scoped = ScopedMemoryStore(store)
-        lifecycle = LifecycleManager(scoped, store)
+        lifecycle = RetentionManager(scoped, store)
         gw = make_mock_gateway()
 
         dc = DreamConsolidator(
@@ -470,7 +470,7 @@ class TestDream:
 
     async def test_run_dream_empty(self, store: PersistenceStore) -> None:
         scoped = ScopedMemoryStore(store)
-        lifecycle = LifecycleManager(scoped, store)
+        lifecycle = RetentionManager(scoped, store)
         gw = make_mock_gateway()
 
         dc = DreamConsolidator(gw, scoped, lifecycle, store)
@@ -481,7 +481,7 @@ class TestDream:
 
     async def test_run_dream_with_entries(self, store: PersistenceStore) -> None:
         scoped = ScopedMemoryStore(store)
-        lifecycle = LifecycleManager(scoped, store)
+        lifecycle = RetentionManager(scoped, store)
         gw = make_mock_gateway()
 
         scope = MemoryScope(scope_type=ScopeType.GLOBAL)
@@ -520,7 +520,7 @@ class TestDream:
 
     async def test_run_dream_stale_marking(self, store: PersistenceStore) -> None:
         scoped = ScopedMemoryStore(store)
-        lifecycle = LifecycleManager(scoped, store)
+        lifecycle = RetentionManager(scoped, store)
         gw = make_mock_gateway()
 
         scope = MemoryScope(scope_type=ScopeType.GLOBAL)

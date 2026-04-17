@@ -6,7 +6,7 @@
 
 import asyncio
 
-from praxis.config.subsystems import SubagentConfig
+from praxis.config.schemas import SubagentConfig
 from praxis.telemetry.logger import get_logger
 
 log = get_logger("subagent.resource_control")

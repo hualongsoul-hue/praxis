@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from praxis.config.subsystems import (
+from praxis.config.schemas import (
     ContextConfig,
-    LifecycleConfig,
+    SessionConfig,
     OrchestratorConfig,
     PersistenceConfig,
     SubagentConfig,
@@ -272,7 +272,7 @@ class TestResultAggregator:
 class TestSubagentSpawner:
     """Agent-as-Tool 测试。"""
 
-    @patch("praxis.lifecycle.session.Session.run_turn")
+    @patch("praxis.session.core.Session.run_turn")
     async def test_spawn_success(
         self,
         mock_run_turn: Any,
@@ -303,7 +303,7 @@ class TestSubagentSpawner:
         assert result.summary == "子任务完成"
         assert result.mode == SubagentMode.AGENT_AS_TOOL
 
-    @patch("praxis.lifecycle.session.Session.run_turn")
+    @patch("praxis.session.core.Session.run_turn")
     async def test_spawn_timeout(
         self,
         mock_run_turn: Any,
@@ -324,7 +324,7 @@ class TestSubagentSpawner:
         result = await spawner.spawn_agent_as_tool(task="超时任务", timeout_seconds=0.05)
         assert result.status == SubagentStatus.TIMEOUT
 
-    @patch("praxis.lifecycle.session.Session.run_turn")
+    @patch("praxis.session.core.Session.run_turn")
     async def test_spawn_failure(
         self,
         mock_run_turn: Any,
@@ -351,7 +351,7 @@ class TestSubagentSpawner:
 class TestHandoffManager:
     """Handoff 测试。"""
 
-    @patch("praxis.lifecycle.session.Session.run_turn")
+    @patch("praxis.session.core.Session.run_turn")
     async def test_handoff_success(
         self,
         mock_run_turn: Any,
@@ -375,7 +375,7 @@ class TestHandoffManager:
         assert result.mode == SubagentMode.HANDOFF
         assert "Handoff 完成" in result.summary
 
-    @patch("praxis.lifecycle.session.Session.run_turn")
+    @patch("praxis.session.core.Session.run_turn")
     async def test_handoff_timeout(
         self,
         mock_run_turn: Any,
@@ -398,7 +398,7 @@ class TestHandoffManager:
 class TestForkManager:
     """Fork 测试。"""
 
-    @patch("praxis.lifecycle.session.Session.run_turn")
+    @patch("praxis.session.core.Session.run_turn")
     async def test_fork_multiple(
         self,
         mock_run_turn: Any,
@@ -427,7 +427,7 @@ class TestForkManager:
         assert len(results) == 2
         assert all(r.mode == SubagentMode.FORK for r in results)
 
-    @patch("praxis.lifecycle.session.Session.run_turn")
+    @patch("praxis.session.core.Session.run_turn")
     async def test_fork_and_aggregate(
         self,
         mock_run_turn: Any,
@@ -451,7 +451,7 @@ class TestForkManager:
         )
         assert combined["subagent_count"] == 2
 
-    @patch("praxis.lifecycle.session.Session.run_turn")
+    @patch("praxis.session.core.Session.run_turn")
     async def test_fork_partial_failure(
         self,
         mock_run_turn: Any,

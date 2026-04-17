@@ -4,7 +4,7 @@ from praxis.memory.background import BackgroundProcessor
 from praxis.memory.consolidation import MemoryConsolidator
 from praxis.memory.dream import DreamConsolidator, DreamReport
 from praxis.memory.extraction import MemoryExtractor
-from praxis.memory.lifecycle import LifecycleManager
+from praxis.memory.retention import RetentionManager
 from praxis.memory.pipeline import MemoryPipeline
 from praxis.memory.retrieval import MemoryRetriever
 from praxis.memory.scope import ScopedMemoryStore
@@ -15,7 +15,7 @@ __all__ = [
     "BackgroundProcessor",
     "DreamConsolidator",
     "DreamReport",
-    "LifecycleManager",
+    "RetentionManager",
     "MemoryConsolidator",
     "MemoryExtractor",
     "MemoryPipeline",

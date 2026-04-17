@@ -1,4 +1,4 @@
-"""护栏系统数据模型——S8 内部及跨子系统共享。"""
+"""护栏系统数据模型——S8 内部及跨组件共享。"""
 
 from enum import Enum
 from typing import Any

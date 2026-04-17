@@ -1,4 +1,4 @@
-"""跨子系统共享的数据模型。"""
+"""跨组件共享的数据模型。"""
 
 from praxis.models.context import (
     AssembledPrompt,
@@ -15,7 +15,7 @@ from praxis.models.orchestrator import (
     StrategyMode,
     TerminationReason,
 )
-from praxis.models.lifecycle import (
+from praxis.models.session import (
     CheckpointInfo,
     ContinuationPhase,
     SessionMetadata,

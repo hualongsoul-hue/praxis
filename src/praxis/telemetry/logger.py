@@ -1,8 +1,8 @@
 """结构化日志框架。
 
-每条日志包含：时间戳、级别、子系统名、会话 ID、轮次号、消息、结构化字段。
+每条日志包含：时间戳、级别、组件名、会话 ID、轮次号、消息、结构化字段。
 支持 JSON（机器可读）和 Text（人类可读）两种输出格式。
-日志级别可按子系统独立配置。
+日志级别可按组件独立配置。
 """
 
 import json
@@ -11,14 +11,14 @@ import sys
 from datetime import datetime, timezone
 from typing import Any
 
-from praxis.config.subsystems import TelemetryConfig
+from praxis.config.schemas import TelemetryConfig
 
 STANDARD_ATTRS = frozenset({
     "args", "created", "exc_info", "exc_text", "filename", "funcName",
     "levelname", "levelno", "lineno", "message", "module", "msecs", "msg",
     "name", "pathname", "process", "processName", "relativeCreated",
     "stack_info", "thread", "threadName", "taskName",
-    "subsystem", "session_id", "turn",
+    "component", "session_id", "turn",
 })
 
 
@@ -31,7 +31,7 @@ class JsonFormatter(logging.Formatter):
                 record.created, tz=timezone.utc
             ).isoformat(),
             "level": record.levelname,
-            "subsystem": getattr(record, "subsystem", ""),
+            "component": getattr(record, "component", ""),
             "message": record.getMessage(),
         }
         for ctx_key in ("session_id", "turn"):
@@ -53,13 +53,13 @@ class TextFormatter(logging.Formatter):
 
     def __init__(self) -> None:
         super().__init__(
-            fmt="%(asctime)s [%(levelname)-8s] %(subsystem)-14s │ %(message)s",
+            fmt="%(asctime)s [%(levelname)-8s] %(component)-14s │ %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
 
     def format(self, record: logging.LogRecord) -> str:
-        if not hasattr(record, "subsystem"):
-            record.subsystem = ""  # type: ignore[attr-defined]
+        if not hasattr(record, "component"):
+            record.component = ""  # type: ignore[attr-defined]
         return super().format(record)
 
 
@@ -72,7 +72,7 @@ class StructuredLogger:
     def __init__(self, name: str, logger: logging.Logger) -> None:
         self._name = name
         self._logger = logger
-        self._context: dict[str, Any] = {"subsystem": name}
+        self._context: dict[str, Any] = {"component": name}
 
     def bind(self, **kwargs: Any) -> "StructuredLogger":
         """创建绑定额外上下文字段的新 Logger 实例。"""
@@ -121,8 +121,8 @@ def configure_logging(config: TelemetryConfig) -> None:
     root.addHandler(handler)
     root.setLevel(getattr(logging, config.log_level.upper(), logging.INFO))
 
-    for subsystem, level_str in config.log_levels.items():
-        sub_logger = logging.getLogger(f"praxis.{subsystem}")
+    for component, level_str in config.log_levels.items():
+        sub_logger = logging.getLogger(f"praxis.{component}")
         sub_logger.setLevel(
             getattr(logging, level_str.upper(), logging.INFO)
         )
@@ -131,7 +131,7 @@ def configure_logging(config: TelemetryConfig) -> None:
 
 
 def get_logger(name: str) -> StructuredLogger:
-    """获取指定子系统的结构化日志器。
+    """获取指定组件的结构化日志器。
 
     首次调用时自动用默认配置初始化日志系统。
     """

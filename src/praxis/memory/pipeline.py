@@ -10,7 +10,7 @@ from typing import Any
 from praxis.gateway.router import GatewayRouter
 from praxis.memory.consolidation import ConsolidationResult, MemoryConsolidator
 from praxis.memory.extraction import MemoryExtractor
-from praxis.memory.lifecycle import LifecycleManager
+from praxis.memory.retention import RetentionManager
 from praxis.memory.retrieval import MemoryRetriever
 from praxis.memory.scope import ScopedMemoryStore
 from praxis.memory.vector_store import VectorStore
@@ -42,7 +42,7 @@ class MemoryPipeline:
         retriever: MemoryRetriever,
         extractor: MemoryExtractor,
         consolidator: MemoryConsolidator,
-        lifecycle: LifecycleManager,
+        retention: RetentionManager,
         session_id: str,
         default_scope: MemoryScope | None = None,
     ) -> None:
@@ -51,7 +51,7 @@ class MemoryPipeline:
         self.retriever = retriever
         self.extractor = extractor
         self.consolidator = consolidator
-        self.lifecycle = lifecycle
+        self.retention = retention
         self.session_id = session_id
         self.default_scope = default_scope or MemoryScope.from_string(
             f"session/{session_id}"
@@ -170,7 +170,7 @@ class MemoryPipeline:
             confidence=entry.confidence,
             metadata={**entry.metadata, "source": "manual_update"},
         )
-        await self.lifecycle.supersede(entry, new_entry, "手动更新")
+        await self.retention.supersede(entry, new_entry, "手动更新")
         await self.vector_store.remove(entry.memory_id)
         await self.vector_store.add(new_entry)
 
@@ -183,7 +183,7 @@ class MemoryPipeline:
         entry = await self.scoped_store.load(self.default_scope, memory_id)
         if entry is None:
             return
-        await self.lifecycle.mark_inactive(entry, "手动删除")
+        await self.retention.mark_inactive(entry, "手动删除")
         await self.vector_store.remove(entry.memory_id)
 
     async def get_memory_index(

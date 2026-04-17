@@ -1,4 +1,4 @@
-"""子代理协调数据模型——S13 跨子系统共享类型。"""
+"""子代理协调数据模型——S13 跨组件共享类型。"""
 
 from enum import Enum
 from typing import Any

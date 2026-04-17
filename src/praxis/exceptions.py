@@ -24,7 +24,7 @@
     ├── RecoveryError                   # S9 错误恢复
     ├── VerificationError               # S10 验证引擎
     ├── OrchestrationError              # S11 编排循环
-    ├── LifecycleError                  # S12 生命周期管理
+    ├── SessionError                    # S12 会话管理
     ├── SubagentError                   # S13 子代理协调
     └── SkillError                      # S14 技能系统
 """
@@ -38,7 +38,7 @@ from typing import Any
 class PraxisError(Exception):
     """Praxis 框架基础异常。所有 Praxis 异常的根类。"""
 
-    subsystem: str = "praxis"
+    component: str = "praxis"
 
     def __init__(
         self,
@@ -57,7 +57,7 @@ class PraxisError(Exception):
 class ConfigError(PraxisError):
     """配置加载、验证或热更新错误。"""
 
-    subsystem = "config"
+    component = "config"
 
 
 # ── S2 遥测系统 ──────────────────────────────────────────────────────────────
@@ -66,7 +66,7 @@ class ConfigError(PraxisError):
 class TelemetryError(PraxisError):
     """日志、指标、追踪或审计错误。"""
 
-    subsystem = "telemetry"
+    component = "telemetry"
 
 
 # ── S3 持久化引擎 ────────────────────────────────────────────────────────────
@@ -75,7 +75,7 @@ class TelemetryError(PraxisError):
 class PersistenceError(PraxisError):
     """存储读写或检查点操作错误。"""
 
-    subsystem = "persistence"
+    component = "persistence"
 
 
 # ── S4 模型网关 ──────────────────────────────────────────────────────────────
@@ -84,7 +84,7 @@ class PersistenceError(PraxisError):
 class GatewayError(PraxisError):
     """模型网关通用错误。"""
 
-    subsystem = "gateway"
+    component = "gateway"
 
 
 class AuthenticationError(GatewayError):
@@ -121,7 +121,7 @@ class GatewayTimeoutError(GatewayError):
 class ToolError(PraxisError):
     """工具系统通用错误。"""
 
-    subsystem = "tools"
+    component = "tools"
 
 
 class ToolNotFoundError(ToolError):
@@ -146,7 +146,7 @@ class SandboxViolationError(ToolError):
 class MemorySystemError(PraxisError):
     """记忆系统错误（使用 MemorySystemError 避免遮蔽内建 MemoryError）。"""
 
-    subsystem = "memory"
+    component = "memory"
 
 
 # ── S7 上下文引擎 ────────────────────────────────────────────────────────────
@@ -155,7 +155,7 @@ class MemorySystemError(PraxisError):
 class ContextError(PraxisError):
     """上下文组装或压缩错误。"""
 
-    subsystem = "context"
+    component = "context"
 
 
 # ── S8 护栏系统 ──────────────────────────────────────────────────────────────
@@ -164,7 +164,7 @@ class ContextError(PraxisError):
 class GuardrailError(PraxisError):
     """护栏规则评估或权限检查错误。"""
 
-    subsystem = "guardrails"
+    component = "guardrails"
 
 
 # ── S9 错误恢复 ──────────────────────────────────────────────────────────────
@@ -173,7 +173,7 @@ class GuardrailError(PraxisError):
 class RecoveryError(PraxisError):
     """错误恢复策略执行错误。"""
 
-    subsystem = "recovery"
+    component = "recovery"
 
 
 # ── S10 验证引擎 ─────────────────────────────────────────────────────────────
@@ -182,7 +182,7 @@ class RecoveryError(PraxisError):
 class VerificationError(PraxisError):
     """验证执行错误。"""
 
-    subsystem = "verification"
+    component = "verification"
 
 
 # ── S11 编排循环 ─────────────────────────────────────────────────────────────
@@ -191,16 +191,16 @@ class VerificationError(PraxisError):
 class OrchestrationError(PraxisError):
     """编排循环执行错误。"""
 
-    subsystem = "orchestrator"
+    component = "orchestrator"
 
 
-# ── S12 生命周期管理 ─────────────────────────────────────────────────────────
+# ── S12 会话管理 ───────────────────────────────────────────────────────────
 
 
-class LifecycleError(PraxisError):
-    """会话生命周期管理错误。"""
+class SessionError(PraxisError):
+    """会话管理错误。"""
 
-    subsystem = "lifecycle"
+    component = "session"
 
 
 # ── S13 子代理协调 ───────────────────────────────────────────────────────────
@@ -209,7 +209,7 @@ class LifecycleError(PraxisError):
 class SubagentError(PraxisError):
     """子代理创建或协调错误。"""
 
-    subsystem = "subagent"
+    component = "subagent"
 
 
 # ── S14 技能系统 ─────────────────────────────────────────────────────────────
@@ -218,4 +218,4 @@ class SubagentError(PraxisError):
 class SkillError(PraxisError):
     """技能发现、加载或执行错误。"""
 
-    subsystem = "skills"
+    component = "skills"

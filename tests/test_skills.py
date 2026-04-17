@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
-from praxis.config.subsystems import PersistenceConfig
+from praxis.config.schemas import PersistenceConfig
 from praxis.models.skills import (
     SkillAuditResult,
     SkillDefinition,
@@ -17,7 +17,7 @@ from praxis.persistence.store import PersistenceStore, create_store
 from praxis.skills.activation import SkillActivation
 from praxis.skills.disclosure import SkillDisclosure
 from praxis.skills.discovery import SkillDiscovery
-from praxis.skills.lifecycle import SkillLifecycleManager
+from praxis.skills.manager import SkillManager
 from praxis.skills.parser import SkillParser
 from praxis.skills.tools_bridge import SkillToolsBridge
 from praxis.tools.registry import ToolRegistry
@@ -414,7 +414,7 @@ class TestSkillLifecycle:
         make_skill_dir(tmp_path / "skills", "alpha")
         make_skill_dir(tmp_path / "skills", "beta")
         reg = ToolRegistry()
-        mgr = SkillLifecycleManager(reg, store)
+        mgr = SkillManager(reg, store)
         discovered = await mgr.initialize([str(tmp_path / "skills")])
         assert len(discovered) == 2
         index = mgr.get_skill_index()
@@ -422,7 +422,7 @@ class TestSkillLifecycle:
 
     async def test_register_unregister(self, store: PersistenceStore) -> None:
         reg = ToolRegistry()
-        mgr = SkillLifecycleManager(reg, store)
+        mgr = SkillManager(reg, store)
         mgr.register_skill(make_skill_def("temp"))
         assert len(mgr.get_skill_index()) == 1
         assert mgr.unregister_skill("temp") is True
@@ -430,7 +430,7 @@ class TestSkillLifecycle:
 
     async def test_hot_reload_index_updated(self, store: PersistenceStore) -> None:
         reg = ToolRegistry()
-        mgr = SkillLifecycleManager(reg, store)
+        mgr = SkillManager(reg, store)
         mgr.register_skill(make_skill_def("first"))
         assert len(mgr.get_skill_index()) == 1
         mgr.register_skill(make_skill_def("second"))
@@ -438,7 +438,7 @@ class TestSkillLifecycle:
 
     async def test_version_management(self, store: PersistenceStore) -> None:
         reg = ToolRegistry()
-        mgr = SkillLifecycleManager(reg, store)
+        mgr = SkillManager(reg, store)
         mgr.register_skill(make_skill_def("my-skill", version="1.0.0"))
         mgr.register_skill(make_skill_def("my-skill", version="2.0.0"))
         versions = mgr.list_versions("my-skill")
@@ -447,7 +447,7 @@ class TestSkillLifecycle:
 
     async def test_upgrade_and_rollback(self, store: PersistenceStore) -> None:
         reg = ToolRegistry()
-        mgr = SkillLifecycleManager(reg, store)
+        mgr = SkillManager(reg, store)
         mgr.register_skill(make_skill_def("up", version="1.0.0"))
         v2 = make_skill_def("up", version="2.0.0")
         assert mgr.upgrade_skill(v2) is True
@@ -461,7 +461,7 @@ class TestSkillLifecycle:
 
     async def test_usage_stats(self, store: PersistenceStore) -> None:
         reg = ToolRegistry()
-        mgr = SkillLifecycleManager(reg, store)
+        mgr = SkillManager(reg, store)
         mgr.register_skill(make_skill_def("stat"))
         mgr.record_trigger("stat", success=True)
         mgr.record_trigger("stat", success=False)
@@ -471,14 +471,14 @@ class TestSkillLifecycle:
 
     async def test_activate_deactivate(self, store: PersistenceStore) -> None:
         reg = ToolRegistry()
-        mgr = SkillLifecycleManager(reg, store)
+        mgr = SkillManager(reg, store)
         mgr.register_skill(make_skill_def("act"))
         assert mgr.activate_skill("act") is True
         assert mgr.deactivate_skill("act") is True
 
     async def test_evaluate_relevance(self, store: PersistenceStore) -> None:
         reg = ToolRegistry()
-        mgr = SkillLifecycleManager(reg, store)
+        mgr = SkillManager(reg, store)
         mgr.register_skill(make_skill_def("pdf-processor"))
         mgr.register_skill(make_skill_def("csv-parser"))
         ranked = mgr.evaluate_relevance("处理 pdf-processor 文件")
@@ -486,7 +486,7 @@ class TestSkillLifecycle:
 
     async def test_index_cache_persistence(self, store: PersistenceStore) -> None:
         reg = ToolRegistry()
-        mgr = SkillLifecycleManager(reg, store)
+        mgr = SkillManager(reg, store)
         mgr.register_skill(make_skill_def("cached"))
         await mgr.save_index_cache()
         loaded = await mgr.load_index_cache()

@@ -1,24 +1,24 @@
 """会话初始化。
 
-create_session 创建新会话时初始化所有子系统实例，
+create_session 创建新会话时初始化所有组件实例，
 注入配置，加载项目级记忆/工具/权限，生成会话 ID 和初始检查点。
 """
 
 from collections.abc import AsyncIterator
 from typing import Any
 
-from praxis.config.subsystems import (
+from praxis.config.schemas import (
     ContextConfig,
-    LifecycleConfig,
+    SessionConfig,
     OrchestratorConfig,
     ToolsConfig,
 )
 from praxis.context.assembler import PromptAssembler
 from praxis.context.tool_injection import ToolInjector
 from praxis.guardrails.engine import GuardrailEngine
-from praxis.lifecycle.checkpoint import CheckpointManager
+from praxis.session.checkpoint import CheckpointManager
 from praxis.memory.pipeline import MemoryPipeline
-from praxis.models.lifecycle import (
+from praxis.models.session import (
     ContinuationPhase,
     SessionMetadata,
     SessionStatus,
@@ -33,7 +33,7 @@ from praxis.orchestrator.tool_coordination import ToolCoordinator
 from praxis.persistence.store import PersistenceStore
 from praxis.recovery.circuit_breaker import CircuitBreakerRegistry
 from praxis.recovery.retry import RetryPolicy
-from praxis.skills.lifecycle import SkillLifecycleManager
+from praxis.skills.manager import SkillManager
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
 from praxis.tools.executor import ToolExecutor
@@ -41,13 +41,13 @@ from praxis.tools.registry import ToolRegistry
 from praxis.tools.sandbox import Sandbox
 from praxis.verification.registry import VerifierRegistry
 
-log = get_logger("lifecycle.session")
+log = get_logger("session.core")
 
 
 class Session:
     """Agent 会话。
 
-    持有当前会话的所有子系统实例和状态。
+    持有当前会话的所有组件实例和状态。
     """
 
     def __init__(
@@ -58,9 +58,9 @@ class Session:
         injector: ToolInjector,
         registry: ToolRegistry,
         store: PersistenceStore,
-        config: LifecycleConfig,
+        config: SessionConfig,
         memory: MemoryPipeline | None = None,
-        skill_manager: SkillLifecycleManager | None = None,
+        skill_manager: SkillManager | None = None,
         verifier_registry: VerifierRegistry | None = None,
     ) -> None:
         self.metadata = metadata
@@ -144,18 +144,18 @@ class Session:
 class SessionFactory:
     """会话工厂。
 
-    负责创建新会话，初始化所有子系统并注入依赖。
+    负责创建新会话，初始化所有组件并注入依赖。
     """
 
     def __init__(
         self,
         store: PersistenceStore,
-        lifecycle_config: LifecycleConfig,
+        session_config: SessionConfig,
         orchestrator_config: OrchestratorConfig,
         context_config: ContextConfig,
     ) -> None:
         self.store = store
-        self.lifecycle_config = lifecycle_config
+        self.session_config = session_config
         self.orchestrator_config = orchestrator_config
         self.context_config = context_config
 
@@ -165,19 +165,19 @@ class SessionFactory:
         registry: ToolRegistry | None = None,
         model: str = "default",
         memory: MemoryPipeline | None = None,
-        skill_manager: SkillLifecycleManager | None = None,
+        skill_manager: SkillManager | None = None,
         verifier_registry: VerifierRegistry | None = None,
     ) -> Session:
         """创建新会话。
 
-        初始化所有子系统实例并注入配置。
+        初始化所有组件实例并注入配置。
 
         Args:
             guardrails: 护栏引擎（外部传入，因权限配置项目级别）。
             registry: 工具注册表（可选，None 时创建新实例）。
             model: LLM 模型名。
             memory: S6 记忆管线（可选）。
-            skill_manager: S14 技能生命周期管理器（可选）。
+            skill_manager: S14 技能管理器（可选）。
             verifier_registry: S10 验证器注册表（可选）。
 
         Returns:
@@ -248,7 +248,7 @@ class SessionFactory:
             injector=injector,
             registry=registry,
             store=self.store,
-            config=self.lifecycle_config,
+            config=self.session_config,
             memory=memory,
             skill_manager=skill_manager,
             verifier_registry=verifier_registry,

@@ -7,11 +7,11 @@
 
 from typing import Any
 
-from praxis.lifecycle.session import Session
-from praxis.models.lifecycle import ContinuationPhase, SessionStatus
+from praxis.session.core import Session
+from praxis.models.session import ContinuationPhase, SessionStatus
 from praxis.telemetry.logger import get_logger
 
-log = get_logger("lifecycle.continuation")
+log = get_logger("session.continuation")
 
 INIT_SYSTEM_PROMPT = (
     "你正在启动一个新的工作会话。请执行以下初始化步骤：\n"

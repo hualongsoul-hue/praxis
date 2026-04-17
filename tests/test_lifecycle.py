@@ -1,4 +1,4 @@
-"""S12 生命周期管理单元测试。"""
+"""S12 会话管理单元测试。"""
 
 from pathlib import Path
 from typing import Any
@@ -6,21 +6,21 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from praxis.config.subsystems import (
+from praxis.config.schemas import (
     ContextConfig,
-    LifecycleConfig,
+    SessionConfig,
     OrchestratorConfig,
     PersistenceConfig,
 )
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.guardrails.permissions import PermissionManager
 from praxis.guardrails.rules import RuleEngine
-from praxis.lifecycle.checkpoint import CheckpointManager
-from praxis.lifecycle.continuation import ContinuationManager
-from praxis.lifecycle.resume import SessionResumer
-from praxis.lifecycle.session import Session, SessionFactory
-from praxis.lifecycle.time_travel import TimeTravelManager
-from praxis.models.lifecycle import (
+from praxis.session.checkpoint import CheckpointManager
+from praxis.session.continuation import ContinuationManager
+from praxis.session.resume import SessionResumer
+from praxis.session.core import Session, SessionFactory
+from praxis.session.time_travel import TimeTravelManager
+from praxis.models.session import (
     CheckpointInfo,
     ContinuationPhase,
     SessionMetadata,
@@ -51,7 +51,7 @@ def guardrails() -> GuardrailEngine:
 def factory(store: PersistenceStore) -> SessionFactory:
     return SessionFactory(
         store=store,
-        lifecycle_config=LifecycleConfig(),
+        session_config=SessionConfig(),
         orchestrator_config=OrchestratorConfig(),
         context_config=ContextConfig(),
     )

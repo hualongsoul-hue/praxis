@@ -8,7 +8,7 @@ asyncio.Task 随 S6 实例创建自动启动，消息游标持久化，
 import asyncio
 from typing import Any
 
-from praxis.config.subsystems import MemoryConfig
+from praxis.config.schemas import MemoryConfig
 from praxis.memory.pipeline import MemoryPipeline
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric

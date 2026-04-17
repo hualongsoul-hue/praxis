@@ -1,6 +1,6 @@
-"""各子系统配置 Schema 定义。
+"""各组件配置 Schema 定义。
 
-每个子系统拥有独立的配置模型，所有字段带默认值，确保零配置可启动。
+每个组件拥有独立的配置模型，所有字段带默认值，确保零配置可启动。
 配置 Schema 由此模块集中定义，通过 PraxisConfig 组合为顶层配置树。
 """
 
@@ -16,7 +16,7 @@ class TelemetryConfig(BaseModel):
     log_format: Literal["json", "text"] = "text"
     log_levels: dict[str, str] = Field(
         default_factory=dict,
-        description="按子系统独立设置日志级别，如 {'gateway': 'DEBUG'}",
+        description="按组件独立设置日志级别，如 {'gateway': 'DEBUG'}",
     )
     metrics_enabled: bool = True
     metrics_export: Literal["prometheus", "file"] = "file"
@@ -124,8 +124,8 @@ class OrchestratorConfig(BaseModel):
     stream_events: bool = True
 
 
-class LifecycleConfig(BaseModel):
-    """S12 生命周期管理配置。"""
+class SessionConfig(BaseModel):
+    """S12 会话管理配置。"""
 
     auto_checkpoint: bool = True
     max_checkpoints_per_session: int = 50

@@ -6,7 +6,7 @@ from datetime import datetime, timezone, timedelta
 
 import pytest
 
-from praxis.config.subsystems import PersistenceConfig
+from praxis.config.schemas import PersistenceConfig
 from praxis.models.memory import (
     EpisodicMemory,
     MemoryEntry,
@@ -23,7 +23,7 @@ from praxis.models.memory import (
     WorkingMemory,
     WorkingMemoryMessage,
 )
-from praxis.memory.lifecycle import LifecycleManager
+from praxis.memory.retention import RetentionManager
 from praxis.memory.retrieval import MemoryRetriever
 from praxis.memory.scope import ScopedMemoryStore
 from praxis.memory.scratchpad import Scratchpad
@@ -445,7 +445,7 @@ class TestLifecycle:
 
     async def test_mark_inactive(self, store: PersistenceStore) -> None:
         scoped = ScopedMemoryStore(store)
-        lm = LifecycleManager(scoped, store)
+        lm = RetentionManager(scoped, store)
         scope = MemoryScope(scope_type=ScopeType.GLOBAL)
         entry = MemoryEntry(
             memory_type=MemoryType.SEMANTIC, scope=scope,
@@ -460,7 +460,7 @@ class TestLifecycle:
 
     async def test_supersede(self, store: PersistenceStore) -> None:
         scoped = ScopedMemoryStore(store)
-        lm = LifecycleManager(scoped, store)
+        lm = RetentionManager(scoped, store)
         scope = MemoryScope(scope_type=ScopeType.GLOBAL)
 
         old = MemoryEntry(
@@ -486,7 +486,7 @@ class TestLifecycle:
 
     async def test_version_history(self, store: PersistenceStore) -> None:
         scoped = ScopedMemoryStore(store)
-        lm = LifecycleManager(scoped, store)
+        lm = RetentionManager(scoped, store)
         scope = MemoryScope(scope_type=ScopeType.GLOBAL)
 
         entry = MemoryEntry(
@@ -502,7 +502,7 @@ class TestLifecycle:
         assert history[0].content == "版本1"
 
     def test_compute_decay(self) -> None:
-        lm = LifecycleManager.__new__(LifecycleManager)
+        lm = RetentionManager.__new__(RetentionManager)
         lm.decay_half_life_days = 30.0
 
         recent = MemoryEntry(
@@ -525,7 +525,7 @@ class TestLifecycle:
 
     async def test_decay_sweep(self, store: PersistenceStore) -> None:
         scoped = ScopedMemoryStore(store)
-        lm = LifecycleManager(
+        lm = RetentionManager(
             scoped, store,
             inactivity_threshold_days=0.001,
             min_access_count=0,

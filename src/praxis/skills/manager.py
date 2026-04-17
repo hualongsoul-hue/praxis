@@ -1,4 +1,4 @@
-"""技能生命周期管理。
+"""技能统一管理。
 
 register_skill/unregister_skill 运行时热加载，
 版本管理（多版本共存、升级、回退），
@@ -19,14 +19,14 @@ from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
 from praxis.tools.registry import ToolRegistry
 
-log = get_logger("skills.lifecycle")
+log = get_logger("skills.manager")
 
 SKILLS_NAMESPACE = "skills"
 INDEX_KEY = "skill_index"
 
 
-class SkillLifecycleManager:
-    """技能生命周期管理器。
+class SkillManager:
+    """技能管理器。
 
     统一管理技能的发现、注册、激活、注销和索引缓存。
     """

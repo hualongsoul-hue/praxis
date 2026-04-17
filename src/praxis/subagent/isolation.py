@@ -1,17 +1,17 @@
 """上下文隔离。
 
-每个子代理拥有独立子系统实例集，
+每个子代理拥有独立组件实例集，
 子代理间不共享可变状态，
 遥测关联父追踪链路。
 """
 
-from praxis.config.subsystems import (
+from praxis.config.schemas import (
     ContextConfig,
-    LifecycleConfig,
+    SessionConfig,
     OrchestratorConfig,
 )
 from praxis.guardrails.engine import GuardrailEngine
-from praxis.lifecycle.session import Session, SessionFactory
+from praxis.session.core import Session, SessionFactory
 from praxis.models.subagent import SubagentSpec
 from praxis.persistence.store import PersistenceStore
 from praxis.telemetry.logger import get_logger
@@ -23,7 +23,7 @@ log = get_logger("subagent.isolation")
 class IsolatedContext:
     """隔离上下文。
 
-    为子代理创建完全独立的子系统实例集。
+    为子代理创建完全独立的组件实例集。
     """
 
     def __init__(
@@ -70,7 +70,7 @@ class IsolatedContext:
 
         factory = SessionFactory(
             store=self.store,
-            lifecycle_config=LifecycleConfig(auto_checkpoint=False),
+            session_config=SessionConfig(auto_checkpoint=False),
             orchestrator_config=sub_orch_config,
             context_config=self.context_config,
         )

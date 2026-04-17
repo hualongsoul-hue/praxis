@@ -4,10 +4,10 @@ import json
 
 import pytest
 
-from praxis.config.subsystems import TelemetryConfig
+from praxis.config.schemas import TelemetryConfig
 from praxis.models.telemetry import AuditEvent
 from praxis.persistence.store import PersistenceStore, create_store
-from praxis.config.subsystems import PersistenceConfig
+from praxis.config.schemas import PersistenceConfig
 from praxis.telemetry.audit import configure_audit, query_audit, record_audit
 from praxis.telemetry.logger import (
     StructuredLogger,
@@ -37,7 +37,7 @@ class TestStructuredLogger:
         captured = capfd.readouterr()
         data = json.loads(captured.err.strip())
         assert data["level"] == "INFO"
-        assert data["subsystem"] == "gateway"
+        assert data["component"] == "gateway"
         assert data["message"] == "test message"
         assert data["request_id"] == "abc123"
         assert "timestamp" in data
@@ -52,7 +52,7 @@ class TestStructuredLogger:
         assert data["session_id"] == "sess-1"
         assert data["turn"] == 3
 
-    def test_per_subsystem_level(self, capfd: pytest.CaptureFixture[str]) -> None:
+    def test_per_component_level(self, capfd: pytest.CaptureFixture[str]) -> None:
         config = TelemetryConfig(
             log_level="WARNING",
             log_format="json",
@@ -82,11 +82,11 @@ class TestMetrics:
 
     def test_counter(self) -> None:
         collector = MetricsCollector()
-        collector.counter("requests_total", 1, {"subsystem": "gateway"})
-        collector.counter("requests_total", 1, {"subsystem": "gateway"})
+        collector.counter("requests_total", 1, {"component": "gateway"})
+        collector.counter("requests_total", 1, {"component": "gateway"})
         text = collector.export_prometheus()
         assert "# TYPE requests_total counter" in text
-        assert 'requests_total{subsystem="gateway"} 2.0' in text
+        assert 'requests_total{component="gateway"} 2.0' in text
 
     def test_gauge(self) -> None:
         collector = MetricsCollector()
@@ -129,7 +129,7 @@ class TestTracing:
     def test_start_span_basic(self) -> None:
         config = TelemetryConfig(tracing_enabled=True, tracing_export="console")
         configure_tracing(config)
-        span = start_span("test-operation", subsystem="gateway", operation="chat")
+        span = start_span("test-operation", component="gateway", operation="chat")
         assert span is not None
         assert span.is_recording()
         span.end()
@@ -137,8 +137,8 @@ class TestTracing:
     def test_parent_child_span(self) -> None:
         config = TelemetryConfig(tracing_enabled=True, tracing_export="console")
         configure_tracing(config)
-        parent = start_span("parent-op", subsystem="orchestrator")
-        child = start_span("child-op", parent=parent, subsystem="gateway")
+        parent = start_span("parent-op", component="orchestrator")
+        child = start_span("child-op", parent=parent, component="gateway")
         child_ctx = child.get_span_context()
         parent_ctx = parent.get_span_context()
         assert child_ctx.trace_id == parent_ctx.trace_id
@@ -164,7 +164,7 @@ class TestAudit:
     async def test_record_and_query(self, audit_store: PersistenceStore) -> None:
         event = AuditEvent(
             event_type="tool_call",
-            subsystem="tools",
+            component="tools",
             session_id="sess-1",
             details={
                 "tool_name": "read_file",
@@ -187,7 +187,7 @@ class TestAudit:
         audit_mod.audit_store = None
         event = AuditEvent(
             event_type="llm_call",
-            subsystem="gateway",
+            component="gateway",
             details={"model": "gpt-4"},
         )
         await record_audit(event)

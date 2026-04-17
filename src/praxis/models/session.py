@@ -1,4 +1,4 @@
-"""生命周期管理数据模型——S12 跨子系统共享类型。"""
+"""会话管理数据模型——S12 跨组件共享类型。"""
 
 from datetime import datetime, timezone
 from enum import Enum

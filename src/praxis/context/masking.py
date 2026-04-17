@@ -6,7 +6,7 @@
 
 from typing import Any
 
-from praxis.config.subsystems import ContextConfig
+from praxis.config.schemas import ContextConfig
 from praxis.gateway.metering import get_token_count
 from praxis.telemetry.logger import get_logger
 

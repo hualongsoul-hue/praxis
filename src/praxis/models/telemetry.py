@@ -29,7 +29,7 @@ class AuditEvent(BaseModel):
         "guardrail_verdict",
         "recovery_event",
     ]
-    subsystem: str
+    component: str
     action: str = ""
     session_id: str | None = None
     details: dict[str, Any] = Field(default_factory=dict)
