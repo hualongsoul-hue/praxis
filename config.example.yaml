@@ -1,0 +1,102 @@
+# Praxis 配置示例
+# 所有字段均有默认值，仅需配置需要覆盖的项目。
+# 完整配置参考: docs/CONFIG_REFERENCE.md
+
+# ── S2 遥测系统 ────────────────────────────────────────────
+telemetry:
+  log_level: "INFO"
+  log_format: "text"        # "json" 用于生产环境
+  log_levels:
+    gateway: "INFO"
+    guardrails: "INFO"
+  metrics_enabled: true
+  metrics_export: "file"    # "prometheus" 用于生产环境
+  tracing_enabled: true
+  tracing_export: "console" # "otlp" 用于生产环境
+  audit_enabled: true
+
+# ── S3 持久化引擎 ──────────────────────────────────────────
+persistence:
+  backend: "sqlite"
+  sqlite_path: "data/praxis.db"
+  # redis_url: "redis://localhost:6379/0"  # Redis 后端
+
+# ── S4 模型网关 ────────────────────────────────────────────
+gateway:
+  model_list:
+    - model_name: "default"
+      litellm_params:
+        model: "openai/gpt-4o"
+        api_key: "${OPENAI_API_KEY}"   # 使用环境变量
+    # - model_name: "fast"
+    #   litellm_params:
+    #     model: "anthropic/claude-3-5-haiku-20241022"
+    #     api_key: "${ANTHROPIC_API_KEY}"
+  default_model: "default"
+  routing_strategy: "simple-shuffle"
+  num_retries: 3
+  timeout: 60.0
+  # max_budget: 10.0  # USD 成本上限
+
+# ── S5 工具系统 ────────────────────────────────────────────
+tools:
+  allowed_paths: []        # 空 = 允许所有路径
+  default_timeout: 30.0
+  max_concurrent_readonly: 5
+  shell_timeout: 120.0
+  network_allowed: true
+
+# ── S6 记忆系统 ────────────────────────────────────────────
+memory:
+  vector_dimensions: 1536
+  max_memories: 10000
+  decay_enabled: true
+  background_batch_threshold: 5
+  background_interval_seconds: 10.0
+
+# ── S7 上下文引擎 ──────────────────────────────────────────
+context:
+  compaction_threshold: 0.8   # Token 占比超过 80% 触发压缩
+  masking_turn_distance: 10
+  masking_token_threshold: 2000
+  recent_file_refs_keep: 5
+
+# ── S8 护栏系统 ────────────────────────────────────────────
+guardrails:
+  default_permission: "confirm"  # auto_approve / confirm / deny
+  input_guardrails_enabled: true
+  output_guardrails_enabled: true
+  # permissions_file: "permissions.yaml"  # 声明式权限配置
+
+# ── S9 错误恢复 ────────────────────────────────────────────
+recovery:
+  max_retries: 3
+  base_delay: 1.0
+  max_delay: 30.0
+  circuit_breaker_threshold: 5
+  circuit_breaker_cooldown: 60.0
+
+# ── S11 编排循环 ───────────────────────────────────────────
+orchestrator:
+  max_turns: 100
+  default_strategy: "react"  # react / plan-and-execute
+  stream_events: true
+
+# ── S12 会话管理 ───────────────────────────────────────────
+session:
+  auto_checkpoint: true
+  max_checkpoints_per_session: 50
+
+# ── S13 子代理 ─────────────────────────────────────────────
+subagent:
+  max_concurrent: 5
+  default_max_turns: 50
+  default_timeout: 300.0
+
+# ── S14 技能系统 ───────────────────────────────────────────
+skills:
+  skill_paths:
+    - ".praxis/skills"
+    - "~/.praxis/skills"
+  auto_discover: true
+  max_skills_in_context: 10
