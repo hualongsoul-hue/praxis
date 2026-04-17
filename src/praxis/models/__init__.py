@@ -16,7 +16,15 @@ from praxis.models.responses import (
     Usage,
 )
 from praxis.models.gateway import JudgeResult
+from praxis.models.guardrails import GuardrailVerdict, VerdictType
 from praxis.models.persistence import Checkpoint
+from praxis.models.recovery import (
+    CircuitState,
+    ErrorCategory,
+    ErrorClassification,
+    RecoveryStrategy,
+    RetryDecision,
+)
 from praxis.models.telemetry import AuditEvent
 from praxis.models.tools import (
     FunctionCall,
@@ -29,15 +37,21 @@ from praxis.models.tools import (
 __all__ = [
     "AuditEvent",
     "Checkpoint",
+    "CircuitState",
+    "ErrorCategory",
+    "ErrorClassification",
     "ContentPart",
     "FunctionCall",
     "FunctionCallDelta",
+    "GuardrailVerdict",
     "ImageContent",
     "JudgeResult",
     "ImageUrl",
     "Message",
     "ModelResponse",
     "ModelResponseChunk",
+    "RecoveryStrategy",
+    "RetryDecision",
     "Role",
     "TextContent",
     "ToolCall",
