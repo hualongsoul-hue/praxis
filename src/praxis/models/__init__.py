@@ -70,6 +70,13 @@ from praxis.models.skills import (
     SkillIndexEntry,
     SkillMetadata,
 )
+from praxis.models.subagent import (
+    ConflictMarker,
+    SubagentMode,
+    SubagentResult,
+    SubagentSpec,
+    SubagentStatus,
+)
 from praxis.models.telemetry import AuditEvent
 from praxis.models.verification import (
     FailureDetail,
@@ -99,6 +106,7 @@ __all__ = [
     "CircuitState",
     "ErrorCategory",
     "ErrorClassification",
+    "ConflictMarker",
     "ConsolidationAction",
     "ContentPart",
     "EpisodicMemory",
@@ -132,6 +140,10 @@ __all__ = [
     "ScopeType",
     "SemanticMemory",
     "SemanticMode",
+    "SubagentMode",
+    "SubagentResult",
+    "SubagentSpec",
+    "SubagentStatus",
     "StrategyMode",
     "SkillAuditResult",
     "SkillDefinition",
