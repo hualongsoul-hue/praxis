@@ -27,6 +27,7 @@ class TerminationReason(str, Enum):
     SAFETY_REFUSAL = "safety_refusal"
     MAX_TURNS = "max_turns"
     TOKEN_EXHAUSTED = "token_exhausted"
+    HANDOFF = "handoff"
 
 
 class StrategyMode(str, Enum):

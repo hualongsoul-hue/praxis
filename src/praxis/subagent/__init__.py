@@ -6,6 +6,7 @@ from praxis.subagent.handoff import HandoffManager
 from praxis.subagent.isolation import IsolatedContext
 from praxis.subagent.resource_control import ResourceController
 from praxis.subagent.spawn import SubagentSpawner
+from praxis.subagent.tools import register_subagent_tools, wire_subagent
 
 __all__ = [
     "ForkManager",
@@ -14,4 +15,6 @@ __all__ = [
     "ResourceController",
     "ResultAggregator",
     "SubagentSpawner",
+    "register_subagent_tools",
+    "wire_subagent",
 ]

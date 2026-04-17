@@ -239,6 +239,21 @@ class OrchestrationLoop:
                 parsed.tool_calls, self.state.current_turn
             )
 
+            # Handoff 短路：专家代理结果直接作为最终响应，主代理不再处理
+            if parsed.handoff_target:
+                for outcome in outcomes:
+                    if (
+                        not outcome.skipped
+                        and outcome.result is not None
+                        and outcome.result.success
+                        and outcome.tool_call.function.name.startswith("handoff_to_")
+                    ):
+                        self.state.total_tool_calls += len(outcomes)
+                        return self.make_response(
+                            content=outcome.result.content,
+                            reason=TerminationReason.HANDOFF,
+                        )
+
             # 检查绊线
             tripwire = any(
                 o.skipped and "绊线" in o.skip_reason for o in outcomes
