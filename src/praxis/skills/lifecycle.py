@@ -9,6 +9,7 @@ register_skill/unregister_skill 运行时热加载，
 from typing import Any
 
 from praxis.models.skills import SkillDefinition, SkillIndexEntry
+from praxis.models.tools import ToolDefinition, ToolMetadata
 from praxis.persistence.store import PersistenceStore
 from praxis.skills.activation import SkillActivation
 from praxis.skills.disclosure import SkillDisclosure
@@ -126,6 +127,36 @@ class SkillLifecycleManager:
         """列出技能附带的脚本工具。"""
         return self.bridge.list_skill_tools(skill_id)
 
+    def auto_activate_for_task(
+        self,
+        task_description: str,
+        threshold: float = 0.3,
+        max_activate: int = 3,
+    ) -> list[str]:
+        """根据任务描述自动激活相关技能并注册脚本工具。
+
+        Args:
+            task_description: 当前任务描述。
+            threshold: 最低相关性阈值。
+            max_activate: 最多同时激活数。
+
+        Returns:
+            新激活的技能 ID 列表。
+        """
+        index = self.get_skill_index()
+        activated_ids = self.activation.auto_activate(
+            task_description=task_description,
+            skill_index=index,
+            available_skills=self.skills,
+            threshold=threshold,
+            max_activate=max_activate,
+        )
+        for skill_id in activated_ids:
+            skill = self.skills.get(skill_id)
+            if skill is not None:
+                self.bridge.register_skill_scripts(skill)
+        return activated_ids
+
     def evaluate_relevance(
         self,
         task_description: str,
@@ -213,6 +244,132 @@ class SkillLifecycleManager:
     def get_usage_stats(self, skill_id: str) -> dict[str, int]:
         """获取技能使用统计。"""
         return dict(self.usage_stats.get(skill_id, {}))
+
+    def register_disclosure_tools(self) -> list[str]:
+        """将技能渐进式披露接口注册为 LLM 可调用的工具。
+
+        注册的工具：
+        - load_skill: 第二层披露——加载完整 SKILL.md 正文
+        - load_skill_file: 第三层披露——加载技能附属文件
+        - list_skill_tools: 列出技能附带的可执行脚本工具
+        - list_skill_files: 列出技能的所有附属文件
+
+        Returns:
+            注册的工具名列表。
+        """
+        registry = self.bridge.registry
+        registered: list[str] = []
+
+        manager = self
+
+        async def handle_load_skill(arguments: dict[str, Any]) -> str:
+            skill_id = arguments.get("skill_id", "")
+            skill = manager.load_skill(skill_id)
+            if skill is None:
+                return f"技能 '{skill_id}' 未找到"
+            return skill.content
+
+        registry.register(
+            ToolDefinition(
+                name="load_skill",
+                description="加载技能的完整内容（SKILL.md 正文）。当技能索引中的某个技能与当前任务相关时调用。",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "skill_id": {"type": "string", "description": "技能标识符"},
+                    },
+                    "required": ["skill_id"],
+                },
+                metadata=ToolMetadata(
+                    category="system", read_only=True, tags=["skill", "disclosure"],
+                ),
+            ),
+            handle_load_skill,
+        )
+        registered.append("load_skill")
+
+        async def handle_load_skill_file(arguments: dict[str, Any]) -> str:
+            skill_id = arguments.get("skill_id", "")
+            filename = arguments.get("filename", "")
+            content = manager.load_skill_file(skill_id, filename)
+            if content is None:
+                return f"文件 '{filename}' 未找到（技能: {skill_id}）"
+            return content
+
+        registry.register(
+            ToolDefinition(
+                name="load_skill_file",
+                description="加载技能的附属文件内容。用于深度探索技能目录中的参考文档、模板或配置。",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "skill_id": {"type": "string", "description": "技能标识符"},
+                        "filename": {"type": "string", "description": "附属文件相对路径"},
+                    },
+                    "required": ["skill_id", "filename"],
+                },
+                metadata=ToolMetadata(
+                    category="system", read_only=True, tags=["skill", "disclosure"],
+                ),
+            ),
+            handle_load_skill_file,
+        )
+        registered.append("load_skill_file")
+
+        async def handle_list_skill_tools(arguments: dict[str, Any]) -> str:
+            skill_id = arguments.get("skill_id", "")
+            tools = manager.list_skill_tools(skill_id)
+            if not tools:
+                return f"技能 '{skill_id}' 没有附带可执行脚本工具"
+            return "\n".join(tools)
+
+        registry.register(
+            ToolDefinition(
+                name="list_skill_tools",
+                description="列出技能附带的可执行脚本工具名称。",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "skill_id": {"type": "string", "description": "技能标识符"},
+                    },
+                    "required": ["skill_id"],
+                },
+                metadata=ToolMetadata(
+                    category="system", read_only=True, tags=["skill", "disclosure"],
+                ),
+            ),
+            handle_list_skill_tools,
+        )
+        registered.append("list_skill_tools")
+
+        async def handle_list_skill_files(arguments: dict[str, Any]) -> str:
+            skill_id = arguments.get("skill_id", "")
+            files = self.disclosure.list_skill_files(skill_id)
+            if not files:
+                return f"技能 '{skill_id}' 没有附属文件"
+            return "\n".join(files)
+
+        registry.register(
+            ToolDefinition(
+                name="list_skill_files",
+                description="列出技能的所有附属文件路径。",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "skill_id": {"type": "string", "description": "技能标识符"},
+                    },
+                    "required": ["skill_id"],
+                },
+                metadata=ToolMetadata(
+                    category="system", read_only=True, tags=["skill", "disclosure"],
+                ),
+            ),
+            handle_list_skill_files,
+        )
+        registered.append("list_skill_files")
+
+        log.info("技能披露工具已注册", tools=registered)
+        return registered
 
     async def save_index_cache(self) -> None:
         """将索引缓存持久化到 S3。"""

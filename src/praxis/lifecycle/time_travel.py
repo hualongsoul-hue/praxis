@@ -8,10 +8,13 @@ list_checkpoints 查看历史，
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.lifecycle.checkpoint import CheckpointManager
 from praxis.lifecycle.resume import SessionResumer
-from praxis.lifecycle.session import Session, SessionFactory
+from praxis.lifecycle.session import Session
+from praxis.memory.pipeline import MemoryPipeline
 from praxis.models.lifecycle import CheckpointInfo
+from praxis.skills.lifecycle import SkillLifecycleManager
 from praxis.telemetry.logger import get_logger
 from praxis.tools.registry import ToolRegistry
+from praxis.verification.registry import VerifierRegistry
 
 log = get_logger("lifecycle.time_travel")
 
@@ -48,6 +51,9 @@ class TimeTravelManager:
         guardrails: GuardrailEngine,
         registry: ToolRegistry | None = None,
         model: str = "default",
+        memory: MemoryPipeline | None = None,
+        skill_manager: SkillLifecycleManager | None = None,
+        verifier_registry: VerifierRegistry | None = None,
     ) -> Session | None:
         """回退到指定检查点。
 
@@ -59,6 +65,9 @@ class TimeTravelManager:
             guardrails: 护栏引擎。
             registry: 工具注册表（可选）。
             model: LLM 模型名。
+            memory: S6 记忆管线（可选）。
+            skill_manager: S14 技能管理器（可选）。
+            verifier_registry: S10 验证器注册表（可选）。
 
         Returns:
             恢复后的 Session，失败时返回 None。
@@ -69,6 +78,9 @@ class TimeTravelManager:
             registry=registry,
             model=model,
             checkpoint_id=checkpoint_id,
+            memory=memory,
+            skill_manager=skill_manager,
+            verifier_registry=verifier_registry,
         )
 
         if session is None:
@@ -95,6 +107,9 @@ class TimeTravelManager:
         guardrails: GuardrailEngine,
         registry: ToolRegistry | None = None,
         model: str = "default",
+        memory: MemoryPipeline | None = None,
+        skill_manager: SkillLifecycleManager | None = None,
+        verifier_registry: VerifierRegistry | None = None,
     ) -> Session | None:
         """回退并清除后续检查点。
 
@@ -106,12 +121,18 @@ class TimeTravelManager:
             guardrails: 护栏引擎。
             registry: 工具注册表。
             model: LLM 模型名。
+            memory: S6 记忆管线（可选）。
+            skill_manager: S14 技能管理器（可选）。
+            verifier_registry: S10 验证器注册表（可选）。
 
         Returns:
             恢复后的 Session。
         """
         session = await self.rollback(
-            session_id, checkpoint_id, guardrails, registry, model
+            session_id, checkpoint_id, guardrails, registry, model,
+            memory=memory,
+            skill_manager=skill_manager,
+            verifier_registry=verifier_registry,
         )
         if session is None:
             return None

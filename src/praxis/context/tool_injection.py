@@ -14,12 +14,12 @@ log = get_logger("context.tool_injection")
 CORE_CATEGORIES = frozenset({"file_ops", "search", "shell", "system"})
 
 STAGE_TOOL_MAP: dict[str, set[str]] = {
-    "general": CORE_CATEGORIES,
-    "planning": {"system"},
-    "coding": {"file_ops", "search", "shell", "system"},
-    "testing": {"file_ops", "search", "shell", "system", "skill_script"},
-    "debugging": {"file_ops", "search", "shell", "system"},
-    "review": {"file_ops", "search", "system"},
+    "general": CORE_CATEGORIES | {"mcp", "skill_script"},
+    "planning": {"system", "mcp"},
+    "coding": {"file_ops", "search", "shell", "system", "mcp", "skill_script"},
+    "testing": {"file_ops", "search", "shell", "system", "mcp", "skill_script"},
+    "debugging": {"file_ops", "search", "shell", "system", "mcp"},
+    "review": {"file_ops", "search", "system", "mcp"},
 }
 
 

@@ -11,11 +11,14 @@ from typing import Any
 
 from praxis.config.subsystems import OrchestratorConfig
 from praxis.context.assembler import PromptAssembler
+from praxis.context.tool_injection import ToolInjector
 from praxis.gateway.chat import chat
 from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
+from praxis.memory.pipeline import MemoryPipeline
 from praxis.models.context import TurnContext
 from praxis.models.guardrails import VerdictType
+from praxis.models.memory import WorkingMemoryMessage
 from praxis.models.orchestrator import (
     AgentEvent,
     AgentResponse,
@@ -29,8 +32,11 @@ from praxis.orchestrator.parser import OutputParser
 from praxis.orchestrator.strategy import LoopStrategy
 from praxis.orchestrator.termination import TerminationManager
 from praxis.orchestrator.tool_coordination import ToolCoordinator
+from praxis.skills.lifecycle import SkillLifecycleManager
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
+from praxis.verification.registry import VerifierRegistry
+from praxis.models.verification import QualityPhase
 
 log = get_logger("orchestrator.loop")
 
@@ -38,7 +44,8 @@ log = get_logger("orchestrator.loop")
 class OrchestrationLoop:
     """TAO/ReAct 核心循环引擎。
 
-    协调 S4（LLM）、S5（工具）、S7（上下文）、S8（护栏）、S9（恢复）
+    协调 S4（LLM）、S5（工具）、S6（记忆）、S7（上下文）、
+    S8（护栏）、S9（恢复）、S10（验证）、S14（技能）
     完成完整的 Agent 轮次。
     """
 
@@ -53,6 +60,10 @@ class OrchestrationLoop:
         strategy: LoopStrategy,
         parser: OutputParser,
         emitter: EventEmitter,
+        tool_injector: ToolInjector | None = None,
+        memory: MemoryPipeline | None = None,
+        verifier_registry: VerifierRegistry | None = None,
+        skill_manager: SkillLifecycleManager | None = None,
     ) -> None:
         self.config = config
         self.gateway = gateway
@@ -63,6 +74,10 @@ class OrchestrationLoop:
         self.strategy = strategy
         self.parser = parser
         self.emitter = emitter
+        self.tool_injector = tool_injector
+        self.memory = memory
+        self.verifier_registry = verifier_registry
+        self.skill_manager = skill_manager
         self.state = LoopState()
 
     async def run(
@@ -93,6 +108,12 @@ class OrchestrationLoop:
             user_instructions=user_instructions,
         )
 
+        # S6: 记录用户消息到工作记忆
+        if self.memory is not None:
+            self.memory.append_message(
+                WorkingMemoryMessage(role="user", content=user_message)
+            )
+
         # 输入护栏检查
         input_verdict = await self.guardrails.check_input(user_message)
         if input_verdict.tripwire or input_verdict.verdict == VerdictType.BLOCK:
@@ -100,6 +121,37 @@ class OrchestrationLoop:
                 content=f"输入被拒绝: {input_verdict.reason}",
                 reason=TerminationReason.TRIPWIRE,
             )
+
+        # S6: 获取记忆索引和语义检索
+        memory_index_text = ""
+        semantic_text = ""
+        if self.memory is not None:
+            index_entries = await self.memory.get_memory_index()
+            if index_entries:
+                memory_index_text = "\n".join(
+                    f"- [{e.memory_type}] {e.summary}" for e in index_entries
+                )
+            results = await self.memory.search_memory(user_message, top_k=5)
+            if results:
+                semantic_text = "\n".join(
+                    f"[{r.score:.2f}] {r.entry.content[:200]}" for r in results
+                )
+
+        # S14: 获取技能索引 + 自动激活
+        skill_index_text = ""
+        if self.skill_manager is not None:
+            skill_entries = self.skill_manager.get_skill_index()
+            if skill_entries:
+                skill_index_text = "\n".join(
+                    f"- {e.name}: {e.description}" for e in skill_entries
+                )
+                # 自动激活与当前任务相关的技能（注册技能脚本到工具注册表）
+                self.skill_manager.auto_activate_for_task(user_message)
+
+        # S5+S7: 刷新工具 Schema（含内置+MCP+技能脚本+披露工具）
+        if self.tool_injector is not None:
+            schemas = self.tool_injector.get_tools_for_stage()
+            self.assembler.set_tool_schemas(schemas)
 
         # Plan-and-Execute 模式：注入步骤指令
         plan_context = self.strategy.get_plan_context()
@@ -115,10 +167,12 @@ class OrchestrationLoop:
 
             start_time = time.perf_counter()
 
-            # Step 1: Prompt 组装
+            # Step 1: Prompt 组装（注入 S6 记忆 + S14 技能）
             prompt = self.assembler.assemble_prompt(
                 turn_context,
-                semantic_results=plan_context,
+                memory_index=memory_index_text,
+                semantic_results=semantic_text or plan_context,
+                skill_index=skill_index_text,
             )
 
             # Step 2: LLM 推理
@@ -168,7 +222,11 @@ class OrchestrationLoop:
                             reason=TerminationReason.TRIPWIRE,
                         )
 
-                # 记录助手响应
+                # S6: 记录助手响应到工作记忆
+                if self.memory is not None and parsed.content:
+                    self.memory.append_message(
+                        WorkingMemoryMessage(role="assistant", content=parsed.content)
+                    )
                 self.assembler.update_with_response({
                     "role": "assistant",
                     "content": parsed.content,
@@ -224,6 +282,42 @@ class OrchestrationLoop:
 
             self.assembler.update_with_result(tool_results)
             self.state.total_tool_calls += len(outcomes)
+
+            # S6: 记录助手响应（含工具调用）到工作记忆
+            if self.memory is not None:
+                summary_parts = []
+                if parsed.content:
+                    summary_parts.append(parsed.content)
+                for o in outcomes:
+                    if o.result is not None:
+                        summary_parts.append(
+                            f"[{o.tool_call.function.name}]: "
+                            f"{o.result.content[:100] if o.result.success else o.result.error}"
+                        )
+                self.memory.append_message(
+                    WorkingMemoryMessage(role="assistant", content="\n".join(summary_parts))
+                )
+
+            # S10: 可选变更后验证
+            if self.verifier_registry is not None:
+                successful_tools = [
+                    o for o in outcomes
+                    if o.result is not None and o.result.success
+                ]
+                if successful_tools:
+                    verification_results = await self.verifier_registry.run_computational(
+                        target={"tool_outcomes": [
+                            {"name": o.tool_call.function.name, "result": o.result.content}
+                            for o in successful_tools
+                        ]},
+                        phase=QualityPhase.POST_INTEGRATION,
+                    )
+                    for vr in verification_results:
+                        self.emitter.emit(
+                            "verification_result",
+                            turn=self.state.current_turn,
+                            data={"verifier": vr.verifier_name, "status": vr.status.value},
+                        )
 
             # 更新 turn_context 为空消息（继续循环）
             turn_context = TurnContext(user_message="")

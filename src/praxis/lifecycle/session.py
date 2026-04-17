@@ -16,6 +16,8 @@ from praxis.config.subsystems import (
 from praxis.context.assembler import PromptAssembler
 from praxis.context.tool_injection import ToolInjector
 from praxis.guardrails.engine import GuardrailEngine
+from praxis.lifecycle.checkpoint import CheckpointManager
+from praxis.memory.pipeline import MemoryPipeline
 from praxis.models.lifecycle import (
     ContinuationPhase,
     SessionMetadata,
@@ -31,11 +33,13 @@ from praxis.orchestrator.tool_coordination import ToolCoordinator
 from praxis.persistence.store import PersistenceStore
 from praxis.recovery.circuit_breaker import CircuitBreakerRegistry
 from praxis.recovery.retry import RetryPolicy
+from praxis.skills.lifecycle import SkillLifecycleManager
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
 from praxis.tools.executor import ToolExecutor
 from praxis.tools.registry import ToolRegistry
 from praxis.tools.sandbox import Sandbox
+from praxis.verification.registry import VerifierRegistry
 
 log = get_logger("lifecycle.session")
 
@@ -55,6 +59,9 @@ class Session:
         registry: ToolRegistry,
         store: PersistenceStore,
         config: LifecycleConfig,
+        memory: MemoryPipeline | None = None,
+        skill_manager: SkillLifecycleManager | None = None,
+        verifier_registry: VerifierRegistry | None = None,
     ) -> None:
         self.metadata = metadata
         self.loop = loop
@@ -63,6 +70,9 @@ class Session:
         self.registry = registry
         self.store = store
         self.config = config
+        self.memory = memory
+        self.skill_manager = skill_manager
+        self.verifier_registry = verifier_registry
 
     @property
     def session_id(self) -> str:
@@ -81,7 +91,35 @@ class Session:
             e.data.get("token_count", 0) for e in response.events
             if e.event_type == "llm_request"
         )
+
+        # 自动检查点
+        if self.config.auto_checkpoint:
+            await self.save_auto_checkpoint()
+
         return response
+
+    async def save_auto_checkpoint(self) -> str | None:
+        """自动保存检查点（S3 持久化 S6/S7/S11 状态）。"""
+        checkpoint_mgr = CheckpointManager(self.store)
+
+        context_state = {
+            "messages": self.assembler.conversation_history,
+            "file_refs": self.assembler.file_refs,
+            "compaction_count": self.assembler.compaction_count,
+            "tool_schemas": self.assembler.tool_schemas,
+        }
+        memory_state = self.memory.export_state() if self.memory is not None else {}
+        loop_state = self.loop.state.model_dump(mode="json")
+
+        checkpoint_id = await checkpoint_mgr.save_checkpoint(
+            metadata=self.metadata,
+            context_state=context_state,
+            memory_state=memory_state,
+            loop_state=loop_state,
+            file_refs=self.assembler.file_refs,
+            description=f"Auto checkpoint after turn {self.metadata.total_turns}",
+        )
+        return checkpoint_id
 
     async def run_turn_stream(
         self,
@@ -126,6 +164,9 @@ class SessionFactory:
         guardrails: GuardrailEngine,
         registry: ToolRegistry | None = None,
         model: str = "default",
+        memory: MemoryPipeline | None = None,
+        skill_manager: SkillLifecycleManager | None = None,
+        verifier_registry: VerifierRegistry | None = None,
     ) -> Session:
         """创建新会话。
 
@@ -135,6 +176,9 @@ class SessionFactory:
             guardrails: 护栏引擎（外部传入，因权限配置项目级别）。
             registry: 工具注册表（可选，None 时创建新实例）。
             model: LLM 模型名。
+            memory: S6 记忆管线（可选）。
+            skill_manager: S14 技能生命周期管理器（可选）。
+            verifier_registry: S10 验证器注册表（可选）。
 
         Returns:
             初始化完毕的 Session。
@@ -170,6 +214,10 @@ class SessionFactory:
             emitter=emitter,
         )
 
+        # S14: 披露工具注册（使 LLM 可触发第二/三层技能披露）
+        if skill_manager is not None:
+            skill_manager.register_disclosure_tools()
+
         # GatewayRouter 需要外部传入（因模型配置不在此层管理）
         # loop 在运行时设置 gateway
         loop = OrchestrationLoop(
@@ -182,6 +230,10 @@ class SessionFactory:
             strategy=strategy,
             parser=parser,
             emitter=emitter,
+            tool_injector=injector,
+            memory=memory,
+            verifier_registry=verifier_registry,
+            skill_manager=skill_manager,
         )
 
         metadata.status = SessionStatus.ACTIVE
@@ -197,4 +249,7 @@ class SessionFactory:
             registry=registry,
             store=self.store,
             config=self.lifecycle_config,
+            memory=memory,
+            skill_manager=skill_manager,
+            verifier_registry=verifier_registry,
         )

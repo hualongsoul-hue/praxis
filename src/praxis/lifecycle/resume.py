@@ -8,6 +8,7 @@ from typing import Any
 
 from praxis.lifecycle.checkpoint import CheckpointManager
 from praxis.lifecycle.session import Session, SessionFactory
+from praxis.memory.pipeline import MemoryPipeline
 from praxis.models.lifecycle import (
     ContinuationPhase,
     SessionMetadata,
@@ -15,8 +16,10 @@ from praxis.models.lifecycle import (
     SessionStatus,
 )
 from praxis.guardrails.engine import GuardrailEngine
+from praxis.skills.lifecycle import SkillLifecycleManager
 from praxis.telemetry.logger import get_logger
 from praxis.tools.registry import ToolRegistry
+from praxis.verification.registry import VerifierRegistry
 
 log = get_logger("lifecycle.resume")
 
@@ -42,6 +45,9 @@ class SessionResumer:
         registry: ToolRegistry | None = None,
         model: str = "default",
         checkpoint_id: str | None = None,
+        memory: MemoryPipeline | None = None,
+        skill_manager: SkillLifecycleManager | None = None,
+        verifier_registry: VerifierRegistry | None = None,
     ) -> Session | None:
         """从检查点恢复会话。
 
@@ -51,6 +57,9 @@ class SessionResumer:
             registry: 工具注册表（可选）。
             model: LLM 模型名。
             checkpoint_id: 指定检查点 ID，None 时加载最新。
+            memory: S6 记忆管线（可选）。
+            skill_manager: S14 技能管理器（可选）。
+            verifier_registry: S10 验证器注册表（可选）。
 
         Returns:
             恢复后的 Session，检查点不存在时返回 None。
@@ -73,12 +82,16 @@ class SessionResumer:
             guardrails=guardrails,
             registry=registry,
             model=model,
+            memory=memory,
+            skill_manager=skill_manager,
+            verifier_registry=verifier_registry,
         )
 
         # 恢复有状态组件
         self.restore_metadata(session, snapshot.metadata)
         self.restore_context_state(session, snapshot.context_state)
         self.restore_loop_state(session, snapshot.loop_state)
+        await self.restore_memory_state(session, snapshot.memory_state)
 
         session.metadata.continuation_phase = ContinuationPhase.WARMUP
 
@@ -115,6 +128,12 @@ class SessionResumer:
         from praxis.models.orchestrator import LoopState
         if state:
             session.loop.state = LoopState.model_validate(state)
+
+    @staticmethod
+    async def restore_memory_state(session: Session, state: dict[str, Any]) -> None:
+        """恢复 S6 记忆状态。"""
+        if session.memory is not None and state:
+            await session.memory.import_state(state)
 
     @staticmethod
     def validate_integrity(session: Session) -> list[str]:
