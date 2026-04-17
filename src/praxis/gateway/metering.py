@@ -29,8 +29,14 @@ def get_token_count(messages: list[dict[str, Any]], model: str = "default") -> i
     return litellm.token_counter(model=model, messages=messages)
 
 
+DEFAULT_MAX_TOKENS = 128_000
+
+
 def get_max_tokens(model: str = "default") -> int:
     """查询模型最大上下文窗口大小。
+
+    对于 LiteLLM 模型数据库中未收录的模型（如 Router 别名、自部署模型），
+    回退到 DEFAULT_MAX_TOKENS。
 
     Args:
         model: 模型名称。
@@ -38,7 +44,10 @@ def get_max_tokens(model: str = "default") -> int:
     Returns:
         模型最大 Token 数。
     """
-    return litellm.get_max_tokens(model)  # type: ignore[return-value]
+    try:
+        return litellm.get_max_tokens(model)  # type: ignore[return-value]
+    except Exception:
+        return DEFAULT_MAX_TOKENS
 
 
 def completion_cost(response: Any) -> float:

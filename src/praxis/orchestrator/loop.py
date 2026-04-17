@@ -175,6 +175,13 @@ class OrchestrationLoop:
                 skill_index=skill_index_text,
             )
 
+            # 将用户消息存入对话历史，确保后续轮次（如工具执行后）
+            # conversation_history 包含完整的 user → assistant → tool 序列
+            if turn_context.user_message:
+                self.assembler.conversation_history.append(
+                    {"role": "user", "content": turn_context.user_message}
+                )
+
             # Step 2: LLM 推理
             self.state.phase = LoopPhase.LLM_CALLING
             self.emitter.emit(
@@ -378,11 +385,6 @@ class OrchestrationLoop:
 
         async def run_task() -> AgentResponse:
             result = await self.run(user_message, **kwargs)
-            self.emitter.emit(
-                "termination",
-                turn=self.state.current_turn,
-                data={"reason": result.termination_reason.value},
-            )
             collector.close()
             return result
 

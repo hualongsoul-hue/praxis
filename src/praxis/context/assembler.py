@@ -111,8 +111,11 @@ class PromptAssembler:
             layers.append("conversation_history")
 
         # Layer 8: 当前用户消息（末位放置，确保 LLM 关注）
-        messages.append({"role": "user", "content": turn.user_message})
-        layers.append("current_message")
+        # 工具执行后续轮 user_message 为空，不追加以保持
+        # assistant(tool_calls) → tool(result) 的标准消息序列
+        if turn.user_message:
+            messages.append({"role": "user", "content": turn.user_message})
+            layers.append("current_message")
 
         # Layer 2: 工具定义
         layers.append("tool_definitions")

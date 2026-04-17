@@ -40,3 +40,4 @@ Thumbs.db
 # Project
 progress.json
 *.log
+data/
