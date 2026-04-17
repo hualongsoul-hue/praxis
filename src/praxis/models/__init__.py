@@ -15,6 +15,13 @@ from praxis.models.orchestrator import (
     StrategyMode,
     TerminationReason,
 )
+from praxis.models.lifecycle import (
+    CheckpointInfo,
+    ContinuationPhase,
+    SessionMetadata,
+    SessionSnapshot,
+    SessionStatus,
+)
 from praxis.models.messages import (
     ContentPart,
     ImageContent,
@@ -87,6 +94,8 @@ __all__ = [
     "CompactionResult",
     "ContextState",
     "Checkpoint",
+    "CheckpointInfo",
+    "ContinuationPhase",
     "CircuitState",
     "ErrorCategory",
     "ErrorClassification",
@@ -109,6 +118,9 @@ __all__ = [
     "ImageUrl",
     "LoopPhase",
     "LoopState",
+    "SessionMetadata",
+    "SessionSnapshot",
+    "SessionStatus",
     "Message",
     "ModelResponse",
     "ModelResponseChunk",

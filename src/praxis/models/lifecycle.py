@@ -1,0 +1,58 @@
+"""生命周期管理数据模型——S12 跨子系统共享类型。"""
+
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any
+from uuid import uuid4
+
+from pydantic import BaseModel, Field
+
+
+class SessionStatus(str, Enum):
+    """会话状态。"""
+
+    INITIALIZING = "initializing"
+    ACTIVE = "active"
+    PAUSED = "paused"
+    TERMINATED = "terminated"
+
+
+class ContinuationPhase(str, Enum):
+    """跨窗口续接阶段。"""
+
+    INITIALIZATION = "initialization"
+    WARMUP = "warmup"
+    WORKING = "working"
+
+
+class SessionMetadata(BaseModel):
+    """会话元数据。"""
+
+    session_id: str = Field(default_factory=lambda: uuid4().hex[:16])
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    status: SessionStatus = SessionStatus.INITIALIZING
+    total_turns: int = 0
+    total_tokens: int = 0
+    checkpoint_count: int = 0
+    last_checkpoint_id: str | None = None
+    continuation_phase: ContinuationPhase = ContinuationPhase.INITIALIZATION
+
+
+class CheckpointInfo(BaseModel):
+    """检查点摘要信息（用于列表展示）。"""
+
+    checkpoint_id: str
+    session_id: str
+    created_at: datetime
+    turn_number: int = 0
+    description: str = ""
+
+
+class SessionSnapshot(BaseModel):
+    """完整会话状态快照（用于检查点保存/恢复）。"""
+
+    metadata: SessionMetadata
+    context_state: dict[str, Any] = Field(default_factory=dict)
+    memory_state: dict[str, Any] = Field(default_factory=dict)
+    loop_state: dict[str, Any] = Field(default_factory=dict)
+    file_refs: list[str] = Field(default_factory=list)
