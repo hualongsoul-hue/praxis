@@ -43,6 +43,13 @@ from praxis.models.recovery import (
     RetryDecision,
 )
 from praxis.models.telemetry import AuditEvent
+from praxis.models.verification import (
+    FailureDetail,
+    QualityPhase,
+    VerificationResult,
+    VerificationStatus,
+    VerificationType,
+)
 from praxis.models.tools import (
     FunctionCall,
     ToolCall,
@@ -61,6 +68,7 @@ __all__ = [
     "ContentPart",
     "EpisodicMemory",
     "FunctionCall",
+    "FailureDetail",
     "FunctionCallDelta",
     "GuardrailVerdict",
     "ImageContent",
@@ -77,6 +85,7 @@ __all__ = [
     "ModelResponse",
     "ModelResponseChunk",
     "ProceduralMemory",
+    "QualityPhase",
     "RecoveryStrategy",
     "RetryDecision",
     "Role",
@@ -90,6 +99,9 @@ __all__ = [
     "ToolMetadata",
     "ToolResult",
     "Usage",
+    "VerificationResult",
+    "VerificationStatus",
+    "VerificationType",
     "VerdictType",
     "WorkingMemory",
     "WorkingMemoryMessage",
