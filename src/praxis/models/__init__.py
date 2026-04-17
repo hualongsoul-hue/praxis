@@ -15,6 +15,7 @@ from praxis.models.responses import (
     ToolCallDelta,
     Usage,
 )
+from praxis.models.gateway import JudgeResult
 from praxis.models.persistence import Checkpoint
 from praxis.models.telemetry import AuditEvent
 from praxis.models.tools import (
@@ -32,6 +33,7 @@ __all__ = [
     "FunctionCall",
     "FunctionCallDelta",
     "ImageContent",
+    "JudgeResult",
     "ImageUrl",
     "Message",
     "ModelResponse",
