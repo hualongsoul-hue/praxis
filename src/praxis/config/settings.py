@@ -26,22 +26,22 @@ from praxis.config.subsystems import (
     VerificationConfig,
 )
 
-_yaml_data: dict[str, Any] = {}
+yaml_data: dict[str, Any] = {}
 
 
 def set_yaml_data(data: dict[str, Any]) -> None:
-    """设置 YAML 配置数据，供 _YamlFileSource 读取。"""
-    global _yaml_data
-    _yaml_data = data
+    """设置 YAML 配置数据，供 YamlFileSource 读取。"""
+    global yaml_data
+    yaml_data = data
 
 
-class _YamlFileSource(PydanticBaseSettingsSource):
+class YamlFileSource(PydanticBaseSettingsSource):
     """YAML 配置源。优先级介于环境变量和默认值之间。"""
 
     def get_field_value(
         self, field: FieldInfo, field_name: str
     ) -> tuple[Any, str, bool]:
-        value = _yaml_data.get(field_name)
+        value = yaml_data.get(field_name)
         return value, field_name, False
 
     def prepare_field_value(
@@ -102,5 +102,5 @@ class PraxisConfig(BaseSettings):
         return (
             init_settings,
             env_settings,
-            _YamlFileSource(settings_cls),
+            YamlFileSource(settings_cls),
         )

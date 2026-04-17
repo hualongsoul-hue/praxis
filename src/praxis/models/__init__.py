@@ -15,6 +15,8 @@ from praxis.models.responses import (
     ToolCallDelta,
     Usage,
 )
+from praxis.models.persistence import Checkpoint
+from praxis.models.telemetry import AuditEvent
 from praxis.models.tools import (
     FunctionCall,
     ToolCall,
@@ -24,6 +26,8 @@ from praxis.models.tools import (
 )
 
 __all__ = [
+    "AuditEvent",
+    "Checkpoint",
     "ContentPart",
     "FunctionCall",
     "FunctionCallDelta",

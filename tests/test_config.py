@@ -97,14 +97,14 @@ class TestSubsystemIsolation:
             get_subsystem_config("nonexistent")
 
     def test_config_not_loaded_raises(self) -> None:
-        import praxis.config.loader as _loader
-        saved = _loader._current_config
-        _loader._current_config = None
+        import praxis.config.loader as loader_mod
+        saved = loader_mod.current_config
+        loader_mod.current_config = None
         try:
             with pytest.raises(ConfigError, match="配置未加载"):
                 get_subsystem_config("gateway")
         finally:
-            _loader._current_config = saved
+            loader_mod.current_config = saved
 
 
 class TestValidationAndReload:
@@ -120,8 +120,8 @@ class TestValidationAndReload:
             with pytest.raises(ConfigError, match="model_list 不能为空"):
                 load_config()
         finally:
-            import praxis.config.validation as _val
-            _val._validators.remove(require_model_list)
+            import praxis.config.validation as val_mod
+            val_mod.validators.remove(require_model_list)
 
     def test_reload_detects_changes(self, tmp_path: Path) -> None:
         yaml_file = tmp_path / "test.yaml"
@@ -141,8 +141,8 @@ class TestValidationAndReload:
         assert old_val == "INFO"
         assert new_val == "DEBUG"
 
-        import praxis.config.validation as _val
-        _val._change_listeners.clear()
+        import praxis.config.validation as val_mod
+        val_mod.change_listeners.clear()
 
     def test_invalid_config_rejected(self, tmp_path: Path) -> None:
         yaml_file = tmp_path / "test.yaml"

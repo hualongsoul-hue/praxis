@@ -13,8 +13,8 @@ from praxis.config.settings import PraxisConfig, set_yaml_data
 from praxis.config.validation import notify_change, validate_config
 from praxis.exceptions import ConfigError
 
-_current_config: PraxisConfig | None = None
-_config_path: Path | None = None
+current_config: PraxisConfig | None = None
+loaded_path: Path | None = None
 
 
 def load_config(
@@ -35,7 +35,7 @@ def load_config(
     Raises:
         ConfigError: 配置文件不存在或验证失败。
     """
-    global _current_config, _config_path
+    global current_config, loaded_path
 
     yaml_data: dict[str, Any] = {}
     if config_path is not None:
@@ -44,15 +44,15 @@ def load_config(
             raise ConfigError(f"配置文件不存在: {path}")
         raw = path.read_text(encoding="utf-8")
         yaml_data = yaml.safe_load(raw) or {}
-        _config_path = path
+        loaded_path = path
     else:
-        _config_path = None
+        loaded_path = None
 
     set_yaml_data(yaml_data)
-    _current_config = PraxisConfig(**overrides)
-    validate_config(_current_config)
+    current_config = PraxisConfig(**overrides)
+    validate_config(current_config)
 
-    return _current_config
+    return current_config
 
 
 def get_subsystem_config(name: str) -> BaseModel:
@@ -69,14 +69,14 @@ def get_subsystem_config(name: str) -> BaseModel:
     Raises:
         ConfigError: 配置未加载或子系统名称无效。
     """
-    if _current_config is None:
+    if current_config is None:
         raise ConfigError("配置未加载，请先调用 load_config()")
-    if not hasattr(_current_config, name):
+    if not hasattr(current_config, name):
         raise ConfigError(
             f"未知的子系统配置: {name}",
             details={"available": list(PraxisConfig.model_fields.keys())},
         )
-    return getattr(_current_config, name)
+    return getattr(current_config, name)
 
 
 def reload_config(**overrides: Any) -> PraxisConfig:
@@ -87,20 +87,20 @@ def reload_config(**overrides: Any) -> PraxisConfig:
     Returns:
         更新后的 PraxisConfig 实例。
     """
-    old_config = _current_config
-    new_config = load_config(_config_path, **overrides)
+    old_config = current_config
+    new_config = load_config(loaded_path, **overrides)
 
     if old_config is not None:
         old_data = old_config.model_dump()
         new_data = new_config.model_dump()
         if old_data != new_data:
-            changes = _diff_config(old_data, new_data)
+            changes = diff_config(old_data, new_data)
             notify_change(changes)
 
     return new_config
 
 
-def _diff_config(
+def diff_config(
     old: dict[str, Any],
     new: dict[str, Any],
     prefix: str = "",
@@ -117,7 +117,7 @@ def _diff_config(
         old_val = old.get(key)
         new_val = new.get(key)
         if isinstance(old_val, dict) and isinstance(new_val, dict):
-            changes.update(_diff_config(old_val, new_val, path))
+            changes.update(diff_config(old_val, new_val, path))
         elif old_val != new_val:
             changes[path] = (old_val, new_val)
     return changes
