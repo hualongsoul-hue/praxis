@@ -1,5 +1,12 @@
 """跨子系统共享的数据模型。"""
 
+from praxis.models.context import (
+    AssembledPrompt,
+    CompactionResult,
+    ContextState,
+    TokenUsage,
+    TurnContext,
+)
 from praxis.models.messages import (
     ContentPart,
     ImageContent,
@@ -65,7 +72,10 @@ from praxis.models.tools import (
 )
 
 __all__ = [
+    "AssembledPrompt",
     "AuditEvent",
+    "CompactionResult",
+    "ContextState",
     "Checkpoint",
     "CircuitState",
     "ErrorCategory",
@@ -103,6 +113,7 @@ __all__ = [
     "SkillIndexEntry",
     "SkillMetadata",
     "TextContent",
+    "TokenUsage",
     "ToolCall",
     "ToolCallDelta",
     "ToolDefinition",
@@ -112,6 +123,7 @@ __all__ = [
     "VerificationResult",
     "VerificationStatus",
     "VerificationType",
+    "TurnContext",
     "VerdictType",
     "WorkingMemory",
     "WorkingMemoryMessage",
