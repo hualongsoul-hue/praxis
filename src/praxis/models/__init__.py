@@ -42,6 +42,12 @@ from praxis.models.recovery import (
     RecoveryStrategy,
     RetryDecision,
 )
+from praxis.models.skills import (
+    SkillAuditResult,
+    SkillDefinition,
+    SkillIndexEntry,
+    SkillMetadata,
+)
 from praxis.models.telemetry import AuditEvent
 from praxis.models.verification import (
     FailureDetail,
@@ -92,6 +98,10 @@ __all__ = [
     "ScopeType",
     "SemanticMemory",
     "SemanticMode",
+    "SkillAuditResult",
+    "SkillDefinition",
+    "SkillIndexEntry",
+    "SkillMetadata",
     "TextContent",
     "ToolCall",
     "ToolCallDelta",
