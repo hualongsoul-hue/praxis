@@ -239,7 +239,7 @@ class TestCheckpointPerformance:
             context_config=ContextConfig(),
         )
 
-        session = factory.create_session(guardrails=guardrails, gateway=mock_gateway)
+        session = await factory.create_session(guardrails=guardrails, gateway=mock_gateway)
         # 模拟中等状态量
         session.assembler.conversation_history = [
             {"role": "user" if i % 2 == 0 else "assistant",
@@ -281,7 +281,7 @@ class TestOrchestrationLoopOverhead:
         mock_gw.router.acompletion = AsyncMock(
             return_value=make_raw_response(content="快速响应")
         )
-        session = factory.create_session(guardrails=guardrails, gateway=mock_gw)
+        session = await factory.create_session(guardrails=guardrails, gateway=mock_gw)
 
         # 预热
         await session.run_turn("预热")
@@ -311,7 +311,7 @@ class TestOrchestrationLoopOverhead:
         mock_gw.config = MagicMock()
         mock_gw.config.default_model = "test-model"
         mock_gw.router = MagicMock()
-        session = factory.create_session(guardrails=guardrails, gateway=mock_gw)
+        session = await factory.create_session(guardrails=guardrails, gateway=mock_gw)
 
         async def noop_handler(args: dict[str, Any]) -> str:
             return "ok"

@@ -50,7 +50,7 @@ from praxis.models.memory import (
     ProceduralMemory,
     ScopeType,
     SemanticMemory,
-    SemanticMode,
+    SemanticProfile,
     WorkingMemory,
     WorkingMemoryMessage,
 )
@@ -169,7 +169,7 @@ __all__ = [
     "Role",
     "ScopeType",
     "SemanticMemory",
-    "SemanticMode",
+    "SemanticProfile",
     "SubagentMode",
     "SubagentResult",
     "SubagentSpec",

@@ -5,27 +5,18 @@
 """
 
 import math
-from typing import Any, Callable, Awaitable
+from collections.abc import Awaitable, Callable
 
 import litellm
 
+from praxis.memory.store import ScopedMemoryStore
 from praxis.models.memory import MemoryEntry, MemoryScope, MemoryStatus, MemoryType
-from praxis.memory.scope import ScopedMemoryStore
-
 
 EmbeddingFunc = Callable[[str], Awaitable[list[float]]]
 
 
 async def litellm_embed(text: str, model: str = "text-embedding-3-small") -> list[float]:
-    """通过 LiteLLM 获取文本嵌入向量。
-
-    Args:
-        text: 待嵌入文本。
-        model: 嵌入模型名称。
-
-    Returns:
-        浮点向量。
-    """
+    """通过 LiteLLM 获取文本嵌入向量。"""
     response = await litellm.aembedding(model=model, input=[text])
     return response.data[0]["embedding"]
 
@@ -51,23 +42,23 @@ class VectorStore:
         self,
         scoped_store: ScopedMemoryStore,
         embed_func: EmbeddingFunc | None = None,
+        embedding_model: str = "text-embedding-3-small",
     ) -> None:
         self.scoped_store = scoped_store
-        self.embed_func = embed_func or litellm_embed
+        self.embedding_model = embedding_model
+        self.embed_func: EmbeddingFunc = embed_func or self.default_embed
         self.index: dict[str, tuple[MemoryEntry, list[float]]] = {}
 
-    async def add(self, entry: MemoryEntry) -> None:
-        """添加记忆并建立嵌入索引。
+    async def default_embed(self, text: str) -> list[float]:
+        return await litellm_embed(text, model=self.embedding_model)
 
-        Args:
-            entry: 记忆条目（已持久化或即将持久化）。
-        """
+    async def add(self, entry: MemoryEntry) -> None:
+        """添加记忆并建立嵌入索引。"""
         if entry.embedding is not None:
             vector = entry.embedding
         else:
             vector = await self.embed_func(entry.content)
             entry.embedding = vector
-
         self.index[entry.memory_id] = (entry, vector)
         await self.scoped_store.save(entry)
 
@@ -83,18 +74,13 @@ class VectorStore:
         top_k: int = 10,
         min_score: float = 0.0,
     ) -> list[tuple[MemoryEntry, float]]:
-        """语义搜索。
+        """语义搜索。返回 (记忆条目, 相似度) 列表，按相似度降序。
 
-        Args:
-            query: 查询文本。
-            scopes: 可选作用域过滤。
-            memory_type: 可选类型过滤。
-            top_k: 返回最相关的前 K 条。
-            min_score: 最低相似度阈值。
-
-        Returns:
-            (记忆条目, 相似度分数) 列表，按相似度降序。
+        索引为空时跳过 embedding 调用，避免无意义的 LLM 开销。
         """
+        if not self.index:
+            return []
+
         query_vector = await self.embed_func(query)
 
         scope_strings: set[str] | None = None
@@ -109,7 +95,6 @@ class VectorStore:
                 continue
             if memory_type and entry.memory_type != memory_type:
                 continue
-
             score = cosine_similarity(query_vector, vector)
             if score >= min_score:
                 scored.append((entry, score))
@@ -117,18 +102,8 @@ class VectorStore:
         scored.sort(key=lambda x: x[1], reverse=True)
         return scored[:top_k]
 
-    async def rebuild_index(
-        self,
-        scopes: list[MemoryScope],
-    ) -> int:
-        """从持久化存储重建嵌入索引。
-
-        Args:
-            scopes: 需要重建索引的作用域列表。
-
-        Returns:
-            已索引的条目数量。
-        """
+    async def rebuild_index(self, scopes: list[MemoryScope]) -> int:
+        """从持久化存储重建嵌入索引。"""
         count = 0
         for scope in scopes:
             entries = await self.scoped_store.list_scope(scope)

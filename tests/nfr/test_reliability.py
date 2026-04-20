@@ -174,7 +174,7 @@ class TestCheckpointRecovery:
             context_config=ContextConfig(),
         )
 
-        session = factory.create_session(guardrails=guardrails, gateway=mock_gateway)
+        session = await factory.create_session(guardrails=guardrails, gateway=mock_gateway)
         sid = session.session_id
 
         # 构建非平凡状态
@@ -193,11 +193,15 @@ class TestCheckpointRecovery:
         restored = await resumer.resume_session(sid, guardrails, gateway=mock_gateway)
 
         assert restored is not None
-        assert restored.session_id == sid
-        assert restored.metadata.total_turns == 10
-        assert restored.metadata.total_tokens == 5000
-        assert len(restored.assembler.conversation_history) == 10
-        assert restored.assembler.file_refs == ["a.py", "b.py", "c.py"]
+        try:
+            assert restored.session_id == sid
+            assert restored.metadata.total_turns == 10
+            assert restored.metadata.total_tokens == 5000
+            assert len(restored.assembler.conversation_history) == 10
+            assert restored.assembler.file_refs == ["a.py", "b.py", "c.py"]
+        finally:
+            await session.terminate()
+            await restored.terminate()
 
     async def test_repeated_save_restore_idempotent(
         self, store: PersistenceStore, mock_gateway: MagicMock,
@@ -211,7 +215,7 @@ class TestCheckpointRecovery:
             context_config=ContextConfig(),
         )
 
-        session = factory.create_session(guardrails=guardrails, gateway=mock_gateway)
+        session = await factory.create_session(guardrails=guardrails, gateway=mock_gateway)
         sid = session.session_id
         session.assembler.conversation_history = [
             {"role": "assistant", "content": "幂等性测试"},
@@ -227,6 +231,8 @@ class TestCheckpointRecovery:
 
         assert restored is not None
         assert len(restored.assembler.conversation_history) == 1
+        await session.terminate()
+        await restored.terminate()
 
 
 class TestSingleStepReliability:

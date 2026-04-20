@@ -1,28 +1,26 @@
-"""元数据过滤 + 重排序 + 渐进式检索。
+"""元数据过滤 + 综合重排 + 渐进式检索。
 
 三层检索架构：轻量索引 → 摘要 → 完整内容。
-支持按作用域/类型/标签/时间范围过滤，语义候选集二次评分重排。
 """
 
 from datetime import datetime, timezone
-from typing import Any
 
+from praxis.memory.store import ScopedMemoryStore
+from praxis.memory.vector import VectorStore
 from praxis.models.memory import (
     MemoryEntry,
     MemoryIndexEntry,
     MemoryScope,
     MemorySearchResult,
-    MemoryStatus,
     MemoryType,
 )
-from praxis.memory.scope import ScopedMemoryStore
-from praxis.memory.vector_store import VectorStore
+from praxis.telemetry.metrics import emit_metric
 
 
 class MemoryRetriever:
     """渐进式记忆检索器。
 
-    整合向量搜索、元数据过滤和重排序。
+    整合向量搜索、元数据过滤和综合重排。
     """
 
     def __init__(
@@ -38,15 +36,7 @@ class MemoryRetriever:
         scopes: list[MemoryScope] | None = None,
         memory_type: MemoryType | None = None,
     ) -> list[MemoryIndexEntry]:
-        """获取轻量索引（第一层，~150 字符/条），始终加载到系统提示。
-
-        Args:
-            scopes: 作用域过滤。
-            memory_type: 类型过滤。
-
-        Returns:
-            轻量索引条目列表。
-        """
+        """第一层：轻量索引（~150 字符/条），始终加载到系统提示。"""
         if scopes is None:
             scopes = [MemoryScope.from_string("global")]
 
@@ -75,20 +65,7 @@ class MemoryRetriever:
         time_before: datetime | None = None,
         top_k: int = 10,
     ) -> list[MemorySearchResult]:
-        """语义搜索 + 元数据过滤 + 重排序。
-
-        Args:
-            query: 搜索查询文本。
-            scopes: 作用域过滤。
-            memory_type: 类型过滤。
-            tags: 标签过滤（需全部包含）。
-            time_after: 时间范围下限。
-            time_before: 时间范围上限。
-            top_k: 返回结果数量。
-
-        Returns:
-            按相关性排序的搜索结果。
-        """
+        """第二层：语义搜索 + 元数据过滤 + 综合重排。"""
         candidates = await self.vector_store.search(
             query=query,
             scopes=scopes,
@@ -115,51 +92,47 @@ class MemoryRetriever:
                 relevance_score=score,
                 source=entry.scope.to_string(),
             ))
+
+        emit_metric(
+            "memory_search",
+            1.0,
+            {"hit": "1" if results else "0"},
+            "counter",
+        )
+        emit_metric(
+            "memory_search_hits",
+            float(len(results)),
+            {},
+            "histogram",
+        )
         return results
 
-    async def load_memory_detail(self, scope: MemoryScope, memory_id: str) -> MemoryEntry | None:
-        """加载完整记忆内容（第三层）。
-
-        Args:
-            scope: 记忆所在作用域。
-            memory_id: 记忆 ID。
-
-        Returns:
-            完整记忆条目，或 None。
-        """
+    async def load_memory_detail(
+        self,
+        scope: MemoryScope,
+        memory_id: str,
+    ) -> MemoryEntry | None:
+        """第三层：加载完整记忆内容，同时累计 access_count。"""
         entry = await self.scoped_store.load(scope, memory_id)
         if entry is not None:
             entry.access_count += 1
             entry.last_accessed_at = datetime.now(timezone.utc)
             await self.scoped_store.update(entry)
+            emit_metric("memory_detail_loaded", 1.0, {}, "counter")
         return entry
 
     @staticmethod
     def rerank(
         candidates: list[tuple[MemoryEntry, float]],
     ) -> list[tuple[MemoryEntry, float]]:
-        """二次评分重排序。
-
-        综合语义相似度、新鲜度、访问频率和置信度。
-
-        Args:
-            candidates: (记忆条目, 语义相似度) 列表。
-
-        Returns:
-            重排序后的列表。
-        """
+        """综合重排：final = 0.6·semantic + 0.2·freshness + 0.1·popularity + 0.1·confidence。"""
         now = datetime.now(timezone.utc)
         scored: list[tuple[MemoryEntry, float]] = []
 
         for entry, semantic_score in candidates:
-            age_hours = max(
-                (now - entry.updated_at).total_seconds() / 3600.0,
-                0.01,
-            )
+            age_hours = max((now - entry.updated_at).total_seconds() / 3600.0, 0.01)
             freshness = 1.0 / (1.0 + age_hours / 168.0)
-
             popularity = min(entry.access_count / 10.0, 1.0)
-
             final_score = (
                 0.6 * semantic_score
                 + 0.2 * freshness

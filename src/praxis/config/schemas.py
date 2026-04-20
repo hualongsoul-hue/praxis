@@ -68,13 +68,26 @@ class ToolsConfig(BaseModel):
 class MemoryConfig(BaseModel):
     """S6 记忆系统配置。"""
 
+    embedding_model: str = "text-embedding-3-small"
     vector_dimensions: int = 1536
-    background_batch_threshold: int = 5
+    extraction_model: str | None = None
+    extraction_prompts: dict[str, str] = Field(default_factory=dict)
+    consolidation_similarity_threshold: float = 0.75
+    background_enabled: bool = True
+    background_batch_threshold: int = 3
     background_interval_seconds: float = 10.0
+    dream_enabled: bool = True
     dream_min_hours: float = 24.0
     dream_min_sessions: int = 5
+    dream_check_interval_seconds: float = 3600.0
+    dream_scopes: list[str] = Field(default_factory=lambda: ["global"])
     max_memories: int = 10000
     decay_enabled: bool = True
+    decay_half_life_days: float = 30.0
+    inactivity_threshold_days: float = 90.0
+    project_root: str | None = None
+    project_name: str | None = None
+    load_project_praxis_md: bool = True
 
 
 class ContextConfig(BaseModel):

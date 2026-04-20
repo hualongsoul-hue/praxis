@@ -22,7 +22,7 @@ from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.guardrails.permissions import PermissionManager
 from praxis.guardrails.rules import RuleEngine
-from praxis.memory.pipeline import MemoryPipeline
+from praxis.memory.core import CognitiveMemory
 from praxis.models.responses import ModelResponse, Usage
 from praxis.models.tools import FunctionCall, ToolCall, ToolDefinition, ToolResult
 from praxis.orchestrator.events import EventEmitter
@@ -160,7 +160,7 @@ def build_loop(
     guardrails: GuardrailEngine,
     orchestrator_config: OrchestratorConfig,
     context_config: ContextConfig,
-    memory: MemoryPipeline | None = None,
+    memory: CognitiveMemory | None = None,
 ) -> OrchestrationLoop:
     """用真实组件组装完整 OrchestrationLoop。"""
     sandbox = Sandbox(ToolsConfig())

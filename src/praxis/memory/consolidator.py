@@ -1,25 +1,26 @@
 """记忆整合（Consolidation）。
 
 新提取的记忆先经语义搜索匹配已有记忆，LLM 评估做出 ADD/UPDATE/NOOP 决策。
-冲突解决：优先最新，旧标 INACTIVE。语义去重。失败保守 ADD。
+冲突解决：旧版标记 SUPERSEDED。整合失败时保守 ADD。
 """
 
 import json
 from typing import Any
 
+from pydantic import BaseModel, Field
+
 from praxis.gateway.chat import chat
 from praxis.gateway.router import GatewayRouter
 from praxis.memory.retention import RetentionManager
-from praxis.memory.vector_store import VectorStore
+from praxis.memory.vector import VectorStore
 from praxis.models.memory import (
     ConsolidationAction,
     MemoryEntry,
-    MemoryScope,
 )
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
 
-log = get_logger("memory.consolidation")
+log = get_logger("memory.consolidator")
 
 CONSOLIDATION_PROMPT = (
     "你是一个记忆整合专家。判断新记忆与已有记忆的关系。\n"
@@ -31,28 +32,17 @@ CONSOLIDATION_PROMPT = (
 )
 
 
-class ConsolidationResult:
+class ConsolidationResult(BaseModel):
     """整合决策结果。"""
 
-    def __init__(
-        self,
-        action: ConsolidationAction,
-        reasoning: str,
-        merged_content: str = "",
-        matched_id: str | None = None,
-    ) -> None:
-        self.action = action
-        self.reasoning = reasoning
-        self.merged_content = merged_content
-        self.matched_id = matched_id
+    action: ConsolidationAction
+    reasoning: str = ""
+    merged_content: str = ""
+    matched_id: str | None = None
 
 
 class MemoryConsolidator:
-    """记忆整合器。
-
-    协调 VectorStore（语义搜索）、RetentionManager（版本管理）
-    和 GatewayRouter（LLM 评估）。
-    """
+    """记忆整合器。"""
 
     def __init__(
         self,
@@ -69,19 +59,7 @@ class MemoryConsolidator:
         self.similarity_threshold = similarity_threshold
 
     async def consolidate(self, new_entry: MemoryEntry) -> ConsolidationResult:
-        """对单条新记忆执行整合决策。
-
-        流程：
-        1. 语义搜索匹配已有记忆
-        2. 若无相似记忆 → ADD
-        3. 若有相似记忆 → LLM 评估 → ADD/UPDATE/NOOP
-
-        Args:
-            new_entry: 新提取的记忆条目。
-
-        Returns:
-            整合决策结果。
-        """
+        """对单条新记忆执行整合决策。"""
         similar = await self.vector_store.search(
             query=new_entry.content,
             scopes=[new_entry.scope],
@@ -105,19 +83,7 @@ class MemoryConsolidator:
         if decision.action == ConsolidationAction.ADD:
             await self.vector_store.add(new_entry)
         elif decision.action == ConsolidationAction.UPDATE:
-            updated = MemoryEntry(
-                memory_type=new_entry.memory_type,
-                scope=new_entry.scope,
-                content=decision.merged_content or new_entry.content,
-                summary=(decision.merged_content or new_entry.content)[:150],
-                tags=list(set(best_match.tags + new_entry.tags)),
-                confidence=max(best_match.confidence, new_entry.confidence),
-                metadata={
-                    **best_match.metadata,
-                    **new_entry.metadata,
-                    "source": "consolidation_update",
-                },
-            )
+            updated = self.merge_entry(best_match, new_entry, decision.merged_content)
             await self.retention.supersede(best_match, updated, decision.reasoning)
             await self.vector_store.remove(best_match.memory_id)
             await self.vector_store.add(updated)
@@ -137,22 +103,37 @@ class MemoryConsolidator:
         )
         return decision
 
+    @staticmethod
+    def merge_entry(
+        existing: MemoryEntry,
+        new: MemoryEntry,
+        merged_content: str,
+    ) -> MemoryEntry:
+        """合并两条记忆，保留同类型。"""
+        content = merged_content or new.content
+        merged = existing.model_copy(update={
+            "content": content,
+            "summary": content[:150],
+            "tags": sorted(set(existing.tags + new.tags)),
+            "confidence": max(existing.confidence, new.confidence),
+            "metadata": {
+                **existing.metadata,
+                **new.metadata,
+                "source": "consolidation_update",
+            },
+            "embedding": None,
+            "access_count": existing.access_count,
+            "last_accessed_at": existing.last_accessed_at,
+        })
+        return merged
+
     async def evaluate(
         self,
         new_entry: MemoryEntry,
         existing: MemoryEntry,
         similarity: float,
     ) -> ConsolidationResult:
-        """通过 LLM 评估新旧记忆关系。
-
-        Args:
-            new_entry: 新记忆。
-            existing: 已有最相似记忆。
-            similarity: 语义相似度。
-
-        Returns:
-            整合决策。失败时保守返回 ADD。
-        """
+        """通过 LLM 评估新旧记忆关系。失败时保守返回 ADD。"""
         user_content = (
             f"语义相似度: {similarity:.2f}\n\n"
             f"已有记忆:\n{existing.content}\n\n"
@@ -180,10 +161,7 @@ class MemoryConsolidator:
 
     @staticmethod
     def parse_decision(raw_text: str) -> ConsolidationResult:
-        """解析 LLM 整合决策。
-
-        解析失败时返回保守 ADD。
-        """
+        """解析 LLM 整合决策。失败时保守 ADD。"""
         text = raw_text.strip()
         if text.startswith("```"):
             lines = text.split("\n")
@@ -191,15 +169,15 @@ class MemoryConsolidator:
 
         try:
             data = json.loads(text)
-            action_str = data.get("action", "add").lower()
+            action_str = str(data.get("action", "add")).lower()
             action = ConsolidationAction(action_str)
             return ConsolidationResult(
                 action=action,
-                reasoning=data.get("reasoning", ""),
-                merged_content=data.get("merged_content", ""),
+                reasoning=str(data.get("reasoning", "")),
+                merged_content=str(data.get("merged_content", "")),
             )
         except (json.JSONDecodeError, ValueError):
-            log.warning("整合决策解析失败，保守 ADD", raw_text=raw_text[:200])
+            log.warning("整合决策解析失败，保守 ADD", raw_preview=raw_text[:200])
             return ConsolidationResult(
                 action=ConsolidationAction.ADD,
                 reasoning=f"无法解析 LLM 响应: {raw_text[:100]}",
@@ -209,14 +187,7 @@ class MemoryConsolidator:
         self,
         entries: list[MemoryEntry],
     ) -> list[ConsolidationResult]:
-        """批量整合多条记忆。
-
-        Args:
-            entries: 待整合的记忆列表。
-
-        Returns:
-            每条记忆的整合结果。
-        """
+        """批量整合多条记忆。"""
         results: list[ConsolidationResult] = []
         for entry in entries:
             result = await self.consolidate(entry)

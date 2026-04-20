@@ -104,7 +104,7 @@ async def main() -> None:
         handler=handle_get_weather,
     )
 
-    session = create_agent_session(
+    session = await create_agent_session(
         store=store, guardrails=guardrails, gateway=gateway, registry=registry,
     )
 

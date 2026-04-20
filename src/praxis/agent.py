@@ -17,6 +17,7 @@
 
 from praxis.config.schemas import (
     ContextConfig,
+    MemoryConfig,
     OrchestratorConfig,
     SessionConfig,
     SubagentConfig,
@@ -24,7 +25,7 @@ from praxis.config.schemas import (
 )
 from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
-from praxis.memory.pipeline import MemoryPipeline
+from praxis.memory.core import CognitiveMemory
 from praxis.persistence.store import PersistenceStore
 from praxis.session.core import Session, SessionFactory
 from praxis.skills.manager import SkillManager
@@ -36,18 +37,19 @@ from praxis.verification.registry import VerifierRegistry
 log = get_logger("agent")
 
 
-def create_agent_session(
+async def create_agent_session(
     store: PersistenceStore,
     guardrails: GuardrailEngine,
     gateway: GatewayRouter,
     session_config: SessionConfig | None = None,
     orchestrator_config: OrchestratorConfig | None = None,
     context_config: ContextConfig | None = None,
+    memory_config: MemoryConfig | None = None,
     subagent_config: SubagentConfig | None = None,
     tools_config: ToolsConfig | None = None,
     registry: ToolRegistry | None = None,
     model: str = "default",
-    memory: MemoryPipeline | None = None,
+    memory: CognitiveMemory | None = None,
     skill_manager: SkillManager | None = None,
     verifier_registry: VerifierRegistry | None = None,
     include_builtins: bool = True,
@@ -83,9 +85,10 @@ def create_agent_session(
         session_config=session_config,
         orchestrator_config=orchestrator_config,
         context_config=context_config,
+        memory_config=memory_config,
     )
 
-    session = factory.create_session(
+    session = await factory.create_session(
         guardrails=guardrails,
         gateway=gateway,
         registry=registry,

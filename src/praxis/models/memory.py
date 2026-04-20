@@ -32,13 +32,6 @@ class MemoryStatus(str, Enum):
     SUPERSEDED = "superseded"
 
 
-class SemanticMode(str, Enum):
-    """语义记忆模式。"""
-
-    COLLECTION = "collection"
-    PROFILE = "profile"
-
-
 class ScopeType(str, Enum):
     """记忆作用域类型。"""
 
@@ -113,14 +106,12 @@ class MemoryEntry(BaseModel):
 
 
 class SemanticMemory(MemoryEntry):
-    """语义记忆——事实与知识。
+    """语义记忆——事实与知识（集合模式）。
 
-    支持集合模式（无界知识存储）和档案模式（结构化就地更新）。
+    档案模式由独立的 SemanticProfile 类表示。
     """
 
     memory_type: MemoryType = MemoryType.SEMANTIC
-    semantic_mode: SemanticMode = SemanticMode.COLLECTION
-    profile_schema: dict[str, Any] | None = None
 
 
 # ── 情景记忆 ────────────────────────────────────────────────────────────────
@@ -159,6 +150,7 @@ class ProceduralMemory(MemoryEntry):
 class WorkingMemoryMessage(BaseModel):
     """工作记忆中的单条消息。"""
 
+    message_id: str = Field(default_factory=lambda: uuid4().hex)
     role: str
     content: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -175,7 +167,6 @@ class WorkingMemory(BaseModel):
     session_id: str
     messages: list[WorkingMemoryMessage] = Field(default_factory=list)
     max_messages: int = 200
-    cursor: int = 0
 
     def append(self, message: WorkingMemoryMessage) -> None:
         """追加消息到工作记忆，超出 max_messages 时丢弃最老消息。"""
@@ -183,7 +174,6 @@ class WorkingMemory(BaseModel):
         if self.max_messages > 0 and len(self.messages) > self.max_messages:
             overflow = len(self.messages) - self.max_messages
             del self.messages[:overflow]
-            self.cursor = max(0, self.cursor - overflow)
 
     def get_recent(self, limit: int | None = None) -> list[WorkingMemoryMessage]:
         """获取最近的消息列表。"""
@@ -194,7 +184,24 @@ class WorkingMemory(BaseModel):
     def clear(self) -> None:
         """清空工作记忆。"""
         self.messages.clear()
-        self.cursor = 0
+
+
+# ── 语义档案（F6.1 Profile 模式） ──────────────────────────────────────────
+
+
+class SemanticProfile(BaseModel):
+    """语义档案——档案模式的结构化存储。
+
+    每 (scope, schema_name) 对应唯一档案文档，字段字典就地合并更新。
+    """
+
+    profile_id: str = Field(default_factory=lambda: uuid4().hex)
+    scope: MemoryScope
+    schema_name: str
+    fields: dict[str, Any] = Field(default_factory=dict)
+    version: int = 1
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 # ── 记忆索引（渐进式检索第一层） ────────────────────────────────────────────

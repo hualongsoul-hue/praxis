@@ -31,7 +31,6 @@ from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.guardrails.permissions import PermissionManager
 from praxis.guardrails.rules import RuleEngine
-from praxis.memory.pipeline import MemoryPipeline
 from praxis.models.context import TokenUsage, TurnContext
 from praxis.models.guardrails import GuardrailVerdict, VerdictType
 from praxis.models.memory import WorkingMemoryMessage
@@ -334,7 +333,7 @@ class TestS9RecoveryChain:
 class TestS11S12OrchestrationSessionChain:
     """S12（SessionFactory）→ S11（OrchestrationLoop）完整链路验证。"""
 
-    def test_session_factory_creates_complete_session(
+    async def test_session_factory_creates_complete_session(
         self,
         store: PersistenceStore,
     ) -> None:
@@ -351,7 +350,13 @@ class TestS11S12OrchestrationSessionChain:
         mock_gw.config = MagicMock()
         mock_gw.config.default_model = "test-model"
         mock_gw.router = MagicMock()
-        session = factory.create_session(guardrails=guardrails, gateway=mock_gw)
+        session = await factory.create_session(guardrails=guardrails, gateway=mock_gw)
+        try:
+            self._assert_session_complete(session, store, guardrails)
+        finally:
+            await session.terminate()
+
+    def _assert_session_complete(self, session, store, guardrails) -> None:
 
         # 验证所有组件链接完整
         assert session.session_id
@@ -386,9 +391,10 @@ class TestS11S12OrchestrationSessionChain:
         mock_gw.router.acompletion = AsyncMock(
             return_value=make_raw_response(content="集成测试响应")
         )
-        session = factory.create_session(guardrails=guardrails, gateway=mock_gw)
+        session = await factory.create_session(guardrails=guardrails, gateway=mock_gw)
 
         response = await session.run_turn("集成测试消息")
+        await session.terminate()
 
         assert isinstance(response, AgentResponse)
         assert response.content == "集成测试响应"
@@ -412,7 +418,7 @@ class TestS11S12OrchestrationSessionChain:
         mock_gw.config = MagicMock()
         mock_gw.config.default_model = "test-model"
         mock_gw.router = MagicMock()
-        session = factory.create_session(guardrails=guardrails, gateway=mock_gw)
+        session = await factory.create_session(guardrails=guardrails, gateway=mock_gw)
 
         # 注册测试工具
         async def greet_handler(args: dict[str, Any]) -> str:
@@ -444,6 +450,7 @@ class TestS11S12OrchestrationSessionChain:
         mock_gw.router.acompletion = AsyncMock(side_effect=mock_acompletion)
 
         response = await session.run_turn("请问候 Praxis")
+        await session.terminate()
 
         assert "Praxis" in response.content
         assert response.tool_calls_made == 1
@@ -466,7 +473,7 @@ class TestS11S12OrchestrationSessionChain:
         mock_gw.config = MagicMock()
         mock_gw.config.default_model = "test-model"
         mock_gw.router = MagicMock()
-        session = factory.create_session(guardrails=guardrails, gateway=mock_gw)
+        session = await factory.create_session(guardrails=guardrails, gateway=mock_gw)
         session.assembler.conversation_history = [
             {"role": "assistant", "content": "测试状态"},
         ]
@@ -480,6 +487,7 @@ class TestS11S12OrchestrationSessionChain:
         cp = await cp_mgr.load_checkpoint(session.session_id, cp_id)
         assert cp is not None
         assert cp.session_id == session.session_id
+        await session.terminate()
 
     async def test_event_flow_through_chain(
         self,
@@ -501,9 +509,10 @@ class TestS11S12OrchestrationSessionChain:
         mock_gw.router.acompletion = AsyncMock(
             return_value=make_raw_response(content="事件测试")
         )
-        session = factory.create_session(guardrails=guardrails, gateway=mock_gw)
+        session = await factory.create_session(guardrails=guardrails, gateway=mock_gw)
 
         response = await session.run_turn("测试事件链")
+        await session.terminate()
 
         event_types = [e.event_type for e in response.events]
         assert "turn_start" in event_types

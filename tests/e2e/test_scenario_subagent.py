@@ -38,7 +38,7 @@ async def sub_store(tmp_path: Path) -> PersistenceStore:
 class TestSubagentDelegation:
     """场景五：子代理任务委托 E2E 测试。"""
 
-    def test_isolated_context_creates_independent_session(
+    async def test_isolated_context_creates_independent_session(
         self,
         sub_store: PersistenceStore,
         mock_gateway: GatewayRouter,
@@ -75,18 +75,21 @@ class TestSubagentDelegation:
             max_turns=20,
         )
 
-        session = isolation.create_isolated_session(
+        session = await isolation.create_isolated_session(
             spec=spec,
             guardrails=guardrails,
             parent_registry=parent_registry,
         )
 
-        # 子代理注册表仅包含指定工具
-        assert session.registry.has_tool("read_file")
-        assert session.registry.has_tool("grep_search")
-        assert not session.registry.has_tool("deploy")
+        try:
+            # 子代理注册表仅包含指定工具
+            assert session.registry.has_tool("read_file")
+            assert session.registry.has_tool("grep_search")
+            assert not session.registry.has_tool("deploy")
+        finally:
+            await session.terminate()
 
-    def test_subagent_session_is_independent(
+    async def test_subagent_session_is_independent(
         self,
         sub_store: PersistenceStore,
         mock_gateway: GatewayRouter,
@@ -105,15 +108,19 @@ class TestSubagentDelegation:
         spec1 = SubagentSpec(task="task1", tool_names=[])
         spec2 = SubagentSpec(task="task2", tool_names=[])
 
-        s1 = isolation.create_isolated_session(spec1, guardrails, parent_registry)
-        s2 = isolation.create_isolated_session(spec2, guardrails, parent_registry)
+        s1 = await isolation.create_isolated_session(spec1, guardrails, parent_registry)
+        s2 = await isolation.create_isolated_session(spec2, guardrails, parent_registry)
 
-        assert s1.session_id != s2.session_id
-        # 修改 s1 不影响 s2
-        s1.assembler.conversation_history.append({"role": "user", "content": "test"})
-        assert len(s2.assembler.conversation_history) == 0
+        try:
+            assert s1.session_id != s2.session_id
+            # 修改 s1 不影响 s2
+            s1.assembler.conversation_history.append({"role": "user", "content": "test"})
+            assert len(s2.assembler.conversation_history) == 0
+        finally:
+            await s1.terminate()
+            await s2.terminate()
 
-    def test_subagent_max_turns_respected(
+    async def test_subagent_max_turns_respected(
         self,
         sub_store: PersistenceStore,
         mock_gateway: GatewayRouter,
@@ -129,11 +136,13 @@ class TestSubagentDelegation:
         )
 
         spec = SubagentSpec(task="任务", tool_names=[], max_turns=10)
-        session = isolation.create_isolated_session(
+        session = await isolation.create_isolated_session(
             spec, guardrails, ToolRegistry(),
         )
-        # 子代理的 loop 配置应使用 spec.max_turns
-        assert session.loop.config.max_turns == 10
+        try:
+            assert session.loop.config.max_turns == 10
+        finally:
+            await session.terminate()
 
     def test_subagent_result_model(self) -> None:
         """验证：SubagentResult 模型正确序列化。"""

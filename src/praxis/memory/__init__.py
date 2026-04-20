@@ -1,26 +1,40 @@
-"""praxis.memory — 记忆系统（S6）：认知记忆管理、模型辅助提取与整合。"""
+"""praxis.memory — 记忆系统（S6）。
 
-from praxis.memory.background import BackgroundProcessor
-from praxis.memory.consolidation import MemoryConsolidator
-from praxis.memory.dream import DreamConsolidator, DreamReport
-from praxis.memory.extraction import MemoryExtractor
+对外暴露统一门面 CognitiveMemory，集成四类认知记忆、模型辅助管线、
+档案模式、Scratchpad、Dream 调度和后台自治 Worker。
+"""
+
+from praxis.memory.consolidator import ConsolidationResult, MemoryConsolidator
+from praxis.memory.dream import DreamConsolidator, DreamReport, DreamScheduler
+from praxis.memory.extractor import MemoryExtractor
+from praxis.memory.profile import ProfileManager
+from praxis.memory.project_loader import ProjectMemoryLoader
 from praxis.memory.retention import RetentionManager
-from praxis.memory.pipeline import MemoryPipeline
-from praxis.memory.retrieval import MemoryRetriever
-from praxis.memory.scope import ScopedMemoryStore
+from praxis.memory.retriever import MemoryRetriever
 from praxis.memory.scratchpad import Scratchpad
-from praxis.memory.vector_store import VectorStore
+from praxis.memory.store import ProfileStore, ScopedMemoryStore, entry_from_dict
+from praxis.memory.core import CognitiveMemory
+from praxis.memory.vector import VectorStore, cosine_similarity, litellm_embed
+from praxis.memory.worker import BackgroundWorker
 
 __all__ = [
-    "BackgroundProcessor",
+    "BackgroundWorker",
+    "ConsolidationResult",
     "DreamConsolidator",
     "DreamReport",
-    "RetentionManager",
+    "DreamScheduler",
     "MemoryConsolidator",
     "MemoryExtractor",
-    "MemoryPipeline",
     "MemoryRetriever",
+    "CognitiveMemory",
+    "ProfileManager",
+    "ProfileStore",
+    "ProjectMemoryLoader",
+    "RetentionManager",
     "ScopedMemoryStore",
     "Scratchpad",
     "VectorStore",
+    "cosine_similarity",
+    "entry_from_dict",
+    "litellm_embed",
 ]

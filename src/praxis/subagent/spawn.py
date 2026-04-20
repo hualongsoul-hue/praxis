@@ -91,7 +91,7 @@ class SubagentSpawner:
 
     async def run_subagent(self, spec: SubagentSpec) -> SubagentResult:
         """运行子代理的核心逻辑。"""
-        session = self.isolation.create_isolated_session(
+        session = await self.isolation.create_isolated_session(
             spec=spec,
             guardrails=self.guardrails,
             parent_registry=self.parent_registry,

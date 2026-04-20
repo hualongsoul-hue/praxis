@@ -167,7 +167,7 @@ async def test_e2e_with_skills(
     guardrails = GuardrailEngine(rule_engine, PermissionManager())
     gateway = GatewayRouter(GATEWAY_CONFIG)
 
-    session = create_agent_session(
+    session = await create_agent_session(
         store=store,
         guardrails=guardrails,
         gateway=gateway,

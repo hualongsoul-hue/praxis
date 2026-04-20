@@ -10,7 +10,7 @@ from praxis.guardrails.engine import GuardrailEngine
 from praxis.session.checkpoint import CheckpointManager
 from praxis.session.resume import SessionResumer
 from praxis.session.core import Session
-from praxis.memory.pipeline import MemoryPipeline
+from praxis.memory.core import CognitiveMemory
 from praxis.models.session import CheckpointInfo
 from praxis.skills.manager import SkillManager
 from praxis.telemetry.logger import get_logger
@@ -53,7 +53,7 @@ class TimeTravelManager:
         gateway: GatewayRouter,
         registry: ToolRegistry | None = None,
         model: str = "default",
-        memory: MemoryPipeline | None = None,
+        memory: CognitiveMemory | None = None,
         skill_manager: SkillManager | None = None,
         verifier_registry: VerifierRegistry | None = None,
     ) -> Session | None:
@@ -111,7 +111,7 @@ class TimeTravelManager:
         gateway: GatewayRouter,
         registry: ToolRegistry | None = None,
         model: str = "default",
-        memory: MemoryPipeline | None = None,
+        memory: CognitiveMemory | None = None,
         skill_manager: SkillManager | None = None,
         verifier_registry: VerifierRegistry | None = None,
     ) -> Session | None:

@@ -18,7 +18,7 @@
     │   ├── ToolExecutionError          #   工具执行失败
     │   ├── ToolTimeoutError            #   工具执行超时
     │   └── SandboxViolationError       #   沙箱规则违反
-    ├── MemorySystemError               # S6 记忆系统
+    ├── CognitiveMemoryError            # S6 认知记忆系统
     ├── ContextError                    # S7 上下文引擎
     ├── GuardrailError                  # S8 护栏系统
     ├── RecoveryError                   # S9 错误恢复
@@ -143,8 +143,8 @@ class SandboxViolationError(ToolError):
 # ── S6 记忆系统 ──────────────────────────────────────────────────────────────
 
 
-class MemorySystemError(PraxisError):
-    """记忆系统错误（使用 MemorySystemError 避免遮蔽内建 MemoryError）。"""
+class CognitiveMemoryError(PraxisError):
+    """认知记忆系统错误（避免遮蔽内建 MemoryError）。"""
 
     component = "memory"
 

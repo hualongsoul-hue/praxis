@@ -9,6 +9,7 @@ from typing import Any
 
 from praxis.config.schemas import (
     ContextConfig,
+    MemoryConfig,
     SessionConfig,
     OrchestratorConfig,
     ToolsConfig,
@@ -20,7 +21,7 @@ from praxis.context.tool_injection import ToolInjector
 from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.session.checkpoint import CheckpointManager
-from praxis.memory.pipeline import MemoryPipeline
+from praxis.memory.core import CognitiveMemory
 from praxis.models.session import (
     ContinuationPhase,
     SessionMetadata,
@@ -65,7 +66,7 @@ class Session:
         registry: ToolRegistry,
         store: PersistenceStore,
         config: SessionConfig,
-        memory: MemoryPipeline | None = None,
+        memory: CognitiveMemory | None = None,
         skill_manager: SkillManager | None = None,
         verifier_registry: VerifierRegistry | None = None,
     ) -> None:
@@ -141,8 +142,10 @@ class Session:
         """中断当前会话。"""
         self.loop.abort()
 
-    def terminate(self) -> None:
-        """终止会话。"""
+    async def terminate(self) -> None:
+        """终止会话：停止后台记忆 Worker 与 Dream 调度器。"""
+        if self.memory is not None:
+            await self.memory.stop()
         self.metadata.status = SessionStatus.TERMINATED
         log.info("会话已终止", session_id=self.session_id)
 
@@ -159,21 +162,23 @@ class SessionFactory:
         session_config: SessionConfig,
         orchestrator_config: OrchestratorConfig,
         context_config: ContextConfig,
+        memory_config: MemoryConfig | None = None,
     ) -> None:
         self.store = store
         self.session_config = session_config
         self.orchestrator_config = orchestrator_config
         self.context_config = context_config
+        self.memory_config = memory_config or MemoryConfig()
         # 配置 S2 审计持久化通道（护栏裁决事件写入 store 的 "audit" 命名空间）
         configure_audit(store)
 
-    def create_session(
+    async def create_session(
         self,
         guardrails: GuardrailEngine,
         gateway: GatewayRouter,
         registry: ToolRegistry | None = None,
         model: str = "default",
-        memory: MemoryPipeline | None = None,
+        memory: CognitiveMemory | None = None,
         skill_manager: SkillManager | None = None,
         verifier_registry: VerifierRegistry | None = None,
         tools_config: ToolsConfig | None = None,
@@ -198,6 +203,16 @@ class SessionFactory:
             初始化完毕的 Session。
         """
         metadata = SessionMetadata(status=SessionStatus.INITIALIZING)
+
+        # S6: 记忆系统——自动创建并启动（后台 Worker + Dream 调度器）
+        if memory is None:
+            memory = CognitiveMemory(
+                store=self.store,
+                gateway=gateway,
+                session_id=metadata.session_id,
+                config=self.memory_config,
+            )
+        await memory.start()
 
         # S5: 工具系统
         created_new_registry = registry is None

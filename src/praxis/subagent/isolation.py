@@ -39,7 +39,7 @@ class IsolatedContext:
         self.orchestrator_config = orchestrator_config
         self.context_config = context_config
 
-    def create_isolated_session(
+    async def create_isolated_session(
         self,
         spec: SubagentSpec,
         guardrails: GuardrailEngine,
@@ -78,7 +78,7 @@ class IsolatedContext:
             context_config=self.context_config,
         )
 
-        session = factory.create_session(
+        session = await factory.create_session(
             guardrails=guardrails,
             gateway=self.gateway,
             registry=child_registry,

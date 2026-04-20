@@ -9,7 +9,7 @@ from typing import Any
 from praxis.gateway.router import GatewayRouter
 from praxis.session.checkpoint import CheckpointManager
 from praxis.session.core import Session, SessionFactory
-from praxis.memory.pipeline import MemoryPipeline
+from praxis.memory.core import CognitiveMemory
 from praxis.models.orchestrator import LoopState
 from praxis.models.session import (
     ContinuationPhase,
@@ -48,7 +48,7 @@ class SessionResumer:
         registry: ToolRegistry | None = None,
         model: str = "default",
         checkpoint_id: str | None = None,
-        memory: MemoryPipeline | None = None,
+        memory: CognitiveMemory | None = None,
         skill_manager: SkillManager | None = None,
         verifier_registry: VerifierRegistry | None = None,
     ) -> Session | None:
@@ -81,7 +81,7 @@ class SessionResumer:
         snapshot = await self.checkpoint_mgr.extract_snapshot(checkpoint)
 
         # 创建新会话（重建无状态组件）
-        session = self.factory.create_session(
+        session = await self.factory.create_session(
             guardrails=guardrails,
             gateway=gateway,
             registry=registry,

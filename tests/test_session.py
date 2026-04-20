@@ -63,38 +63,45 @@ def factory(store: PersistenceStore) -> SessionFactory:
 class TestSessionFactory:
     """会话初始化测试。"""
 
-    def test_create_session(
+    async def test_create_session(
         self,
         factory: SessionFactory,
         guardrails: GuardrailEngine,
         mock_gateway: MagicMock,
     ) -> None:
-        session = factory.create_session(guardrails=guardrails, gateway=mock_gateway)
-        assert session.session_id
-        assert session.status == SessionStatus.ACTIVE
-        assert session.metadata.total_turns == 0
-        assert session.loop is not None
-        assert session.assembler is not None
-        assert session.registry is not None
+        session = await factory.create_session(guardrails=guardrails, gateway=mock_gateway)
+        try:
+            assert session.session_id
+            assert session.status == SessionStatus.ACTIVE
+            assert session.metadata.total_turns == 0
+            assert session.loop is not None
+            assert session.assembler is not None
+            assert session.registry is not None
+        finally:
+            await session.terminate()
 
-    def test_session_has_unique_id(
+    async def test_session_has_unique_id(
         self,
         factory: SessionFactory,
         guardrails: GuardrailEngine,
         mock_gateway: MagicMock,
     ) -> None:
-        s1 = factory.create_session(guardrails=guardrails, gateway=mock_gateway)
-        s2 = factory.create_session(guardrails=guardrails, gateway=mock_gateway)
-        assert s1.session_id != s2.session_id
+        s1 = await factory.create_session(guardrails=guardrails, gateway=mock_gateway)
+        s2 = await factory.create_session(guardrails=guardrails, gateway=mock_gateway)
+        try:
+            assert s1.session_id != s2.session_id
+        finally:
+            await s1.terminate()
+            await s2.terminate()
 
-    def test_terminate_session(
+    async def test_terminate_session(
         self,
         factory: SessionFactory,
         guardrails: GuardrailEngine,
         mock_gateway: MagicMock,
     ) -> None:
-        session = factory.create_session(guardrails=guardrails, gateway=mock_gateway)
-        session.terminate()
+        session = await factory.create_session(guardrails=guardrails, gateway=mock_gateway)
+        await session.terminate()
         assert session.status == SessionStatus.TERMINATED
 
 
@@ -261,29 +268,35 @@ class TestContinuationManager:
         prompt = mgr.get_system_prompt(ContinuationPhase.WORKING)
         assert prompt == ""
 
-    def test_advance_phase(
+    async def test_advance_phase(
         self,
         factory: SessionFactory,
         guardrails: GuardrailEngine,
         mock_gateway: MagicMock,
     ) -> None:
         mgr = ContinuationManager()
-        session = factory.create_session(guardrails=guardrails, gateway=mock_gateway)
-        session.metadata.continuation_phase = ContinuationPhase.INITIALIZATION
-        new_phase = mgr.advance_phase(session)
-        assert new_phase == ContinuationPhase.WORKING
+        session = await factory.create_session(guardrails=guardrails, gateway=mock_gateway)
+        try:
+            session.metadata.continuation_phase = ContinuationPhase.INITIALIZATION
+            new_phase = mgr.advance_phase(session)
+            assert new_phase == ContinuationPhase.WORKING
+        finally:
+            await session.terminate()
 
-    def test_advance_from_warmup(
+    async def test_advance_from_warmup(
         self,
         factory: SessionFactory,
         guardrails: GuardrailEngine,
         mock_gateway: MagicMock,
     ) -> None:
         mgr = ContinuationManager()
-        session = factory.create_session(guardrails=guardrails, gateway=mock_gateway)
-        session.metadata.continuation_phase = ContinuationPhase.WARMUP
-        new_phase = mgr.advance_phase(session)
-        assert new_phase == ContinuationPhase.WORKING
+        session = await factory.create_session(guardrails=guardrails, gateway=mock_gateway)
+        try:
+            session.metadata.continuation_phase = ContinuationPhase.WARMUP
+            new_phase = mgr.advance_phase(session)
+            assert new_phase == ContinuationPhase.WORKING
+        finally:
+            await session.terminate()
 
     def test_feature_list(self) -> None:
         mgr = ContinuationManager()
@@ -332,17 +345,20 @@ class TestContinuationManager:
         summary = mgr.get_progress_summary()
         assert "1/3 完成" in summary
 
-    def test_prepare_turn_init(
+    async def test_prepare_turn_init(
         self,
         factory: SessionFactory,
         guardrails: GuardrailEngine,
         mock_gateway: MagicMock,
     ) -> None:
         mgr = ContinuationManager()
-        session = factory.create_session(guardrails=guardrails, gateway=mock_gateway)
-        session.metadata.continuation_phase = ContinuationPhase.INITIALIZATION
-        kwargs = mgr.prepare_turn(session)
-        assert "developer_instructions" in kwargs
+        session = await factory.create_session(guardrails=guardrails, gateway=mock_gateway)
+        try:
+            session.metadata.continuation_phase = ContinuationPhase.INITIALIZATION
+            kwargs = mgr.prepare_turn(session)
+            assert "developer_instructions" in kwargs
+        finally:
+            await session.terminate()
 
 
 # ── Task 13.5: 时间旅行调试 ─────────────────────────────────────────────────

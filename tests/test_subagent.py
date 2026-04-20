@@ -132,7 +132,7 @@ class TestResourceController:
 class TestIsolatedContext:
     """上下文隔离测试。"""
 
-    def test_create_isolated_session(
+    async def test_create_isolated_session(
         self,
         isolation: IsolatedContext,
         guardrails: GuardrailEngine,
@@ -142,17 +142,19 @@ class TestIsolatedContext:
             task="测试任务",
             tool_names=["test_tool"],
         )
-        session = isolation.create_isolated_session(
+        session = await isolation.create_isolated_session(
             spec=spec,
             guardrails=guardrails,
             parent_registry=registry,
         )
-        assert session is not None
-        assert session.session_id
-        # 子代理应该有工具
-        assert session.registry.has_tool("test_tool")
+        try:
+            assert session is not None
+            assert session.session_id
+            assert session.registry.has_tool("test_tool")
+        finally:
+            await session.terminate()
 
-    def test_tool_subset_isolation(
+    async def test_tool_subset_isolation(
         self,
         isolation: IsolatedContext,
         guardrails: GuardrailEngine,
@@ -170,19 +172,25 @@ class TestIsolatedContext:
 
         # 子代理只请求 test_tool
         spec = SubagentSpec(task="test", tool_names=["test_tool"])
-        session = isolation.create_isolated_session(spec, guardrails, registry)
-        assert session.registry.has_tool("test_tool")
-        assert not session.registry.has_tool("extra_tool")
+        session = await isolation.create_isolated_session(spec, guardrails, registry)
+        try:
+            assert session.registry.has_tool("test_tool")
+            assert not session.registry.has_tool("extra_tool")
+        finally:
+            await session.terminate()
 
-    def test_empty_tools(
+    async def test_empty_tools(
         self,
         isolation: IsolatedContext,
         guardrails: GuardrailEngine,
         registry: ToolRegistry,
     ) -> None:
         spec = SubagentSpec(task="no tools")
-        session = isolation.create_isolated_session(spec, guardrails, registry)
-        assert len(session.registry.list_tools()) == 0
+        session = await isolation.create_isolated_session(spec, guardrails, registry)
+        try:
+            assert len(session.registry.list_tools()) == 0
+        finally:
+            await session.terminate()
 
 
 # ── Task 14.4: 结果聚合 ─────────────────────────────────────────────────────

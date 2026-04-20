@@ -1,10 +1,12 @@
 """梦境整理（Dream Consolidation）。
 
-借鉴人类 REM 睡眠概念，在后台定期整理记忆：
+借鉴 REM 睡眠概念，由 S6 内部定时调度器周期性执行：
 时间锚定、矛盾消解、陈旧清理、索引精简。
 """
 
+import asyncio
 import json
+from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -13,12 +15,8 @@ from pydantic import BaseModel, Field
 from praxis.gateway.chat import chat
 from praxis.gateway.router import GatewayRouter
 from praxis.memory.retention import RetentionManager
-from praxis.memory.scope import ScopedMemoryStore
-from praxis.models.memory import (
-    MemoryEntry,
-    MemoryScope,
-    MemoryStatus,
-)
+from praxis.memory.store import ScopedMemoryStore
+from praxis.models.memory import MemoryEntry, MemoryScope, SemanticMemory
 from praxis.persistence.store import PersistenceStore
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
@@ -26,6 +24,7 @@ from praxis.telemetry.metrics import emit_metric
 log = get_logger("memory.dream")
 
 DREAM_NAMESPACE = "dream_meta"
+DREAM_META_KEY = "last_run"
 
 DREAM_SYSTEM_PROMPT = (
     "你是一个记忆整理专家。审查以下记忆条目列表，执行以下任务：\n"
@@ -57,11 +56,7 @@ class DreamReport(BaseModel):
 
 
 class DreamConsolidator:
-    """梦境整理器。
-
-    通过 S4 驱动 LLM 执行记忆整理，
-    整理报告通过 S2 记录。
-    """
+    """梦境整理器。"""
 
     def __init__(
         self,
@@ -82,40 +77,29 @@ class DreamConsolidator:
         self.min_sessions = min_sessions
 
     async def should_run(self, session_count: int) -> bool:
-        """检查是否满足触发条件。
+        """检查是否满足触发条件（24h 且 ≥5 sessions）。"""
+        if session_count < self.min_sessions:
+            return False
 
-        Args:
-            session_count: 自上次整理以来的新会话数。
-
-        Returns:
-            是否应执行整理。
-        """
-        meta = await self.meta_store.load(DREAM_NAMESPACE, "last_run")
+        meta = await self.meta_store.load(DREAM_NAMESPACE, DREAM_META_KEY)
         if meta is None:
-            return session_count >= self.min_sessions
+            return True
 
-        last_run_str = meta.get("completed_at", "")
+        last_run_str = meta.get("completed_at", "") if isinstance(meta, dict) else ""
         if not last_run_str:
-            return session_count >= self.min_sessions
+            return True
 
-        last_run = datetime.fromisoformat(last_run_str)
+        try:
+            last_run = datetime.fromisoformat(last_run_str)
+        except ValueError:
+            return True
+
         now = datetime.now(timezone.utc)
         hours_since = (now - last_run).total_seconds() / 3600.0
+        return hours_since >= self.min_hours_since_last
 
-        return hours_since >= self.min_hours_since_last and session_count >= self.min_sessions
-
-    async def run_dream(
-        self,
-        scopes: list[MemoryScope],
-    ) -> DreamReport:
-        """执行梦境整理。
-
-        Args:
-            scopes: 需要整理的作用域列表。
-
-        Returns:
-            整理报告。
-        """
+    async def run_dream(self, scopes: list[MemoryScope]) -> DreamReport:
+        """执行梦境整理。"""
         report = DreamReport()
         all_entries: list[MemoryEntry] = []
 
@@ -128,6 +112,7 @@ class DreamConsolidator:
         if not all_entries:
             report.completed_at = datetime.now(timezone.utc)
             report.summary = "无记忆条目需要整理"
+            await self.save_run_meta(report)
             return report
 
         entries_text = self.format_entries(all_entries)
@@ -136,10 +121,17 @@ class DreamConsolidator:
             {"role": "user", "content": entries_text},
         ]
 
-        response = await chat(self.gateway, messages, model=self.model)
-        raw_text = response.content or "{}"
-        actions = self.parse_dream_response(raw_text)
+        try:
+            response = await chat(self.gateway, messages, model=self.model)
+            raw_text = response.content or "{}"
+        except Exception as exc:
+            log.warning("梦境整理 LLM 调用失败", error=str(exc))
+            report.completed_at = datetime.now(timezone.utc)
+            report.summary = f"LLM 调用失败: {exc}"
+            await self.save_run_meta(report)
+            return report
 
+        actions = self.parse_response(raw_text)
         entry_map = {e.memory_id: e for e in all_entries}
 
         report.anchored_count = await self.apply_anchoring(
@@ -148,11 +140,11 @@ class DreamConsolidator:
         report.stale_marked = await self.apply_stale_marking(
             actions.get("stale", []), entry_map,
         )
-        report.conflicts_resolved = len(actions.get("conflicts", []))
+        report.conflicts_resolved = len(actions.get("conflicts", []) or [])
         report.merged_count = await self.apply_merges(
             actions.get("merge_suggestions", []), entry_map,
         )
-        report.summary = actions.get("summary", "")
+        report.summary = str(actions.get("summary", ""))
         report.completed_at = datetime.now(timezone.utc)
 
         await self.save_run_meta(report)
@@ -177,9 +169,13 @@ class DreamConsolidator:
     ) -> int:
         """应用时间锚定更新。"""
         count = 0
+        if not isinstance(anchored, list):
+            return 0
         for item in anchored:
-            mid = item.get("memory_id", "")
-            new_content = item.get("updated_content", "")
+            if not isinstance(item, dict):
+                continue
+            mid = str(item.get("memory_id", ""))
+            new_content = str(item.get("updated_content", ""))
             entry = entry_map.get(mid)
             if entry and new_content:
                 entry.content = new_content
@@ -196,8 +192,10 @@ class DreamConsolidator:
     ) -> int:
         """标记陈旧记忆为 INACTIVE。"""
         count = 0
+        if not isinstance(stale_ids, list):
+            return 0
         for mid in stale_ids:
-            entry = entry_map.get(mid)
+            entry = entry_map.get(str(mid))
             if entry:
                 await self.retention.mark_inactive(entry, "梦境整理: 陈旧记忆")
                 count += 1
@@ -210,18 +208,21 @@ class DreamConsolidator:
     ) -> int:
         """应用合并建议。"""
         count = 0
+        if not isinstance(merge_suggestions, list):
+            return 0
         for suggestion in merge_suggestions:
-            ids = suggestion.get("ids", [])
-            merged_content = suggestion.get("merged_content", "")
-            if len(ids) < 2 or not merged_content:
+            if not isinstance(suggestion, dict):
+                continue
+            ids = suggestion.get("ids") or []
+            merged_content = str(suggestion.get("merged_content", ""))
+            if not isinstance(ids, list) or len(ids) < 2 or not merged_content:
                 continue
 
-            primary = entry_map.get(ids[0])
+            primary = entry_map.get(str(ids[0]))
             if primary is None:
                 continue
 
-            merged = MemoryEntry(
-                memory_type=primary.memory_type,
+            merged = SemanticMemory(
                 scope=primary.scope,
                 content=merged_content,
                 summary=merged_content[:150],
@@ -230,7 +231,7 @@ class DreamConsolidator:
             )
 
             for mid in ids:
-                old = entry_map.get(mid)
+                old = entry_map.get(str(mid))
                 if old:
                     await self.retention.mark_inactive(old, "梦境整理: 合并")
 
@@ -242,7 +243,7 @@ class DreamConsolidator:
         """保存整理元数据。"""
         await self.meta_store.save(
             DREAM_NAMESPACE,
-            "last_run",
+            DREAM_META_KEY,
             report.model_dump(mode="json"),
         )
 
@@ -258,18 +259,79 @@ class DreamConsolidator:
         return "\n".join(lines)
 
     @staticmethod
-    def parse_dream_response(raw_text: str) -> dict[str, Any]:
-        """解析梦境整理 LLM 响应。"""
+    def parse_response(raw_text: str) -> dict[str, Any]:
+        """容错解析 JSON 对象。"""
         text = raw_text.strip()
         if text.startswith("```"):
             lines = text.split("\n")
             text = "\n".join(lines[1:-1]) if len(lines) > 2 else text
-
         try:
             data = json.loads(text)
             if isinstance(data, dict):
                 return data
             return {}
         except (json.JSONDecodeError, ValueError):
-            log.warning("梦境整理响应解析失败", raw_text=raw_text[:200])
+            log.warning("梦境整理响应解析失败", raw_preview=raw_text[:200])
             return {}
+
+
+class DreamScheduler:
+    """梦境定时调度器——独立 asyncio.Task。"""
+
+    def __init__(
+        self,
+        consolidator: DreamConsolidator,
+        scopes: list[MemoryScope],
+        check_interval_seconds: float,
+        session_count_getter: Callable[[], int],
+    ) -> None:
+        self.consolidator = consolidator
+        self.scopes = scopes
+        self.check_interval_seconds = check_interval_seconds
+        self.session_count_getter = session_count_getter
+        self.task: asyncio.Task[None] | None = None
+        self.running: bool = False
+
+    def start(self) -> None:
+        if self.task is not None and not self.task.done():
+            return
+        self.running = True
+        self.task = asyncio.create_task(self.run_loop())
+        log.info("梦境调度器已启动", interval=self.check_interval_seconds)
+
+    async def stop(self) -> None:
+        self.running = False
+        if self.task is not None and not self.task.done():
+            self.task.cancel()
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                pass
+            self.task = None
+        log.info("梦境调度器已停止")
+
+    async def run_loop(self) -> None:
+        """主循环：周期性检查触发条件。"""
+        while self.running:
+            try:
+                await asyncio.sleep(self.check_interval_seconds)
+            except asyncio.CancelledError:
+                break
+            if not self.running:
+                break
+            try:
+                session_count = self.session_count_getter()
+                if await self.consolidator.should_run(session_count):
+                    await self.consolidator.run_dream(self.scopes)
+            except Exception as exc:
+                log.warning(
+                    "梦境调度循环异常",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                emit_metric(
+                    "dream_scheduler_error",
+                    1.0,
+                    {"error_type": type(exc).__name__},
+                    "counter",
+                )

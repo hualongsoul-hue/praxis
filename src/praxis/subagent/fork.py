@@ -83,7 +83,7 @@ class ForkManager:
         await self.resource_ctrl.acquire(spec.subagent_id)
 
         try:
-            session = self.isolation.create_isolated_session(
+            session = await self.isolation.create_isolated_session(
                 spec=spec,
                 guardrails=self.guardrails,
                 parent_registry=self.parent_registry,

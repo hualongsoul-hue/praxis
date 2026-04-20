@@ -18,7 +18,7 @@ from praxis.context.tool_injection import ToolInjector
 from praxis.gateway.chat import chat
 from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
-from praxis.memory.pipeline import MemoryPipeline
+from praxis.memory.core import CognitiveMemory
 from praxis.models.context import TurnContext
 from praxis.models.guardrails import VerdictType
 from praxis.models.memory import WorkingMemoryMessage
@@ -64,7 +64,7 @@ class OrchestrationLoop:
         parser: OutputParser,
         emitter: EventEmitter,
         tool_injector: ToolInjector | None = None,
-        memory: MemoryPipeline | None = None,
+        memory: CognitiveMemory | None = None,
         verifier_registry: VerifierRegistry | None = None,
         skill_manager: SkillManager | None = None,
         compactor: ContextCompactor | None = None,
@@ -144,7 +144,7 @@ class OrchestrationLoop:
             results = await self.memory.search_memory(user_message, top_k=5)
             if results:
                 semantic_text = "\n".join(
-                    f"[{r.score:.2f}] {r.entry.content[:200]}" for r in results
+                    f"[{r.relevance_score:.2f}] {r.entry.content[:200]}" for r in results
                 )
 
         # S14: 获取技能索引 + 自动激活

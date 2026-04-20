@@ -64,7 +64,7 @@ class TestSessionResume:
     ) -> None:
         """验证：完整的检查点保存 → 恢复 → 续接流程。"""
         # 创建原始会话
-        session = e2e_factory.create_session(guardrails=e2e_guardrails, gateway=mock_gateway)
+        session = await e2e_factory.create_session(guardrails=e2e_guardrails, gateway=mock_gateway)
         session_id = session.session_id
         assert session.status == SessionStatus.ACTIVE
 
@@ -105,7 +105,7 @@ class TestSessionResume:
         mock_gateway: GatewayRouter,
     ) -> None:
         """验证：多次检查点保存后恢复最新状态。"""
-        session = e2e_factory.create_session(guardrails=e2e_guardrails, gateway=mock_gateway)
+        session = await e2e_factory.create_session(guardrails=e2e_guardrails, gateway=mock_gateway)
         session_id = session.session_id
 
         # 第一次检查点

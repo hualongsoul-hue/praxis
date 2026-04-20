@@ -533,22 +533,29 @@ Praxis 作为 MCP Host，为每个连接的 MCP Server 创建独立的 MCP Clien
 
 #### 公开接口契约
 
+S6 对外以单一门面 `CognitiveMemory` 暴露下列接口。所有接口均为 async（除 `get_message_history`/`export_state` 同步取值外）。
+
 | 接口 | 输入 | 输出 | 调用方 |
 |------|------|------|--------|
-| `append_message(message)` | 消息对象 | — | S11(编排循环) |
+| `append_message(message)` | `WorkingMemoryMessage` | — | S11(编排循环) |
 | `get_message_history(limit?)` | 可选数量限制 | 消息列表 | S7(上下文引擎) |
-| `search_memory(query, scope?, type?, metadata?)` | 查询文本、可选作用域/类型/元数据过滤 | 记忆条目排序列表 | S7(上下文引擎)、S11(编排循环) |
-| `save_memory(entry, scope, type)` | 记忆条目、作用域、认知类型 | 记忆 ID | S11(编排循环) 通过工具 |
-| `update_memory(id, content)` | 记忆 ID、更新内容 | — | S11(编排循环) 通过工具、后台整合 |
-| `delete_memory(id)` | 记忆 ID | — | S11(编排循环) 通过工具 |
-| `get_memory_index(scope?)` | 可选作用域 | 轻量索引列表（名称+摘要） | S7(上下文引擎) |
-| `load_memory_detail(id)` | 记忆 ID | 完整记忆内容 | S7(上下文引擎) |
-| `run_dream()` | — | 整理报告 | S12(会话管理)、手动触发 |
-| `read_scratchpad(key)` | 草稿键名 | 草稿内容或 None | S7(上下文引擎)、S12(会话管理) |
-| `write_scratchpad(key, content)` | 草稿键名、内容 | — | S11(编排循环) 通过工具 |
+| `search_memory(query, scopes?, memory_type?, tags?, top_k?)` | 查询文本；可选作用域列表 / 认知类型 / 标签 / 返回数量 | 记忆搜索结果列表（按相关性排序） | S7(上下文引擎)、S11(编排循环) |
+| `save_memory(content, scope?, memory_type?, tags?, metadata?)` | 记忆内容；可选作用域、类型、标签、元数据 | 记忆 ID | S11(编排循环) 通过工具 |
+| `update_memory(memory_id, content)` | 记忆 ID、更新内容 | — | S11(编排循环)、后台整合 |
+| `delete_memory(memory_id)` | 记忆 ID | — | S11(编排循环) |
+| `get_memory_index(scopes?)` | 可选作用域列表 | 轻量索引列表（~150 字符/条） | S7(上下文引擎) |
+| `load_memory_detail(scope, memory_id)` | 作用域、记忆 ID | 完整记忆条目或 None | S7(上下文引擎) |
+| `get_profile(scope, schema_name)` | 作用域、档案名 | 结构化档案字典或 None | S11、S7 |
+| `update_profile(scope, schema_name, fields)` | 作用域、档案名、字段字典 | — | S11 通过工具 |
+| `run_dream(scopes)` | 作用域列表 | 整理报告 | S12、手动触发 |
+| `read_scratchpad(key)` | 草稿键名（progress/todos/features） | 草稿内容或 None | S7、S12 |
+| `write_scratchpad(key, content)` | 草稿键名、内容 | — | S11 通过工具 |
 | `clear_session()` | — | — | S12(会话管理) |
-| `export_state()` | — | 可序列化的记忆状态快照 | S12(会话管理) |
-| `import_state(snapshot)` | 记忆状态快照 | — | S12(会话管理) |
+| `export_state()` | — | 可序列化的状态快照（含消息游标） | S12(会话管理) |
+| `import_state(snapshot)` | 状态快照 | — | S12(会话管理) |
+| `start()` / `stop()` | — | — | **仅 S12 生命周期管理**调用，用于后台任务的启停 |
+
+> **接口使用契约**：`start()` / `stop()` 是内部生命周期方法，由 S12（`SessionFactory.create_session` 和 `Session.terminate`）负责调用；Agent 与业务代码**不应**直接调用。所有其他接口在实例构造后立即可用（后台特性由 `start()` 驱动，未启动时记忆写入仍立即生效，但不触发异步提取）。
 
 #### 功能需求
 
@@ -563,12 +570,12 @@ Praxis 作为 MCP Host，为每个连接的 MCP Server 创建独立的 MCP Clien
 | **程序记忆** | 工作流与模式 | 用户惯用流程、工具使用模式、代码风格 | 场景匹配 + 语义搜索 | "PR 审查流程：lint → test → review → merge" |
 | **工作记忆** | 当前会话上下文 | 消息序列、中间推理、临时状态 | 直接访问（内存） | 当前对话的完整消息历史 |
 
-- 语义记忆支持两种模式：
-  - **集合模式（Collection）**：无界知识存储，每条记忆独立文档，可搜索可更新
-  - **档案模式（Profile）**：结构化信息（Pydantic Schema），就地更新维护当前状态
-- 情景记忆捕获成功交互作为学习范例：情境上下文、推理过程、采取行动、达成结果
-- 程序记忆编码系统行为和响应模式：核心指令、行为准则、经验改进
-- 工作记忆处理会话内 Token 限制内的上下文管理
+- **语义记忆**支持两种模式：
+  - **集合模式（Collection）**：无界知识存储，每条记忆独立文档，存储时经 `save_memory` 走整合判定，检索时经 `search_memory` 走语义搜索
+  - **档案模式（Profile）**：每 `(scope, schema_name)` 对应唯一档案文档，字段字典就地合并更新，通过 `get_profile` / `update_profile` 专用接口访问；档案不参与 `search_memory` 的语义检索，但出现在 `get_memory_index` 中
+- **情景记忆**包含结构化字段：`context_description`（情境上下文）、`reasoning`（推理过程）、`action_taken`（采取行动）、`outcome`（达成结果）
+- **程序记忆**包含结构化字段：`steps`（步骤列表）、`applicable_scenarios`（适用场景列表）
+- **工作记忆**为进程内 `WorkingMemory` 对象，维护消息序列及 `max_messages` 裁剪；不持久化为独立记忆条目，但随检查点快照一起 export/import
 
 **F6.2 模型辅助记忆管线**
 
@@ -576,93 +583,112 @@ Praxis 作为 MCP Host，为每个连接的 MCP Server 创建独立的 MCP Clien
 
 **F6.2.1 记忆提取（Extraction）**
 
-- 每次编排循环结束后，异步触发记忆提取管线
+- **触发时机**：`append_message` 写入后设置信号，由内部后台任务消费（见 F6.3.1）。不再按"每轮结束"触发
 - LLM 分析对话内容，区分**有意义的洞察**（值得长期存储）和**例行对话**（不需存储）
 - 单次对话可提取多条不同类型的记忆
-- 每种认知类型使用独立的提取提示（Extraction Prompt）：
-  - **语义提取**：提取事实、知识、偏好（如"客户公司有 500 名员工"）
-  - **情景提取**：提取关键交互摘要、决策过程（如"用户决定使用 Redis 替代 Memcached"）
-  - **程序提取**：提取工作流、使用模式（如"部署前必须执行集成测试"）
-- 提取结果包含：内容、认知类型、作用域、元数据标签、时间戳
-- 提取提示可配置和定制，适应不同领域需求
+- 每种认知类型使用独立的提取提示（Extraction Prompt），返回对应子类的结构化字段：
+  - **语义提取** → `SemanticMemory`（content + tags + confidence）
+  - **情景提取** → `EpisodicMemory`（content + context_description + reasoning + action_taken + outcome）
+  - **程序提取** → `ProceduralMemory`（content + steps + applicable_scenarios）
+- 提取提示可通过 `MemoryConfig.extraction_prompts` 配置覆盖
+- 所有提取结果公共字段：内容、摘要、认知类型、作用域、元数据标签、时间戳、置信度
 
 **F6.2.2 记忆整合（Consolidation）**
 
 - 新提取的记忆不直接写入存储，先经过智能整合判定
-- 对每条新记忆，通过语义搜索检索已有的最相似记忆
-- LLM 评估新记忆与已有记忆的关系，做出操作决策：
+- 对每条新记忆，在**同作用域、同类型**下通过语义搜索检索最相似的已有记忆（相似度阈值可配置，默认 0.75）
+- 若无相似记忆 → 直接 ADD；若有 → LLM 评估做出决策：
   - **ADD**：新信息与已有记忆不同，新增存储
-  - **UPDATE**：新信息补充或更新已有记忆，合并更新
+  - **UPDATE**：新信息补充或更新已有记忆，合并后旧版标记 SUPERSEDED、新版继承 `version+1`
   - **NOOP**：新信息冗余，无需操作
-- **冲突解决**：当新信息与旧信息矛盾时，优先保留最新信息，旧记忆标记为 INACTIVE（不删除）
+- **冲突解决**：当新信息与旧信息矛盾时，旧版标记 `SUPERSEDED` 并写入 `superseded_by` 指针；仅"长期未访问且相关性过低"的孤立记忆由衰减扫描标记为 `INACTIVE`
 - **语义去重**：语义等价的记忆合并（如"喜欢 pizza"和"爱吃 pizza"视为相同信息）
-- 整合过程维护不可变审计日志，所有变更可追溯
-- 整合失败时，保守策略为直接 ADD（防止信息丢失）
+- 整合过程将旧条目的版本快照写入 `memory_versions` 命名空间，构成不可变审计日志
+- 整合失败时，保守策略为直接 ADD（防止信息丢失）；失败消息保留在 pending 队列供下次消费
 
 **F6.2.3 记忆梦境整理（Dream Consolidation）**
 
-借鉴 Anthropic Claude Code 的 Auto Dream 机制和人类 REM 睡眠的概念，在后台定期整理记忆：
+借鉴 Anthropic Claude Code 的 Auto Dream 机制和人类 REM 睡眠的概念，由 S6 内部定时调度器执行：
 
-- **触发条件**：距上次整理 >24h 且累计 ≥5 次新会话（可配置），或手动触发
-- 整理任务由后台子代理执行（不阻塞用户交互），通过 S4 驱动 LLM：
+- **触发条件**：距上次整理 >24h **且** 自上次 dream 以来完成的会话数 ≥5（两者均可通过 `MemoryConfig` 配置），或通过 `run_dream(scopes)` 手动触发
+- **会话计数**：`clear_session()` 内部每次被调用时 dream 会话计数器 +1，该计数随 `export_state` 持久化
+- **调度器**：`CognitiveMemory.start()` 启动一个独立 `asyncio.Task`，按 `dream_check_interval_seconds`（默认 3600）周期性检查触发条件并自动调用 `run_dream`
+- **LLM 驱动的整理动作**：
   - **时间锚定**：将模糊时间引用替换为具体日期（"昨天的部署问题" → "2026-04-15 部署问题"）
   - **矛盾消解**：检测并解决互相矛盾的记忆条目
-  - **陈旧清理**：删除引用已不存在的文件、已完成的任务等过时记忆
-  - **索引精简**：确保记忆索引保持精简高效
-- 整理报告通过 S2（遥测）记录：整理条目数、删除数、合并数、耗时
+  - **陈旧清理**：标记引用已不存在的文件、已完成的任务等过时记忆为 `INACTIVE`
+  - **索引精简**：建议合并冗余条目
+- 整理报告通过 S2（遥测）记录：整理条目数、标记陈旧数、合并数、耗时
 
-**F6.3 双路径处理与后台管线**
+**F6.3 双路径处理与后台自治**
 
 记忆系统支持两种处理路径，平衡实时性和完整性：
 
 | 维度 | 热路径（Agent 驱动） | 后台路径（内部自治） |
 |------|------|------|
-| **触发时机** | 对话中实时触发 | `append_message` 写入时自动触发 |
-| **执行方式** | Agent 通过工具主动决定存储/搜索 | S6 内部异步任务自动提取/整合 |
-| **延迟影响** | 影响响应延迟 | 不影响用户体验 |
+| **触发时机** | Agent 显式调用 `save_memory` / `update_memory` | `append_message` 写入时设信号 |
+| **执行方式** | 同步走整合链路写入 | 独立 asyncio.Task 异步批量消费 |
+| **延迟影响** | 影响该工具调用延迟 | 不影响 `append_message` 延迟 |
 | **适用场景** | 关键信息即时保存（用户显式要求记住） | 全量对话洞察分析、增量整合 |
-| **外部可见性** | 通过公开接口调用 | 完全透明，调用方无感知 |
+| **外部可见性** | 通过 `save_memory` 等接口调用 | 完全透明，Agent 无感知 |
 
-- **热路径**：Agent 在编排循环中通过 `save_memory` 工具主动保存关键信息，通过 `search_memory` 工具检索相关记忆。用于用户显式要求记住某事或 Agent 判断信息极为重要的场景
-- **后台路径**：完全由 S6 内部管理，外部调用方无需感知。调用方只通过 `append_message` 注入消息，S6 内部自动完成后续处理
+- **热路径**：Agent 在编排循环中通过 `save_memory`/`update_memory`/`delete_memory` 工具主动写入，所有写入均走整合链路
+- **后台路径**：由 S6 内部异步任务驱动，Agent 无需感知；仅 S12 生命周期管理负责其启停
 
 **F6.3.1 后台自治机制（内部实现）**
 
-后台管线是 S6 的内部实现细节，对外不暴露任何启停或通知接口：
+后台管线由 S6 内部拥有的 `BackgroundWorker` 管理，生命周期与会话绑定，启停由 S12 在 `create_session`/`terminate` 阶段统一调用 `CognitiveMemory.start()` / `stop()`。Agent 与业务代码**不直接接触** start/stop。
 
 ```
-调用方视角（S11/S12 只做这些）：
-    S6.append_message(user_msg)       ─── 注入消息
-    S6.append_message(assistant_msg)  ─── 注入消息
-    S6.export_state() / import_state() ── 检查点保存/恢复
-    S6.clear_session()                ─── 会话结束清理
+生命周期调用（仅 S12）：
+    factory.create_session(..., memory=ms)
+        └─ ms.start()  ── 启动后台 Worker 与 Dream 调度器
 
-S6 内部自动执行（调用方不可见）：
+    session.terminate()
+        └─ ms.stop()   ── 等待当前整合完成 → 取消后台任务
+
+Agent / 业务调用方视角（S11 只做这些）：
+    ms.append_message(user_msg)       ─── 注入消息（同步、立即返回）
+    ms.append_message(assistant_msg)
+    ms.save_memory(content, ...)       ─── 热路径直写
+    ms.search_memory(query, ...)       ─── 检索
+    ms.export_state() / import_state() ── 检查点保存/恢复
+    ms.clear_session()                 ─── 会话级清理（不停止 Worker）
+
+S6 内部自动执行：
     append_message() 内部触发：
         └─ 将消息写入工作记忆
-        └─ 通知内部异步任务有新消息待处理
+        └─ 推入 pending 队列（保留 message_id 指针，非清空-重建）
+        └─ 设置 new_message_signal
 
-    后台异步任务（asyncio.Task，随 S6 实例创建时自动启动）：
+    BackgroundWorker 主循环（asyncio.Task）：
         loop:
-            await new_message_signal          ── 等待新消息信号
+            await new_message_signal 或超时
             if pending_count < batch_threshold:
-                continue                      ── 累积批量（可配置）
-            msgs = get_unprocessed_messages()  ── 获取未处理消息
-            extracted = extract(msgs)         ── LLM 提取（S4）
-            consolidate(extracted)            ── 智能整合（S4）
-            update_cursor(last_processed_id)   ── 推进游标
+                continue
+            # 从游标取快照但不清空 pending（消费完成后按 message_id 推进游标）
+            snapshot = pending[cursor:]
+            try:
+                extracted = await extract(snapshot)   # LLM (S4)
+                await consolidate_batch(extracted)    # LLM (S4)
+                cursor = snapshot[-1].message_id      # 成功后才推进游标
+            except Exception:
+                emit_metric("memory_background_error")
+                # pending 保留，下次循环重试
 
-    clear_session() 内部触发：
-        └─ 等待当前整合完成后停止异步任务
-    import_state() 内部触发：
-        └─ 恢复游标后重启异步任务，从游标位置继续
+    DreamScheduler 主循环（独立 asyncio.Task）：
+        loop:
+            sleep(dream_check_interval_seconds)
+            if should_run():
+                await run_dream(configured_scopes)
 ```
 
-- **消息游标**：后台任务内部维护持久化游标（`last_processed_message_id`），经 `export_state` 包含在状态快照中，恢复时自动从游标位置继续消费
-- **触发频率**：默认每条消息写入后触发信号。可配置批量阈值（累积 N 条消息后批量处理）以降低 LLM 调用成本
-- **背压控制**：当提取/整合操作耗时较长时，管线不会阻塞 `append_message` 返回。新消息自动排队，管线按自身节奏处理
-- **优雅关闭**：`clear_session` 内部等待当前整合完成后停止异步任务，确保不丢失数据
-- **失败容错**：单次提取/整合失败不影响管线运行，失败消息记入 S2（遥测），下次消费时重试
+- **消息游标**：`BackgroundWorker` 维护 `last_processed_message_id`（字符串，非索引）。`export_state` 包含游标；`import_state` 恢复游标后，若 Worker 已启动则继续按游标消费
+- **触发频率**：默认每条消息写入后触发信号；`background_batch_threshold`（默认 3）控制批量大小
+- **背压控制**：pending 队列仅追加，只在成功消费后按游标推进，杜绝"快照-清空"之间的丢消息竞态
+- **优雅关闭**：`stop()` 设置 shutdown 事件 → 等待当前处理完成 → 取消任务
+- **失败容错**：单批提取/整合失败时 pending 保留，下次循环重试；错误指标写入 S2
+- **会话级清理 vs 生命周期终止**：`clear_session` 只清空工作记忆和 pending 队列（不停 Worker）；`stop` 停止 Worker 与 Dream 调度器
 
 **F6.4 多作用域记忆隔离**
 
@@ -676,27 +702,34 @@ S6 内部自动执行（调用方不可见）：
 | `global` | 全局共享 | 永久 | 通用知识、组织规范 |
 
 - 检索时作用域可复合：如"检索当前项目中当前用户的所有语义记忆"
-- 项目级记忆自动从项目根目录配置文件（如 `praxis.md`）加载
-- 作用域之间隔离，防止跨项目、跨用户的记忆泄露
+- **项目级记忆预加载**：如果项目根目录存在 `praxis.md`，`CognitiveMemory.start()` 在首次启动时自动加载为 `project/<name>` 作用域的语义记忆。格式约定：
+  - 文件顶部可选 YAML frontmatter（`---` 分隔），字段包括 `project`（覆盖默认名称）、`tags`
+  - 正文每个 `## <heading>` 二级标题段作为独立记忆条目，heading 作为 summary，段内容作为 content
+  - 预加载条目 `metadata.source = "project_praxis_md"`，避免重复导入
+- 作用域之间严格隔离，`ScopedStore.query` 仅返回明确指定的作用域，防止跨项目/跨用户泄露
 - 每条记忆携带结构化元数据（标签、分类、来源），支持元数据过滤检索
 
 **F6.5 混合检索架构**
 
-- **语义搜索**：通过向量嵌入进行语义相似度检索（默认检索路径）
+- **语义搜索**：通过向量嵌入（LiteLLM embedding via S4）进行余弦相似度检索，默认检索路径
 - **元数据过滤**：按作用域、认知类型、标签、时间范围过滤
-- **重排序（Reranking）**：语义搜索返回候选集后，通过二次评分模型重排序提升精确度
+- **综合重排序**：向量搜索召回候选集后，以加权公式重排：
+  `final_score = 0.6·semantic + 0.2·freshness + 0.1·access_popularity + 0.1·confidence`
+  其中 freshness 按更新时间指数衰减，access_popularity 按 `access_count` 归一化
 - **渐进式检索**：三层结构确保高效访问
-  - 轻量索引（~150 字符/条目，始终加载到系统提示）
-  - 记忆摘要（语义搜索命中后返回的结构化摘要）
-  - 完整内容（按需加载原始详细内容）
-- 检索结果按相关性排序，包含：记忆内容、来源信息、时间戳、置信度
+  - **轻量索引**（`get_memory_index`，~150 字符/条，始终加载到系统提示）
+  - **语义结果**（`search_memory`，含 relevance_score 与 source）
+  - **完整内容**（`load_memory_detail`，按需加载原始详细内容，同时累计 `access_count`）
+- 检索结果按相关性排序，包含：记忆内容、来源作用域、时间戳、置信度、综合评分
 
 **F6.6 工作记忆（Scratchpad）**
 
-- Agent 主动维护的结构化笔记，持久化到文件系统（通过 S3），不占上下文 Token 预算
-- **进度文件**（`progress.json`）：已完成工作列表、当前步骤、下一步计划
-- **待办列表**（`todos.json`）：结构化任务跟踪（ID、描述、状态、优先级）
-- **功能列表**（`features.json`）：长期项目的功能清单（描述、步骤、pass/fail 状态）
+- Agent 主动维护的结构化笔记，通过 S3 键值存储持久化（命名空间 `scratchpad`，键前缀 `<session_id>:`），不占上下文 Token 预算
+- **已知键白名单**（`Scratchpad.KNOWN_KEYS`，强校验）：
+  - `progress.json`：已完成工作列表、当前步骤、下一步计划
+  - `todos.json`：结构化任务跟踪（ID、描述、状态、优先级）
+  - `features.json`：长期项目的功能清单（描述、步骤、pass/fail 状态）
+- `write_scratchpad` 对未在白名单中的 key 抛出 `ValueError`
 - 上下文重置后，Agent 可通过读取草稿快速恢复工作状态
 
 **F6.7 记忆即提示（Memory-as-Hint）**

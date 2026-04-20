@@ -1,19 +1,19 @@
 """记忆保留与版本管理。
 
-时间衰减（可配置衰减曲线）、动态遗忘（低相关性标记 INACTIVE）、
-版本历史（关键事实更新保留版本链）、不可变审计。
+时间衰减、动态遗忘、版本链、不可变审计。
 """
 
 import math
 from datetime import datetime, timezone
+from uuid import uuid4
 
+from praxis.memory.store import ScopedMemoryStore
 from praxis.models.memory import (
     MemoryEntry,
     MemoryScope,
     MemoryStatus,
     MemoryVersion,
 )
-from praxis.memory.scope import ScopedMemoryStore
 from praxis.persistence.store import PersistenceStore
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
@@ -24,10 +24,7 @@ VERSION_NAMESPACE = "memory_versions"
 
 
 class RetentionManager:
-    """记忆保留与版本管理器。
-
-    管理时间衰减、动态遗忘、版本历史和不可变审计。
-    """
+    """记忆保留与版本管理器。"""
 
     def __init__(
         self,
@@ -44,54 +41,28 @@ class RetentionManager:
         self.min_access_count = min_access_count
 
     def compute_decay(self, entry: MemoryEntry) -> float:
-        """计算记忆的时间衰减因子。
-
-        使用指数衰减：factor = 0.5 ^ (age_days / half_life)
-
-        Args:
-            entry: 记忆条目。
-
-        Returns:
-            衰减因子 [0.0, 1.0]。
-        """
+        """指数衰减：factor = 0.5 ^ (age_days / half_life)。"""
         now = datetime.now(timezone.utc)
         age_days = (now - entry.updated_at).total_seconds() / 86400.0
         return math.pow(0.5, age_days / self.decay_half_life_days)
 
     def compute_relevance(self, entry: MemoryEntry) -> float:
-        """计算记忆的综合相关性评分。
-
-        综合 confidence × 时间衰减 × 访问活跃度。
-
-        Args:
-            entry: 记忆条目。
-
-        Returns:
-            相关性评分 [0.0, 1.0]。
-        """
+        """综合 confidence × 衰减 × 访问活跃度。"""
         decay = self.compute_decay(entry)
-        access_factor = min(entry.access_count / 10.0, 1.0) if entry.access_count > 0 else 0.1
+        if entry.access_count > 0:
+            access_factor = min(entry.access_count / 10.0, 1.0)
+        else:
+            access_factor = 0.1
         return entry.confidence * decay * access_factor
 
     async def mark_inactive(self, entry: MemoryEntry, reason: str = "") -> None:
-        """将记忆标记为 INACTIVE（动态遗忘）。
-
-        不物理删除，仅标记状态。
-
-        Args:
-            entry: 记忆条目。
-            reason: 标记原因。
-        """
+        """将记忆标记为 INACTIVE（动态遗忘）。不物理删除。"""
         await self.save_version(entry, reason or "标记为 INACTIVE（动态遗忘）")
         entry.status = MemoryStatus.INACTIVE
         entry.updated_at = datetime.now(timezone.utc)
         await self.scoped_store.update(entry)
 
-        log.info(
-            "记忆标记为 INACTIVE",
-            memory_id=entry.memory_id,
-            reason=reason,
-        )
+        log.info("记忆标记为 INACTIVE", memory_id=entry.memory_id, reason=reason)
         emit_metric(
             "memory_retention_inactive",
             1.0,
@@ -105,19 +76,13 @@ class RetentionManager:
         new_entry: MemoryEntry,
         reason: str = "",
     ) -> str:
-        """用新记忆取代旧记忆（版本链）。
-
-        旧记忆标记 SUPERSEDED，新记忆保存为 ACTIVE。
-
-        Args:
-            old_entry: 旧记忆条目。
-            new_entry: 新记忆条目。
-            reason: 取代原因。
-
-        Returns:
-            新记忆的 ID。
-        """
+        """用新记忆取代旧记忆（版本链）。"""
         await self.save_version(old_entry, reason or "被新版本取代")
+
+        # 若调用方复用了旧条目的 memory_id，分配新 ID 防止覆盖 SUPERSEDED 记录
+        if new_entry.memory_id == old_entry.memory_id:
+            new_entry.memory_id = uuid4().hex
+
         old_entry.status = MemoryStatus.SUPERSEDED
         old_entry.superseded_by = new_entry.memory_id
         old_entry.updated_at = datetime.now(timezone.utc)
@@ -141,12 +106,7 @@ class RetentionManager:
         return new_entry.memory_id
 
     async def save_version(self, entry: MemoryEntry, reason: str = "") -> None:
-        """保存记忆版本快照到审计日志。
-
-        Args:
-            entry: 当前记忆条目。
-            reason: 变更原因。
-        """
+        """保存记忆版本快照到审计日志。"""
         version = MemoryVersion(
             memory_id=entry.memory_id,
             version=entry.version,
@@ -162,14 +122,7 @@ class RetentionManager:
         )
 
     async def get_version_history(self, memory_id: str) -> list[MemoryVersion]:
-        """获取记忆的完整版本历史。
-
-        Args:
-            memory_id: 记忆 ID。
-
-        Returns:
-            版本记录列表（按版本号排序）。
-        """
+        """获取记忆的完整版本历史。"""
         prefix = f"{memory_id}:v"
         keys = await self.version_store.list_keys(VERSION_NAMESPACE, prefix)
         versions: list[MemoryVersion] = []
@@ -181,14 +134,7 @@ class RetentionManager:
         return versions
 
     async def run_decay_sweep(self, scope: MemoryScope) -> int:
-        """执行衰减扫描，将低相关性记忆标记为 INACTIVE。
-
-        Args:
-            scope: 扫描的作用域。
-
-        Returns:
-            标记为 INACTIVE 的记忆数量。
-        """
+        """执行衰减扫描，将低相关性记忆标记为 INACTIVE。"""
         entries = await self.scoped_store.list_scope(scope)
         count = 0
         now = datetime.now(timezone.utc)
@@ -205,8 +151,7 @@ class RetentionManager:
                 if relevance < 0.1:
                     await self.mark_inactive(
                         entry,
-                        f"衰减扫描: relevance={relevance:.4f}, "
-                        f"inactive_days={inactive_days:.1f}",
+                        f"衰减扫描: relevance={relevance:.4f}, inactive_days={inactive_days:.1f}",
                     )
                     count += 1
 
