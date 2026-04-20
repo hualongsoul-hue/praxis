@@ -4,7 +4,7 @@
 """
 
 from praxis.persistence.store import PersistenceStore
-from praxis.tools.builtins.autonomy import ask_user, attempt_completion, update_notes, update_plan
+from praxis.tools.builtins.autonomy import ask_user, submit_result, update_notes, update_plan
 from praxis.tools.builtins.file_ops import edit_file, list_dir, read_file, write_file
 from praxis.tools.builtins.network import web_fetch, web_search
 from praxis.tools.builtins.search import code_search, find_by_name, grep_search
@@ -45,4 +45,4 @@ def register_builtins(
     registry.register(update_plan.DEFINITION, update_plan.create_handler(store))
     registry.register(update_notes.DEFINITION, update_notes.create_handler(store))
     registry.register(ask_user.DEFINITION, ask_user.handle)
-    registry.register(attempt_completion.DEFINITION, attempt_completion.handle)
+    registry.register(submit_result.DEFINITION, submit_result.handle)

@@ -281,11 +281,11 @@ class TestShellAndSystem:
         assert "ASK_USER" in result
         assert "你确定吗" in result
 
-    async def test_attempt_completion(self) -> None:
-        from praxis.tools.builtins.autonomy.attempt_completion import handle
+    async def test_submit_result(self) -> None:
+        from praxis.tools.builtins.autonomy.submit_result import handle
 
         result = await handle({"result": "任务完成"})
-        assert "ATTEMPT_COMPLETION" in result
+        assert "SUBMIT_RESULT" in result
         assert "任务完成" in result
 
 
@@ -487,7 +487,7 @@ class TestBuiltinRegistration:
             "run_command",
             "web_fetch", "web_search",
             "get_system_info",
-            "update_plan", "update_notes", "ask_user", "attempt_completion",
+            "update_plan", "update_notes", "ask_user", "submit_result",
         }
         registered = set(registry.list_tools())
         assert expected == registered

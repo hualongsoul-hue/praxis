@@ -4,8 +4,9 @@
 底层复用 chat 接口，附加专用 System Prompt。
 """
 
-import json
 from typing import Any
+
+from json_repair import repair_json
 
 from praxis.gateway.chat import chat
 from praxis.gateway.router import GatewayRouter
@@ -79,18 +80,17 @@ async def judge(
     response = await chat(gateway, messages, model=model, **kwargs)
     raw_text = response.content or ""
 
-    try:
-        data = json.loads(raw_text)
+    data = repair_json(raw_text, return_objects=True)
+    if isinstance(data, dict):
         return JudgeResult(
             verdict=data.get("verdict", False),
             confidence=data.get("confidence", 0.0),
             reasoning=data.get("reasoning", ""),
             raw_response=raw_text,
         )
-    except (json.JSONDecodeError, KeyError, ValueError):
-        return JudgeResult(
-            verdict=False,
-            confidence=0.0,
-            reasoning=f"无法解析 LLM 响应为 JSON: {raw_text[:200]}",
-            raw_response=raw_text,
-        )
+    return JudgeResult(
+        verdict=False,
+        confidence=0.0,
+        reasoning=f"无法解析 LLM 响应为 JSON: {raw_text[:200]}",
+        raw_response=raw_text,
+    )

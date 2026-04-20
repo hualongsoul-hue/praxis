@@ -1,7 +1,7 @@
-"""Praxis 流式控制台 Agent 示例。
+"""Praxis 流式控制台 Agent 示例（内建工具）。
 
-交互式 REPL，实时显示编排事件（轮次、工具调用、终止），
-最终输出 Agent 响应内容。
+交互式 REPL，实时显示编排事件（轮次、工具调用、终止），默认加载 Praxis
+所有内建工具。适合观察 Agent 在多轮工具调用中的行为。
 
 用法::
 
@@ -10,19 +10,33 @@
 
 import asyncio
 import json
-import sys
-
-from datetime import datetime, timezone
+from pathlib import Path
 
 from praxis.agent import create_agent_session
-from praxis.config.schemas import GatewayConfig, PersistenceConfig
+from praxis.config.schemas import GatewayConfig, PersistenceConfig, ToolsConfig
 from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
-from praxis.guardrails.permissions import PermissionManager
+from praxis.guardrails.permissions import (
+    PermissionManager,
+    PermissionPolicy,
+    PermissionRule,
+)
 from praxis.guardrails.rules import RuleEngine
-from praxis.models.tools import ToolDefinition, ToolMetadata
+from praxis.models.guardrails import VerdictType
 from praxis.persistence.store import create_store
-from praxis.tools.registry import ToolRegistry
+from praxis.tools.builtins.autonomy import ask_user
+from praxis.tools.override import override_tool
+
+
+async def interactive_ask_user(args: dict) -> str:
+    """覆盖默认 ask_user 为真正的终端交互；用 to_thread 避免阻塞事件循环。"""
+    question = args.get("question", "")
+    print("\n╭─ Agent 向你提问 ────────────────────")
+    print(f"│ {question}")
+    print("╰────────────────────────────────────")
+    answer = await asyncio.to_thread(input, "  你的回答 > ")
+    answer = answer.strip()
+    return answer or "（用户未提供回答）"
 
 GATEWAY_CONFIG = GatewayConfig(
     model_list=[
@@ -58,10 +72,28 @@ def print_event(event) -> None:
             print("  << LLM 响应", flush=True)
     elif t == "tool_call_start":
         name = d.get("tool_name", "unknown")
-        print(f"  🔧 {name} ...", end="", flush=True)
+        args = d.get("arguments") or {}
+        args_str = json.dumps(args, ensure_ascii=False)
+        if len(args_str) > 200:
+            args_str = args_str[:200] + "...(truncated)"
+        print(f"  [tool] {name} args={args_str}", flush=True)
     elif t == "tool_call_end":
-        ok = d.get("success", False)
-        print(f" {'✓' if ok else '✗'}", flush=True)
+        name = d.get("tool_name", "unknown")
+        if d.get("needs_user_confirm"):
+            print(f"  [tool] {name} -> NEEDS_CONFIRM ({d.get('reason', '')})", flush=True)
+        elif d.get("skipped"):
+            print(f"  [tool] {name} -> SKIPPED ({d.get('reason', '')})", flush=True)
+        else:
+            ok = d.get("success", False)
+            mark = "OK" if ok else "FAIL"
+            detail = d.get("content") if ok else d.get("error")
+            detail_str = "" if detail is None else str(detail)
+            if len(detail_str) > 200:
+                detail_str = detail_str[:200] + "...(truncated)"
+            ms = d.get("execution_time_ms")
+            ms_str = f" [{ms:.0f}ms]" if isinstance(ms, (int, float)) else ""
+            suffix = f" {detail_str}" if detail_str else ""
+            print(f"  [tool] {name} -> {mark}{ms_str}{suffix}", flush=True)
     elif t == "termination":
         reason = d.get("reason", "unknown")
         print(f"  [终止: {reason}]", flush=True)
@@ -72,72 +104,36 @@ async def main() -> None:
 
     rule_engine = RuleEngine()
     rule_engine.register_builtin_rules()
-    guardrails = GuardrailEngine(rule_engine, PermissionManager())
+    auto_approve_rules = [
+        PermissionRule(category=c, permission=VerdictType.AUTO_APPROVE)
+        for c in ("file_ops", "search", "shell", "system", "autonomy", "general")
+    ]
+    permissions = PermissionManager(PermissionPolicy(rules=auto_approve_rules))
+    guardrails = GuardrailEngine(rule_engine, permissions)
 
     gateway = GatewayRouter(GATEWAY_CONFIG)
 
-    async def handle_get_time(_: dict) -> str:
-        return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-
-    async def handle_calculate(params: dict) -> str:
-        expr = params.get("expression", "")
-        try:
-            result = eval(expr, {"__builtins__": {}}, {})
-            return json.dumps({"expression": expr, "result": result})
-        except Exception as e:
-            return json.dumps({"expression": expr, "error": str(e)})
-
-    async def handle_get_weather(params: dict) -> str:
-        city = params.get("city", "unknown")
-        return json.dumps({"city": city, "temperature": "22°C", "condition": "晴", "humidity": "45%"})
-
-    registry = ToolRegistry()
-    registry.register(
-        ToolDefinition(
-            name="get_current_time",
-            description="获取当前 UTC 时间",
-            parameters={"type": "object", "properties": {}},
-            metadata=ToolMetadata(category="utility", permission_level="auto_approve", readonly=True),
-        ),
-        handler=handle_get_time,
-    )
-    registry.register(
-        ToolDefinition(
-            name="calculate",
-            description="计算数学表达式",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "expression": {"type": "string", "description": "数学表达式，如 '2+3*4'"},
-                },
-                "required": ["expression"],
-            },
-            metadata=ToolMetadata(category="utility", permission_level="auto_approve", readonly=True),
-        ),
-        handler=handle_calculate,
-    )
-    registry.register(
-        ToolDefinition(
-            name="get_weather",
-            description="查询城市天气",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "city": {"type": "string", "description": "城市名"},
-                },
-                "required": ["city"],
-            },
-            metadata=ToolMetadata(category="utility", permission_level="auto_approve", readonly=True),
-        ),
-        handler=handle_get_weather,
+    workspace = Path.cwd().resolve()
+    tools_config = ToolsConfig(
+        allowed_paths=[str(workspace)],
+        shell_timeout=60.0,
+        network_allowed=True,
     )
 
     session = await create_agent_session(
-        store=store, guardrails=guardrails, gateway=gateway, registry=registry,
+        store=store,
+        guardrails=guardrails,
+        gateway=gateway,
+        tools_config=tools_config,
     )
 
-    print("Praxis Agent 已就绪")
-    print("输入 /quit 退出，/clear 清空上下文")
+    # 覆盖 ask_user 为真实终端交互
+    override_tool(session.registry, ask_user.DEFINITION, interactive_ask_user)
+
+    print("Praxis Agent 已就绪（流式，内建工具模式）")
+    print(f"  沙箱路径: {workspace}")
+    print(f"  已注册工具: {', '.join(sorted(session.registry.list_tools()))}")
+    print("输入 /quit 退出，/clear 清空上下文，/tools 列出工具")
     print("-" * 50)
 
     while True:
@@ -155,22 +151,25 @@ async def main() -> None:
             session.loop.state.current_turn = 0
             print("上下文已清空。")
             continue
+        if user_input == "/tools":
+            for name in sorted(session.registry.list_tools()):
+                defn = session.registry.get_definition(name)
+                print(f"  - {name}: {defn.description}")
+            continue
 
         print()
         async for event in session.run_turn_stream(user_input):
             print_event(event)
 
-        # 从对话历史中取最后一条助手消息作为最终输出
         for msg in reversed(session.assembler.conversation_history):
             if msg.get("role") == "assistant" and msg.get("content"):
                 print(f"\n{msg['content']}")
                 break
 
+    await session.terminate()
     await store.close()
     print("\n再见！")
 
 
 if __name__ == "__main__":
-    if sys.platform == "win32":
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(main())

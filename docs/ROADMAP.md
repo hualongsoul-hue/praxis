@@ -209,8 +209,8 @@ Phase 16: 集成测试与收尾优化
   - 输出物：`src/praxis/tools/builtins/search/grep_search.py`、`search/find_by_name.py`、`search/code_search.py`
   - 验证：在测试目录中搜索已知模式，返回正确匹配结果
 
-- [ ] **5.4** 实现内置 Shell/网络/系统/自治管理工具，每个工具独立文件，按功能域子文件夹组织——Shell：`run_command`（同步/后台）；网络：`web_fetch`、`web_search`；系统：`get_system_info`；自治管理：`update_plan`、`update_notes`、`ask_user`、`attempt_completion`
-  - 输出物：`src/praxis/tools/builtins/shell/run_command.py`、`network/web_fetch.py`、`network/web_search.py`、`system/get_system_info.py`、`autonomy/update_plan.py`、`autonomy/update_notes.py`、`autonomy/ask_user.py`、`autonomy/attempt_completion.py`
+- [ ] **5.4** 实现内置 Shell/网络/系统/自治管理工具，每个工具独立文件，按功能域子文件夹组织——Shell：`run_command`（同步/后台）；网络：`web_fetch`、`web_search`；系统：`get_system_info`；自治管理：`update_plan`、`update_notes`、`ask_user`、`submit_result`
+  - 输出物：`src/praxis/tools/builtins/shell/run_command.py`、`network/web_fetch.py`、`network/web_search.py`、`system/get_system_info.py`、`autonomy/update_plan.py`、`autonomy/update_notes.py`、`autonomy/ask_user.py`、`autonomy/submit_result.py`
   - 验证：`run_command("echo hello")` 返回 "hello"；`get_system_info` 返回当前系统信息
 
 - [ ] **5.5** 实现工具执行管线——`execute_tool(name, arguments)` 按序执行：参数验证（Schema 校验）→ 沙箱执行 → 结果捕获 → 格式化为 LLM 可读观察结果，支持并发策略（只读并发、写串行），可配置超时

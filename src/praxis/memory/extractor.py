@@ -4,8 +4,9 @@
 按类型实例化 SemanticMemory/EpisodicMemory/ProceduralMemory 保留结构化字段。
 """
 
-import json
 from typing import Any
+
+from json_repair import repair_json
 
 from praxis.gateway.chat import chat
 from praxis.gateway.router import GatewayRouter
@@ -133,7 +134,17 @@ class MemoryExtractor:
             {"role": "user", "content": conversation_text},
         ]
 
-        response = await chat(self.gateway, messages, model=self.model)
+        try:
+            response = await chat(self.gateway, messages, model=self.model)
+        except Exception as exc:
+            log.warning(
+                "记忆提取 LLM 调用失败",
+                memory_type=memory_type.value,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            return []
+
         raw_text = response.content or "[]"
 
         items = self.parse_response(raw_text)
@@ -158,18 +169,11 @@ class MemoryExtractor:
     @staticmethod
     def parse_response(raw_text: str) -> list[dict[str, Any]]:
         """容错解析 JSON 数组。"""
-        text = raw_text.strip()
-        if text.startswith("```"):
-            lines = text.split("\n")
-            text = "\n".join(lines[1:-1]) if len(lines) > 2 else text
-        try:
-            data = json.loads(text)
-            if isinstance(data, list):
-                return data
-            return []
-        except (json.JSONDecodeError, ValueError):
-            log.warning("记忆提取响应解析失败", raw_preview=raw_text[:200])
-            return []
+        data = repair_json(raw_text, return_objects=True)
+        if isinstance(data, list):
+            return data
+        log.warning("记忆提取响应解析失败", raw_preview=raw_text[:200])
+        return []
 
     @staticmethod
     def clamp_confidence(raw: Any) -> float:

@@ -872,6 +872,15 @@ wheels = [
 ]
 
 [[package]]
+name = "json-repair"
+version = "0.59.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/32/41/4ae9c6e711647a41b4e0c04bce815113ce9c0286eff6dc6fb86979b2fb9f/json_repair-0.59.4.tar.gz", hash = "sha256:559ca1828f6f566530663cd96d64bee29f8282b9d2ff0e661e05fa87b4171ab3", size = 47624, upload-time = "2026-04-15T06:48:40.776Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/74/c4/ec3068436d2275731539b7a43fbc947f502bc3fe149856a5d00368c7b087/json_repair-0.59.4-py3-none-any.whl", hash = "sha256:46052e646bc0b0c39db672ebbf732f774f3c1a5bde81a54f0b0e19d3af4f45cd", size = 46697, upload-time = "2026-04-15T06:48:39.61Z" },
+]
+
+[[package]]
 name = "jsonschema"
 version = "4.23.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1232,6 +1241,7 @@ source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
     { name = "httpx" },
+    { name = "json-repair" },
     { name = "jsonschema" },
     { name = "litellm" },
     { name = "mcp" },
@@ -1256,6 +1266,7 @@ dev = [
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "json-repair", specifier = ">=0.30" },
     { name = "jsonschema", specifier = ">=4.20" },
     { name = "litellm", specifier = ">=1.50" },
     { name = "mcp", specifier = ">=1.0" },

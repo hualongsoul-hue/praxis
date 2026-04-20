@@ -1,4 +1,4 @@
-"""内置工具：attempt_completion。
+"""内置工具：submit_result。
 
 Agent 认为任务已完成时调用，提交最终结果。
 实际完成判定由 S11 编排循环 + S10 验证引擎协调。
@@ -9,7 +9,7 @@ from typing import Any
 from praxis.models.tools import ToolDefinition, ToolMetadata
 
 DEFINITION = ToolDefinition(
-    name="attempt_completion",
+    name="submit_result",
     description="Agent 认为当前任务已完成时调用。提交完成结果和摘要。",
     parameters={
         "type": "object",
@@ -38,7 +38,7 @@ async def handle(args: dict[str, Any]) -> str:
     """返回完成信号，由 S11 编排循环处理。"""
     result = args["result"]
     command = args.get("command")
-    parts = [f"[ATTEMPT_COMPLETION]\nResult: {result}"]
+    parts = [f"[SUBMIT_RESULT]\nResult: {result}"]
     if command:
         parts.append(f"Verification command: {command}")
     return "\n".join(parts)

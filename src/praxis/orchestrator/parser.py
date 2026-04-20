@@ -5,9 +5,9 @@
 并行工具调用批量解析，Handoff 请求检测。
 """
 
-import json
 from typing import Any
 
+from json_repair import repair_json
 from pydantic import BaseModel
 
 from praxis.models.responses import ModelResponse
@@ -99,7 +99,8 @@ class OutputParser:
         """
         if not raw_arguments:
             return {}
-        return json.loads(raw_arguments)
+        result = repair_json(raw_arguments, return_objects=True)
+        return result if isinstance(result, dict) else {}
 
     @staticmethod
     def extract_schema_response(
@@ -117,5 +118,5 @@ class OutputParser:
         """
         if not content:
             return None
-        data = json.loads(content)
+        data = repair_json(content, return_objects=True)
         return schema_model.model_validate(data)

@@ -4,8 +4,9 @@
 冲突解决：旧版标记 SUPERSEDED。整合失败时保守 ADD。
 """
 
-import json
 from typing import Any
+
+from json_repair import repair_json
 
 from pydantic import BaseModel, Field
 
@@ -162,13 +163,14 @@ class MemoryConsolidator:
     @staticmethod
     def parse_decision(raw_text: str) -> ConsolidationResult:
         """解析 LLM 整合决策。失败时保守 ADD。"""
-        text = raw_text.strip()
-        if text.startswith("```"):
-            lines = text.split("\n")
-            text = "\n".join(lines[1:-1]) if len(lines) > 2 else text
-
+        data = repair_json(raw_text, return_objects=True)
+        if not isinstance(data, dict):
+            log.warning("整合决策解析失败，保守 ADD", raw_preview=raw_text[:200])
+            return ConsolidationResult(
+                action=ConsolidationAction.ADD,
+                reasoning=f"无法解析 LLM 响应: {raw_text[:100]}",
+            )
         try:
-            data = json.loads(text)
             action_str = str(data.get("action", "add")).lower()
             action = ConsolidationAction(action_str)
             return ConsolidationResult(
@@ -176,7 +178,7 @@ class MemoryConsolidator:
                 reasoning=str(data.get("reasoning", "")),
                 merged_content=str(data.get("merged_content", "")),
             )
-        except (json.JSONDecodeError, ValueError):
+        except ValueError:
             log.warning("整合决策解析失败，保守 ADD", raw_preview=raw_text[:200])
             return ConsolidationResult(
                 action=ConsolidationAction.ADD,

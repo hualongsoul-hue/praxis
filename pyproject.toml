@@ -17,6 +17,7 @@ dependencies = [
     "pyyaml>=6.0",
     "redis>=5.0",
     "jsonschema>=4.20",
+    "json-repair>=0.30",
     "playwright>=1.40",
 ]
 

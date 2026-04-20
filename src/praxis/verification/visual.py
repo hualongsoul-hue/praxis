@@ -5,11 +5,11 @@
 """
 
 import base64
-import json
 import time
 from pathlib import Path
 from typing import Any
 
+from json_repair import repair_json
 from playwright.async_api import async_playwright
 
 from praxis.gateway.chat import chat
@@ -168,32 +168,8 @@ class VisualVerifier:
         response = await chat(self.gateway, messages, model=self.model)
         raw_text = response.content or ""
 
-        try:
-            data = json.loads(raw_text)
-            passed = data.get("pass", False)
-            confidence = data.get("confidence", 0.0)
-            description = data.get("description", "")
-            differences = data.get("differences", [])
-
-            failures: list[FailureDetail] = []
-            for diff in differences:
-                failures.append(FailureDetail(
-                    message=str(diff),
-                    severity="warning",
-                    rule="visual_difference",
-                ))
-
-            status = VerificationStatus.PASS if passed else VerificationStatus.FAIL
-            return VerificationResult(
-                status=status,
-                verification_type=VerificationType.VISUAL,
-                verifier_name="visual",
-                score=confidence,
-                failures=failures,
-                feedback=description,
-                metadata={"raw_response": raw_text},
-            )
-        except (json.JSONDecodeError, ValueError):
+        data = repair_json(raw_text, return_objects=True)
+        if not isinstance(data, dict):
             log.warning("视觉评估响应解析失败", raw_text=raw_text[:200])
             return VerificationResult(
                 status=VerificationStatus.ERROR,
@@ -202,6 +178,30 @@ class VisualVerifier:
                 feedback=f"无法解析 LLM 响应: {raw_text[:200]}",
                 metadata={"raw_response": raw_text},
             )
+
+        passed = data.get("pass", False)
+        confidence = data.get("confidence", 0.0)
+        description = data.get("description", "")
+        differences = data.get("differences", [])
+
+        failures: list[FailureDetail] = []
+        for diff in differences:
+            failures.append(FailureDetail(
+                message=str(diff),
+                severity="warning",
+                rule="visual_difference",
+            ))
+
+        status = VerificationStatus.PASS if passed else VerificationStatus.FAIL
+        return VerificationResult(
+            status=status,
+            verification_type=VerificationType.VISUAL,
+            verifier_name="visual",
+            score=confidence,
+            failures=failures,
+            feedback=description,
+            metadata={"raw_response": raw_text},
+        )
 
 
 async def run_visual(

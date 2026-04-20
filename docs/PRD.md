@@ -407,7 +407,7 @@ model_list:
   - **Shell 执行类**：`run_command`、`run_command_background`
   - **网络类**：`web_fetch`、`web_search`
   - **系统信息类**：`get_system_info`
-  - **自治管理类**：`update_plan`、`update_notes`、`ask_user`、`attempt_completion`
+  - **自治管理类**：`update_plan`、`update_notes`、`ask_user`、`submit_result`
 - 支持运行时动态注册和注销工具
 
 **F5.2 MCP 完整集成**

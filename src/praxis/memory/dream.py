@@ -5,11 +5,11 @@
 """
 
 import asyncio
-import json
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
+from json_repair import repair_json
 from pydantic import BaseModel, Field
 
 from praxis.gateway.chat import chat
@@ -261,18 +261,11 @@ class DreamConsolidator:
     @staticmethod
     def parse_response(raw_text: str) -> dict[str, Any]:
         """容错解析 JSON 对象。"""
-        text = raw_text.strip()
-        if text.startswith("```"):
-            lines = text.split("\n")
-            text = "\n".join(lines[1:-1]) if len(lines) > 2 else text
-        try:
-            data = json.loads(text)
-            if isinstance(data, dict):
-                return data
-            return {}
-        except (json.JSONDecodeError, ValueError):
-            log.warning("梦境整理响应解析失败", raw_preview=raw_text[:200])
-            return {}
+        data = repair_json(raw_text, return_objects=True)
+        if isinstance(data, dict):
+            return data
+        log.warning("梦境整理响应解析失败", raw_preview=raw_text[:200])
+        return {}
 
 
 class DreamScheduler:

@@ -5,8 +5,9 @@ S8.check_tool_call → S9.check_circuit → S5.execute_tool →
 S9.record_outcome → 失败时 S9.classify_error 决策。
 """
 
-import json
 from typing import Any
+
+from json_repair import repair_json
 
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.models.guardrails import VerdictType
@@ -106,14 +107,18 @@ class ToolCoordinator:
         name = tool_call.function.name
         raw_args = tool_call.function.arguments
 
+        # 解析参数
+        arguments = self.parse_arguments(raw_args)
+
         self.emitter.emit(
             "tool_call_start",
             turn=turn,
-            data={"tool_name": name, "tool_call_id": tool_call.id},
+            data={
+                "tool_name": name,
+                "tool_call_id": tool_call.id,
+                "arguments": arguments,
+            },
         )
-
-        # 解析参数
-        arguments = self.parse_arguments(raw_args)
 
         # S9 降级：工具未注册时尝试查询降级替代
         if not self.registry.has_tool(name) and self.fallbacks is not None:
@@ -137,6 +142,16 @@ class ToolCoordinator:
                     tool_call, turn, f"护栏拒绝: {verdict.reason}", tripwire=verdict.tripwire
                 )
             if verdict.verdict == VerdictType.CONFIRM:
+                self.emitter.emit(
+                    "tool_call_end",
+                    turn=turn,
+                    data={
+                        "tool_name": name,
+                        "tool_call_id": tool_call.id,
+                        "needs_user_confirm": True,
+                        "reason": verdict.reason,
+                    },
+                )
                 return ToolCallOutcome(
                     tool_call=tool_call,
                     needs_user_confirm=True,
@@ -180,6 +195,9 @@ class ToolCoordinator:
                 "tool_name": name,
                 "tool_call_id": tool_call.id,
                 "success": result.success,
+                "content": result.content,
+                "error": result.error,
+                "execution_time_ms": result.execution_time_ms,
             },
         )
 
@@ -264,4 +282,5 @@ class ToolCoordinator:
         """解析参数 JSON 字符串。"""
         if not raw:
             return {}
-        return json.loads(raw)
+        result = repair_json(raw, return_objects=True)
+        return result if isinstance(result, dict) else {}
