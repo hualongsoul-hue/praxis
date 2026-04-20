@@ -42,13 +42,3 @@ class CompactionResult(BaseModel):
     compacted_tokens: int = 0
     summary: str = ""
     retained_file_refs: list[str] = Field(default_factory=list)
-
-
-class ContextState(BaseModel):
-    """可序列化的上下文状态。"""
-
-    messages: list[dict[str, Any]] = Field(default_factory=list)
-    tool_schemas: list[dict[str, Any]] = Field(default_factory=list)
-    file_refs: list[str] = Field(default_factory=list)
-    compaction_count: int = 0
-    total_turns: int = 0

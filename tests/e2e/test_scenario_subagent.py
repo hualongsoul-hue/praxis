@@ -20,6 +20,7 @@ from praxis.guardrails.permissions import PermissionManager
 from praxis.guardrails.rules import RuleEngine
 from praxis.models.subagent import SubagentMode, SubagentSpec, SubagentStatus
 from praxis.persistence.store import PersistenceStore, create_store
+from praxis.gateway.router import GatewayRouter
 from praxis.subagent.isolation import IsolatedContext
 from praxis.tools.registry import ToolRegistry
 
@@ -40,6 +41,7 @@ class TestSubagentDelegation:
     def test_isolated_context_creates_independent_session(
         self,
         sub_store: PersistenceStore,
+        mock_gateway: GatewayRouter,
     ) -> None:
         """验证：子代理获得独立的组件实例集。"""
         guardrails = GuardrailEngine(RuleEngine(), PermissionManager())
@@ -61,6 +63,7 @@ class TestSubagentDelegation:
 
         isolation = IsolatedContext(
             store=sub_store,
+            gateway=mock_gateway,
             orchestrator_config=OrchestratorConfig(),
             context_config=ContextConfig(),
         )
@@ -86,6 +89,7 @@ class TestSubagentDelegation:
     def test_subagent_session_is_independent(
         self,
         sub_store: PersistenceStore,
+        mock_gateway: GatewayRouter,
     ) -> None:
         """验证：子代理会话 ID 与主会话不同，状态互相隔离。"""
         guardrails = GuardrailEngine(RuleEngine(), PermissionManager())
@@ -93,6 +97,7 @@ class TestSubagentDelegation:
 
         isolation = IsolatedContext(
             store=sub_store,
+            gateway=mock_gateway,
             orchestrator_config=OrchestratorConfig(),
             context_config=ContextConfig(),
         )
@@ -111,12 +116,14 @@ class TestSubagentDelegation:
     def test_subagent_max_turns_respected(
         self,
         sub_store: PersistenceStore,
+        mock_gateway: GatewayRouter,
     ) -> None:
         """验证：子代理会话遵守 max_turns 限制。"""
         guardrails = GuardrailEngine(RuleEngine(), PermissionManager())
 
         isolation = IsolatedContext(
             store=sub_store,
+            gateway=mock_gateway,
             orchestrator_config=OrchestratorConfig(max_turns=100),
             context_config=ContextConfig(),
         )

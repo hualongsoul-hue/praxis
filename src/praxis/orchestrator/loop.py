@@ -5,12 +5,15 @@
 支持同步/异步/流式三种模式。
 """
 
+import asyncio
 import time
 from collections.abc import AsyncIterator
 from typing import Any
 
 from praxis.config.schemas import OrchestratorConfig
 from praxis.context.assembler import PromptAssembler
+from praxis.context.compaction import ContextCompactor
+from praxis.context.masking import ObservationMasker
 from praxis.context.tool_injection import ToolInjector
 from praxis.gateway.chat import chat
 from praxis.gateway.router import GatewayRouter
@@ -64,6 +67,8 @@ class OrchestrationLoop:
         memory: MemoryPipeline | None = None,
         verifier_registry: VerifierRegistry | None = None,
         skill_manager: SkillManager | None = None,
+        compactor: ContextCompactor | None = None,
+        masker: ObservationMasker | None = None,
     ) -> None:
         self.config = config
         self.gateway = gateway
@@ -78,6 +83,8 @@ class OrchestrationLoop:
         self.memory = memory
         self.verifier_registry = verifier_registry
         self.skill_manager = skill_manager
+        self.compactor = compactor
+        self.masker = masker
         self.state = LoopState()
 
     async def run(
@@ -86,6 +93,7 @@ class OrchestrationLoop:
         system_prompt_override: str | None = None,
         developer_instructions: str = "",
         user_instructions: str = "",
+        task_stage: str = "general",
     ) -> AgentResponse:
         """同步运行完整 Agent 轮次。
 
@@ -94,6 +102,7 @@ class OrchestrationLoop:
             system_prompt_override: 系统提示覆盖。
             developer_instructions: 开发者指令。
             user_instructions: 用户指令。
+            task_stage: 任务阶段（用于工具集过滤），默认 ``general``。
 
         Returns:
             Agent 最终响应。
@@ -106,6 +115,7 @@ class OrchestrationLoop:
             system_prompt_override=system_prompt_override,
             developer_instructions=developer_instructions,
             user_instructions=user_instructions,
+            task_stage=task_stage,
         )
 
         # S6: 记录用户消息到工作记忆
@@ -150,7 +160,7 @@ class OrchestrationLoop:
 
         # S5+S7: 刷新工具 Schema（含内置+MCP+技能脚本+披露工具）
         if self.tool_injector is not None:
-            schemas = self.tool_injector.get_tools_for_stage()
+            schemas = self.tool_injector.get_tools_for_stage(turn_context.task_stage)
             self.assembler.set_tool_schemas(schemas)
 
         # Plan-and-Execute 模式：注入步骤指令
@@ -166,6 +176,23 @@ class OrchestrationLoop:
             self.emitter.emit("turn_start", turn=self.state.current_turn)
 
             start_time = time.perf_counter()
+
+            # S7 观察遮蔽与压缩仅在历史足够长时触发，避免热路径开销
+            history_len = len(self.assembler.conversation_history)
+            if history_len >= 8:
+                if self.masker is not None:
+                    self.masker.apply_masking(
+                        self.assembler.conversation_history,
+                        self.state.current_turn,
+                    )
+                if self.compactor is not None:
+                    pre_usage = self.assembler.get_token_usage()
+                    if pre_usage.compaction_needed:
+                        await self.compactor.compact(
+                            self.assembler.conversation_history,
+                            self.assembler.file_refs,
+                        )
+                        self.assembler.compaction_count += 1
 
             # Step 1: Prompt 组装（注入 S6 记忆 + S14 技能）
             prompt = self.assembler.assemble_prompt(
@@ -285,7 +312,7 @@ class OrchestrationLoop:
                 ]
             self.assembler.update_with_response(assistant_msg)
 
-            # 注入工具结果
+            # 注入工具结果（每个 tool_call 必须有匹配的 tool result，否则 API 拒绝）
             tool_results: list[dict[str, Any]] = []
             for outcome in outcomes:
                 if outcome.result is not None:
@@ -300,6 +327,12 @@ class OrchestrationLoop:
                         "role": "tool",
                         "tool_call_id": outcome.tool_call.id,
                         "content": f"跳过: {outcome.skip_reason}",
+                    })
+                elif outcome.needs_user_confirm:
+                    tool_results.append({
+                        "role": "tool",
+                        "tool_call_id": outcome.tool_call.id,
+                        "content": f"需要用户确认: {outcome.skip_reason}",
                     })
 
             self.assembler.update_with_result(tool_results)
@@ -341,8 +374,14 @@ class OrchestrationLoop:
                             data={"verifier": vr.verifier_name, "status": vr.status.value},
                         )
 
-            # 更新 turn_context 为空消息（继续循环）
-            turn_context = TurnContext(user_message="")
+            # 更新 turn_context：清空用户消息但保留系统/开发者/用户指令配置
+            turn_context = TurnContext(
+                user_message="",
+                system_prompt_override=turn_context.system_prompt_override,
+                developer_instructions=turn_context.developer_instructions,
+                user_instructions=turn_context.user_instructions,
+                task_stage=turn_context.task_stage,
+            )
 
             # 终止检查（绊线/最大轮次/Token）
             reason = self.termination.evaluate(
@@ -384,18 +423,19 @@ class OrchestrationLoop:
         self.emitter.add_listener(collector)
 
         async def run_task() -> AgentResponse:
-            result = await self.run(user_message, **kwargs)
-            collector.close()
-            return result
+            try:
+                return await self.run(user_message, **kwargs)
+            finally:
+                collector.close()
 
-        import asyncio
         task = asyncio.create_task(run_task())
 
-        async for event in collector.iter_events():
-            yield event
-
-        await task
-        self.emitter.remove_listener(collector)
+        try:
+            async for event in collector.iter_events():
+                yield event
+        finally:
+            await task
+            self.emitter.remove_listener(collector)
 
     def abort(self) -> None:
         """中断循环。"""

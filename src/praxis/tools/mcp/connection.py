@@ -1,10 +1,7 @@
 """MCP 服务器连接管理。
 
-初始化阶段能力协商、崩溃自动重连、独立安全边界。
+初始化阶段能力协商、Bridges 注册、断开清理。
 """
-
-import asyncio
-from typing import Any
 
 from mcp import ClientSession
 
@@ -18,7 +15,6 @@ from praxis.tools.mcp.prompts import MCPPromptsBridge
 from praxis.tools.mcp.resources import MCPResourcesBridge
 from praxis.tools.mcp.roots import RootsManager
 from praxis.tools.mcp.tools import MCPToolsBridge
-from praxis.tools.mcp.transport import create_transport
 
 log = get_logger("tools.mcp.connection")
 
@@ -95,49 +91,6 @@ class MCPConnectionManager:
             capabilities=conn.capabilities.model_dump(),
         )
         return conn.capabilities
-
-    async def reconnect_server(
-        self,
-        server_name: str,
-    ) -> bool:
-        """尝试重连 MCP Server。
-
-        Args:
-            server_name: 服务器名称。
-
-        Returns:
-            是否重连成功。
-        """
-        conn = self.connections.get(server_name)
-        if conn is None:
-            return False
-
-        config = conn.config
-        conn.status = MCPServerStatus.RECONNECTING
-
-        for attempt in range(config.reconnect_attempts):
-            try:
-                async with create_transport(config) as session:
-                    await self.connect_server(config, session)
-                    conn.reconnect_count += 1
-                    log.info(
-                        "MCP Server 重连成功",
-                        server=server_name,
-                        attempt=attempt + 1,
-                    )
-                    return True
-            except Exception as exc:
-                log.warning(
-                    "MCP Server 重连失败",
-                    server=server_name,
-                    attempt=attempt + 1,
-                    error=str(exc),
-                )
-                await asyncio.sleep(config.reconnect_delay * (attempt + 1))
-
-        conn.status = MCPServerStatus.FAILED
-        log.error("MCP Server 重连耗尽", server=server_name)
-        return False
 
     def disconnect_server(self, server_name: str) -> None:
         """断开并清理 MCP Server。"""

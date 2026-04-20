@@ -10,6 +10,7 @@ from praxis.config.schemas import (
     SessionConfig,
     OrchestratorConfig,
 )
+from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.session.core import Session, SessionFactory
 from praxis.models.subagent import SubagentSpec
@@ -29,10 +30,12 @@ class IsolatedContext:
     def __init__(
         self,
         store: PersistenceStore,
+        gateway: GatewayRouter,
         orchestrator_config: OrchestratorConfig,
         context_config: ContextConfig,
     ) -> None:
         self.store = store
+        self.gateway = gateway
         self.orchestrator_config = orchestrator_config
         self.context_config = context_config
 
@@ -77,6 +80,7 @@ class IsolatedContext:
 
         session = factory.create_session(
             guardrails=guardrails,
+            gateway=self.gateway,
             registry=child_registry,
             model=model,
         )

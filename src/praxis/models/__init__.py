@@ -3,7 +3,6 @@
 from praxis.models.context import (
     AssembledPrompt,
     CompactionResult,
-    ContextState,
     TokenUsage,
     TurnContext,
 )
@@ -116,7 +115,6 @@ __all__ = [
     "AssembledPrompt",
     "AuditEvent",
     "CompactionResult",
-    "ContextState",
     "Checkpoint",
     "CheckpointInfo",
     "ContinuationPhase",

@@ -9,7 +9,7 @@ from typing import Any
 from praxis.models.persistence import Checkpoint
 from praxis.persistence.store import PersistenceStore
 
-_CHECKPOINT_NAMESPACE = "checkpoints"
+CHECKPOINT_NAMESPACE = "checkpoints"
 
 
 class CheckpointManager:
@@ -41,7 +41,7 @@ class CheckpointManager:
         )
         key = f"{session_id}:{cp.checkpoint_id}"
         await self._store.save(
-            _CHECKPOINT_NAMESPACE,
+            CHECKPOINT_NAMESPACE,
             key,
             cp.model_dump(mode="json"),
         )
@@ -56,7 +56,7 @@ class CheckpointManager:
         Returns:
             状态快照字典，不存在时返回 None。
         """
-        data = await self._store.load(_CHECKPOINT_NAMESPACE, checkpoint_id)
+        data = await self._store.load(CHECKPOINT_NAMESPACE, checkpoint_id)
         if data is None:
             return None
         cp = Checkpoint.model_validate(data)
@@ -72,11 +72,11 @@ class CheckpointManager:
             检查点列表，按 created_at 升序排列。
         """
         keys = await self._store.list_keys(
-            _CHECKPOINT_NAMESPACE, prefix=f"{session_id}:"
+            CHECKPOINT_NAMESPACE, prefix=f"{session_id}:"
         )
         checkpoints: list[Checkpoint] = []
         for key in keys:
-            data = await self._store.load(_CHECKPOINT_NAMESPACE, key)
+            data = await self._store.load(CHECKPOINT_NAMESPACE, key)
             if data is not None:
                 checkpoints.append(Checkpoint.model_validate(data))
         return sorted(checkpoints, key=lambda c: c.created_at)

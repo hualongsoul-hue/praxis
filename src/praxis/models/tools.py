@@ -27,6 +27,7 @@ class ToolResult(BaseModel):
     success: bool
     content: str
     error: str | None = None
+    error_type: str | None = None
     execution_time_ms: float | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 

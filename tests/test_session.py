@@ -63,8 +63,13 @@ def factory(store: PersistenceStore) -> SessionFactory:
 class TestSessionFactory:
     """会话初始化测试。"""
 
-    def test_create_session(self, factory: SessionFactory, guardrails: GuardrailEngine) -> None:
-        session = factory.create_session(guardrails=guardrails)
+    def test_create_session(
+        self,
+        factory: SessionFactory,
+        guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
+    ) -> None:
+        session = factory.create_session(guardrails=guardrails, gateway=mock_gateway)
         assert session.session_id
         assert session.status == SessionStatus.ACTIVE
         assert session.metadata.total_turns == 0
@@ -73,16 +78,22 @@ class TestSessionFactory:
         assert session.registry is not None
 
     def test_session_has_unique_id(
-        self, factory: SessionFactory, guardrails: GuardrailEngine
+        self,
+        factory: SessionFactory,
+        guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
     ) -> None:
-        s1 = factory.create_session(guardrails=guardrails)
-        s2 = factory.create_session(guardrails=guardrails)
+        s1 = factory.create_session(guardrails=guardrails, gateway=mock_gateway)
+        s2 = factory.create_session(guardrails=guardrails, gateway=mock_gateway)
         assert s1.session_id != s2.session_id
 
     def test_terminate_session(
-        self, factory: SessionFactory, guardrails: GuardrailEngine
+        self,
+        factory: SessionFactory,
+        guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
     ) -> None:
-        session = factory.create_session(guardrails=guardrails)
+        session = factory.create_session(guardrails=guardrails, gateway=mock_gateway)
         session.terminate()
         assert session.status == SessionStatus.TERMINATED
 
@@ -175,6 +186,7 @@ class TestSessionResumer:
         store: PersistenceStore,
         factory: SessionFactory,
         guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
     ) -> None:
         # 保存检查点
         mgr = CheckpointManager(store)
@@ -188,7 +200,7 @@ class TestSessionResumer:
 
         # 恢复
         resumer = SessionResumer(factory, mgr)
-        session = await resumer.resume_session("resume-1", guardrails)
+        session = await resumer.resume_session("resume-1", guardrails, gateway=mock_gateway)
         assert session is not None
         assert session.session_id == "resume-1"
         assert session.metadata.total_turns == 5
@@ -202,10 +214,11 @@ class TestSessionResumer:
         store: PersistenceStore,
         factory: SessionFactory,
         guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
     ) -> None:
         mgr = CheckpointManager(store)
         resumer = SessionResumer(factory, mgr)
-        session = await resumer.resume_session("nonexistent", guardrails)
+        session = await resumer.resume_session("nonexistent", guardrails, gateway=mock_gateway)
         assert session is None
 
     async def test_validate_integrity(
@@ -213,13 +226,14 @@ class TestSessionResumer:
         store: PersistenceStore,
         factory: SessionFactory,
         guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
     ) -> None:
         mgr = CheckpointManager(store)
         metadata = SessionMetadata(session_id="int-1")
         await mgr.save_checkpoint(metadata, {}, {}, {})
 
         resumer = SessionResumer(factory, mgr)
-        session = await resumer.resume_session("int-1", guardrails)
+        session = await resumer.resume_session("int-1", guardrails, gateway=mock_gateway)
         issues = resumer.validate_integrity(session)
         assert issues == []
 
@@ -248,19 +262,25 @@ class TestContinuationManager:
         assert prompt == ""
 
     def test_advance_phase(
-        self, factory: SessionFactory, guardrails: GuardrailEngine
+        self,
+        factory: SessionFactory,
+        guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
     ) -> None:
         mgr = ContinuationManager()
-        session = factory.create_session(guardrails=guardrails)
+        session = factory.create_session(guardrails=guardrails, gateway=mock_gateway)
         session.metadata.continuation_phase = ContinuationPhase.INITIALIZATION
         new_phase = mgr.advance_phase(session)
         assert new_phase == ContinuationPhase.WORKING
 
     def test_advance_from_warmup(
-        self, factory: SessionFactory, guardrails: GuardrailEngine
+        self,
+        factory: SessionFactory,
+        guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
     ) -> None:
         mgr = ContinuationManager()
-        session = factory.create_session(guardrails=guardrails)
+        session = factory.create_session(guardrails=guardrails, gateway=mock_gateway)
         session.metadata.continuation_phase = ContinuationPhase.WARMUP
         new_phase = mgr.advance_phase(session)
         assert new_phase == ContinuationPhase.WORKING
@@ -313,10 +333,13 @@ class TestContinuationManager:
         assert "1/3 完成" in summary
 
     def test_prepare_turn_init(
-        self, factory: SessionFactory, guardrails: GuardrailEngine
+        self,
+        factory: SessionFactory,
+        guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
     ) -> None:
         mgr = ContinuationManager()
-        session = factory.create_session(guardrails=guardrails)
+        session = factory.create_session(guardrails=guardrails, gateway=mock_gateway)
         session.metadata.continuation_phase = ContinuationPhase.INITIALIZATION
         kwargs = mgr.prepare_turn(session)
         assert "developer_instructions" in kwargs
@@ -347,6 +370,7 @@ class TestTimeTravelManager:
         store: PersistenceStore,
         factory: SessionFactory,
         guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
     ) -> None:
         cp_mgr = CheckpointManager(store)
         metadata = SessionMetadata(session_id="tt-rb")
@@ -367,7 +391,7 @@ class TestTimeTravelManager:
         tt = TimeTravelManager(cp_mgr, resumer)
 
         # 回退到第一个检查点
-        session = await tt.rollback("tt-rb", cp_ids[0], guardrails)
+        session = await tt.rollback("tt-rb", cp_ids[0], guardrails, gateway=mock_gateway)
         assert session is not None
         assert session.metadata.total_turns == 1
         assert session.assembler.conversation_history == [
@@ -379,11 +403,12 @@ class TestTimeTravelManager:
         store: PersistenceStore,
         factory: SessionFactory,
         guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
     ) -> None:
         cp_mgr = CheckpointManager(store)
         resumer = SessionResumer(factory, cp_mgr)
         tt = TimeTravelManager(cp_mgr, resumer)
-        session = await tt.rollback("no-exist", "no-cp", guardrails)
+        session = await tt.rollback("no-exist", "no-cp", guardrails, gateway=mock_gateway)
         assert session is None
 
     async def test_rollback_and_prune(
@@ -391,6 +416,7 @@ class TestTimeTravelManager:
         store: PersistenceStore,
         factory: SessionFactory,
         guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
     ) -> None:
         cp_mgr = CheckpointManager(store)
         metadata = SessionMetadata(session_id="tt-prune")
@@ -405,7 +431,7 @@ class TestTimeTravelManager:
         tt = TimeTravelManager(cp_mgr, resumer)
 
         # 回退到第 3 个并清理
-        session = await tt.rollback_and_prune("tt-prune", cp_ids[2], guardrails)
+        session = await tt.rollback_and_prune("tt-prune", cp_ids[2], guardrails, gateway=mock_gateway)
         assert session is not None
         assert session.metadata.total_turns == 3
 

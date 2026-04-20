@@ -93,28 +93,19 @@ class SamplingManager:
     def resolve_model_preference(preferences: dict[str, Any]) -> str:
         """根据偏好选择模型。
 
+        若 hints 中指定了具体名称则优先使用；否则回落到 ``default``。
+        intelligence/speed/cost 等优先级字段当前由 GatewayRouter 的
+        ``default_model`` 统一承接，无需在此映射。
+
         Args:
-            preferences: 模型偏好（intelligence/speed/cost）。
+            preferences: 模型偏好（hints/intelligencePriority/speedPriority/costPriority）。
 
         Returns:
             模型名称。
         """
-        if not preferences:
-            return "default"
-
-        hints = preferences.get("hints", [])
+        hints = (preferences or {}).get("hints", [])
         if hints:
             for hint in hints:
                 if isinstance(hint, dict) and hint.get("name"):
                     return hint["name"]
-
-        # 按优先级排序
-        priority = preferences.get("intelligencePriority", 0)
-        if priority > 0.7:
-            return "default"
-
-        speed = preferences.get("speedPriority", 0)
-        if speed > 0.7:
-            return "default"
-
         return "default"

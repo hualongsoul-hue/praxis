@@ -24,6 +24,7 @@ from praxis.models.session import ContinuationPhase, SessionMetadata, SessionSta
 from praxis.persistence.store import PersistenceStore, create_store
 from praxis.session.checkpoint import CheckpointManager
 from praxis.session.continuation import ContinuationManager
+from praxis.gateway.router import GatewayRouter
 from praxis.session.core import SessionFactory
 from praxis.session.resume import SessionResumer
 
@@ -59,10 +60,11 @@ class TestSessionResume:
         e2e_store: PersistenceStore,
         e2e_factory: SessionFactory,
         e2e_guardrails: GuardrailEngine,
+        mock_gateway: GatewayRouter,
     ) -> None:
         """验证：完整的检查点保存 → 恢复 → 续接流程。"""
         # 创建原始会话
-        session = e2e_factory.create_session(guardrails=e2e_guardrails)
+        session = e2e_factory.create_session(guardrails=e2e_guardrails, gateway=mock_gateway)
         session_id = session.session_id
         assert session.status == SessionStatus.ACTIVE
 
@@ -84,7 +86,7 @@ class TestSessionResume:
         # 恢复会话
         cp_mgr = CheckpointManager(e2e_store)
         resumer = SessionResumer(e2e_factory, cp_mgr)
-        restored = await resumer.resume_session(session_id, e2e_guardrails)
+        restored = await resumer.resume_session(session_id, e2e_guardrails, gateway=mock_gateway)
 
         # 验证恢复完整性
         assert restored is not None
@@ -100,9 +102,10 @@ class TestSessionResume:
         e2e_store: PersistenceStore,
         e2e_factory: SessionFactory,
         e2e_guardrails: GuardrailEngine,
+        mock_gateway: GatewayRouter,
     ) -> None:
         """验证：多次检查点保存后恢复最新状态。"""
-        session = e2e_factory.create_session(guardrails=e2e_guardrails)
+        session = e2e_factory.create_session(guardrails=e2e_guardrails, gateway=mock_gateway)
         session_id = session.session_id
 
         # 第一次检查点
@@ -125,7 +128,7 @@ class TestSessionResume:
         # 恢复应该得到最新状态
         cp_mgr = CheckpointManager(e2e_store)
         resumer = SessionResumer(e2e_factory, cp_mgr)
-        restored = await resumer.resume_session(session_id, e2e_guardrails)
+        restored = await resumer.resume_session(session_id, e2e_guardrails, gateway=mock_gateway)
 
         assert restored is not None
         assert restored.metadata.total_turns == 5
@@ -143,9 +146,10 @@ class TestSessionResume:
         e2e_store: PersistenceStore,
         e2e_factory: SessionFactory,
         e2e_guardrails: GuardrailEngine,
+        mock_gateway: GatewayRouter,
     ) -> None:
         """验证：恢复不存在的会话返回 None。"""
         cp_mgr = CheckpointManager(e2e_store)
         resumer = SessionResumer(e2e_factory, cp_mgr)
-        result = await resumer.resume_session("nonexistent-id", e2e_guardrails)
+        result = await resumer.resume_session("nonexistent-id", e2e_guardrails, gateway=mock_gateway)
         assert result is None

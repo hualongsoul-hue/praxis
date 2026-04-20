@@ -36,22 +36,25 @@ class BackgroundProcessor:
         self.processing: bool = False
 
     def start(self) -> None:
-        """启动后台处理任务。"""
+        """启动后台处理任务并订阅 pipeline.append。"""
         if self.task is not None and not self.task.done():
             return
         self.running = True
         self.shutdown_event.clear()
+        self.pipeline.on_append = self.notify
         self.task = asyncio.create_task(self.run_loop())
         log.info("后台记忆处理器已启动")
 
     async def stop(self, wait: bool = True) -> None:
-        """停止后台处理任务。
+        """停止后台处理任务并解绑 pipeline 订阅。
 
         Args:
             wait: 是否等待当前处理完成后再停止。
         """
         self.running = False
         self.signal.set()
+        if self.pipeline.on_append is self.notify:
+            self.pipeline.on_append = None
 
         if self.task is not None and not self.task.done():
             if wait and self.processing:

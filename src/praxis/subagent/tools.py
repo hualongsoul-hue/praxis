@@ -12,6 +12,7 @@ from praxis.config.schemas import (
     OrchestratorConfig,
     SubagentConfig,
 )
+from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.models.tools import ToolDefinition, ToolMetadata
 from praxis.persistence.store import PersistenceStore
@@ -204,6 +205,7 @@ def wire_subagent(
     session: Session,
     store: PersistenceStore,
     guardrails: GuardrailEngine,
+    gateway: GatewayRouter,
     orchestrator_config: OrchestratorConfig,
     context_config: ContextConfig,
     subagent_config: SubagentConfig,
@@ -218,6 +220,7 @@ def wire_subagent(
         session: 目标会话。
         store: S3 持久化存储（子代理共享）。
         guardrails: S8 护栏引擎（子代理共享只读实例）。
+        gateway: S4 LLM 网关路由器（子代理共享）。
         orchestrator_config: S11 编排配置（子代理继承策略类型）。
         context_config: S7 上下文配置（子代理继承）。
         subagent_config: S13 子代理配置。
@@ -225,6 +228,7 @@ def wire_subagent(
     """
     isolation = IsolatedContext(
         store=store,
+        gateway=gateway,
         orchestrator_config=orchestrator_config,
         context_config=context_config,
     )

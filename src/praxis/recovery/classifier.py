@@ -47,6 +47,47 @@ USER_FIXABLE_TYPES: set[type] = {
 }
 
 
+def classify_by_type_name(
+    qualified_name: str,
+    message: str = "",
+) -> ErrorClassification | None:
+    """根据完全限定类型名分类（用于仅有字符串类型信息的场景）。
+
+    Args:
+        qualified_name: 异常完全限定名，如 ``praxis.exceptions.ToolTimeoutError``。
+        message: 附带消息。
+
+    Returns:
+        分类结果；若类型名未知返回 None。
+    """
+    by_name = {
+        f"{cls.__module__}.{cls.__qualname__}": cls
+        for cls in (
+            *TRANSIENT_TYPES,
+            *MODEL_RECOVERABLE_TYPES,
+            *USER_FIXABLE_TYPES,
+        )
+    }
+    cls = by_name.get(qualified_name)
+    if cls is None:
+        return None
+    if cls in TRANSIENT_TYPES:
+        category = ErrorCategory.TRANSIENT
+        strategy = RecoveryStrategy.RETRY
+    elif cls in MODEL_RECOVERABLE_TYPES:
+        category = ErrorCategory.MODEL_RECOVERABLE
+        strategy = RecoveryStrategy.RETURN_TO_MODEL
+    else:
+        category = ErrorCategory.USER_FIXABLE
+        strategy = RecoveryStrategy.ASK_USER
+    return ErrorClassification(
+        category=category,
+        strategy=strategy,
+        message=message,
+        original_type=qualified_name,
+    )
+
+
 def classify_error(error: Exception) -> ErrorClassification:
     """对异常进行分类，返回分类结果和建议恢复策略。
 

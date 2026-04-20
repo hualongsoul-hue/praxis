@@ -178,8 +178,12 @@ class WorkingMemory(BaseModel):
     cursor: int = 0
 
     def append(self, message: WorkingMemoryMessage) -> None:
-        """追加消息到工作记忆。"""
+        """追加消息到工作记忆，超出 max_messages 时丢弃最老消息。"""
         self.messages.append(message)
+        if self.max_messages > 0 and len(self.messages) > self.max_messages:
+            overflow = len(self.messages) - self.max_messages
+            del self.messages[:overflow]
+            self.cursor = max(0, self.cursor - overflow)
 
     def get_recent(self, limit: int | None = None) -> list[WorkingMemoryMessage]:
         """获取最近的消息列表。"""

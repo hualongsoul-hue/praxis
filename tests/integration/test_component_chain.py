@@ -347,7 +347,11 @@ class TestS11S12OrchestrationSessionChain:
             context_config=ContextConfig(),
         )
 
-        session = factory.create_session(guardrails=guardrails)
+        mock_gw = MagicMock(spec=GatewayRouter)
+        mock_gw.config = MagicMock()
+        mock_gw.config.default_model = "test-model"
+        mock_gw.router = MagicMock()
+        session = factory.create_session(guardrails=guardrails, gateway=mock_gw)
 
         # 验证所有组件链接完整
         assert session.session_id
@@ -375,9 +379,6 @@ class TestS11S12OrchestrationSessionChain:
             context_config=ContextConfig(),
         )
 
-        session = factory.create_session(guardrails=guardrails)
-
-        # Mock Gateway
         mock_gw = MagicMock(spec=GatewayRouter)
         mock_gw.config = MagicMock()
         mock_gw.config.default_model = "test-model"
@@ -385,7 +386,7 @@ class TestS11S12OrchestrationSessionChain:
         mock_gw.router.acompletion = AsyncMock(
             return_value=make_raw_response(content="集成测试响应")
         )
-        session.loop.gateway = mock_gw
+        session = factory.create_session(guardrails=guardrails, gateway=mock_gw)
 
         response = await session.run_turn("集成测试消息")
 
@@ -407,7 +408,11 @@ class TestS11S12OrchestrationSessionChain:
             context_config=ContextConfig(),
         )
 
-        session = factory.create_session(guardrails=guardrails)
+        mock_gw = MagicMock(spec=GatewayRouter)
+        mock_gw.config = MagicMock()
+        mock_gw.config.default_model = "test-model"
+        mock_gw.router = MagicMock()
+        session = factory.create_session(guardrails=guardrails, gateway=mock_gw)
 
         # 注册测试工具
         async def greet_handler(args: dict[str, Any]) -> str:
@@ -436,12 +441,7 @@ class TestS11S12OrchestrationSessionChain:
                 return make_raw_response(tool_calls=[tc])
             return make_raw_response(content="问候完成: Hello, Praxis!")
 
-        mock_gw = MagicMock(spec=GatewayRouter)
-        mock_gw.config = MagicMock()
-        mock_gw.config.default_model = "test-model"
-        mock_gw.router = MagicMock()
         mock_gw.router.acompletion = AsyncMock(side_effect=mock_acompletion)
-        session.loop.gateway = mock_gw
 
         response = await session.run_turn("请问候 Praxis")
 
@@ -462,7 +462,11 @@ class TestS11S12OrchestrationSessionChain:
             context_config=ContextConfig(),
         )
 
-        session = factory.create_session(guardrails=guardrails)
+        mock_gw = MagicMock(spec=GatewayRouter)
+        mock_gw.config = MagicMock()
+        mock_gw.config.default_model = "test-model"
+        mock_gw.router = MagicMock()
+        session = factory.create_session(guardrails=guardrails, gateway=mock_gw)
         session.assembler.conversation_history = [
             {"role": "assistant", "content": "测试状态"},
         ]
@@ -490,8 +494,6 @@ class TestS11S12OrchestrationSessionChain:
             context_config=ContextConfig(),
         )
 
-        session = factory.create_session(guardrails=guardrails)
-
         mock_gw = MagicMock(spec=GatewayRouter)
         mock_gw.config = MagicMock()
         mock_gw.config.default_model = "test-model"
@@ -499,7 +501,7 @@ class TestS11S12OrchestrationSessionChain:
         mock_gw.router.acompletion = AsyncMock(
             return_value=make_raw_response(content="事件测试")
         )
-        session.loop.gateway = mock_gw
+        session = factory.create_session(guardrails=guardrails, gateway=mock_gw)
 
         response = await session.run_turn("测试事件链")
 

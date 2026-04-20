@@ -104,8 +104,9 @@ async def main() -> None:
         handler=handle_get_weather,
     )
 
-    session = create_agent_session(store=store, guardrails=guardrails, registry=registry)
-    session.loop.gateway = gateway
+    session = create_agent_session(
+        store=store, guardrails=guardrails, gateway=gateway, registry=registry,
+    )
 
     print("Praxis Agent 已就绪（非流式）")
     print("输入 /quit 退出，/clear 清空上下文")

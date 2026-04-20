@@ -1,5 +1,8 @@
 """MCP 授权——OAuth 2.0/PKCE 授权流程、Token 管理。"""
 
+import base64
+import hashlib
+import secrets
 import time
 from typing import Any
 
@@ -105,7 +108,6 @@ class MCPAuthManager:
             return False
 
         # 构造授权 URL
-        import secrets
         state = secrets.token_urlsafe(32)
         auth_url = (
             f"{config.authorization_url}"
@@ -117,8 +119,6 @@ class MCPAuthManager:
         )
 
         if config.use_pkce:
-            import hashlib
-            import base64
             code_verifier = secrets.token_urlsafe(64)
             code_challenge = base64.urlsafe_b64encode(
                 hashlib.sha256(code_verifier.encode()).digest()

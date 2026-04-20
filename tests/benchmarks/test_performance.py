@@ -227,7 +227,9 @@ class TestToolExecutionPerformance:
 class TestCheckpointPerformance:
     """检查点写入性能: <200ms。"""
 
-    async def test_checkpoint_write_latency(self, store: PersistenceStore) -> None:
+    async def test_checkpoint_write_latency(
+        self, store: PersistenceStore, mock_gateway: MagicMock,
+    ) -> None:
         """验证：检查点写入延迟 <200ms。"""
         guardrails = GuardrailEngine(RuleEngine(), PermissionManager())
         factory = SessionFactory(
@@ -237,7 +239,7 @@ class TestCheckpointPerformance:
             context_config=ContextConfig(),
         )
 
-        session = factory.create_session(guardrails=guardrails)
+        session = factory.create_session(guardrails=guardrails, gateway=mock_gateway)
         # 模拟中等状态量
         session.assembler.conversation_history = [
             {"role": "user" if i % 2 == 0 else "assistant",
@@ -271,8 +273,6 @@ class TestOrchestrationLoopOverhead:
             context_config=ContextConfig(),
         )
 
-        session = factory.create_session(guardrails=guardrails)
-
         # 使用即时返回的 mock gateway
         mock_gw = MagicMock(spec=GatewayRouter)
         mock_gw.config = MagicMock()
@@ -281,7 +281,7 @@ class TestOrchestrationLoopOverhead:
         mock_gw.router.acompletion = AsyncMock(
             return_value=make_raw_response(content="快速响应")
         )
-        session.loop.gateway = mock_gw
+        session = factory.create_session(guardrails=guardrails, gateway=mock_gw)
 
         # 预热
         await session.run_turn("预热")
@@ -307,7 +307,11 @@ class TestOrchestrationLoopOverhead:
             context_config=ContextConfig(),
         )
 
-        session = factory.create_session(guardrails=guardrails)
+        mock_gw = MagicMock(spec=GatewayRouter)
+        mock_gw.config = MagicMock()
+        mock_gw.config.default_model = "test-model"
+        mock_gw.router = MagicMock()
+        session = factory.create_session(guardrails=guardrails, gateway=mock_gw)
 
         async def noop_handler(args: dict[str, Any]) -> str:
             return "ok"
@@ -327,13 +331,6 @@ class TestOrchestrationLoopOverhead:
                 function=SimpleNamespace(name="noop", arguments="{}"),
             )
             return make_raw_response(tool_calls=[tc])
-
-        mock_gw = MagicMock(spec=GatewayRouter)
-        mock_gw.config = MagicMock()
-        mock_gw.config.default_model = "test-model"
-        mock_gw.router = MagicMock()
-
-        session.loop.gateway = mock_gw
 
         # 预热
         call_count = 0

@@ -72,9 +72,10 @@ def subagent_config() -> SubagentConfig:
 
 
 @pytest.fixture
-def isolation(store: PersistenceStore) -> IsolatedContext:
+def isolation(store: PersistenceStore, mock_gateway: MagicMock) -> IsolatedContext:
     return IsolatedContext(
         store=store,
+        gateway=mock_gateway,
         orchestrator_config=OrchestratorConfig(max_turns=10),
         context_config=ContextConfig(),
     )

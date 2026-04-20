@@ -151,7 +151,7 @@ class TestMemoryScalability:
 
     def test_working_memory_10000_messages(self) -> None:
         """验证：工作记忆支持 10000+ 消息追加。"""
-        wm = WorkingMemory(session_id="scale-test")
+        wm = WorkingMemory(session_id="scale-test", max_messages=20000)
 
         start = time.perf_counter()
         for i in range(10000):
@@ -166,7 +166,7 @@ class TestMemoryScalability:
 
     def test_working_memory_export_at_scale(self) -> None:
         """验证：大规模工作记忆导出性能。"""
-        wm = WorkingMemory(session_id="scale-test")
+        wm = WorkingMemory(session_id="scale-test", max_messages=10000)
         for i in range(5000):
             wm.append(WorkingMemoryMessage(role="user", content=f"msg {i}"))
 

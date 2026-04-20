@@ -24,11 +24,7 @@ def configure_tracing(config: TelemetryConfig) -> None:
     provider = TracerProvider()
 
     if config.tracing_enabled:
-        if config.tracing_export == "console":
-            exporter = ConsoleSpanExporter()
-        else:
-            exporter = ConsoleSpanExporter()
-        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
 
     trace.set_tracer_provider(provider)
     tracer = trace.get_tracer("praxis")

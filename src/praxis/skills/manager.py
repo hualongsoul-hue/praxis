@@ -281,7 +281,7 @@ class SkillManager:
                     "required": ["skill_id"],
                 },
                 metadata=ToolMetadata(
-                    category="system", read_only=True, tags=["skill", "disclosure"],
+                    category="system", permission_level="auto_approve", readonly=True, tags=["skill", "disclosure"],
                 ),
             ),
             handle_load_skill,
@@ -309,7 +309,7 @@ class SkillManager:
                     "required": ["skill_id", "filename"],
                 },
                 metadata=ToolMetadata(
-                    category="system", read_only=True, tags=["skill", "disclosure"],
+                    category="system", permission_level="auto_approve", readonly=True, tags=["skill", "disclosure"],
                 ),
             ),
             handle_load_skill_file,
@@ -335,7 +335,7 @@ class SkillManager:
                     "required": ["skill_id"],
                 },
                 metadata=ToolMetadata(
-                    category="system", read_only=True, tags=["skill", "disclosure"],
+                    category="system", permission_level="auto_approve", readonly=True, tags=["skill", "disclosure"],
                 ),
             ),
             handle_list_skill_tools,
@@ -361,7 +361,7 @@ class SkillManager:
                     "required": ["skill_id"],
                 },
                 metadata=ToolMetadata(
-                    category="system", read_only=True, tags=["skill", "disclosure"],
+                    category="system", permission_level="auto_approve", readonly=True, tags=["skill", "disclosure"],
                 ),
             ),
             handle_list_skill_files,

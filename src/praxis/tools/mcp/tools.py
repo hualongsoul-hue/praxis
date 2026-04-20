@@ -66,7 +66,7 @@ class MCPToolsBridge:
                 parameters=tool.inputSchema if tool.inputSchema else {"type": "object", "properties": {}},
                 metadata=ToolMetadata(
                     category="mcp",
-                    read_only=False,
+                    readonly=False,
                     tags=[f"mcp:{server_name}"],
                 ),
             )

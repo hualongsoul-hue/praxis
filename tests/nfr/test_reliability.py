@@ -162,7 +162,9 @@ class TestRetryPolicyReliability:
 class TestCheckpointRecovery:
     """检查点恢复可靠性: 100%。"""
 
-    async def test_full_state_recovery(self, store: PersistenceStore) -> None:
+    async def test_full_state_recovery(
+        self, store: PersistenceStore, mock_gateway: MagicMock,
+    ) -> None:
         """验证：恢复后所有关键状态完整。"""
         guardrails = GuardrailEngine(RuleEngine(), PermissionManager())
         factory = SessionFactory(
@@ -172,7 +174,7 @@ class TestCheckpointRecovery:
             context_config=ContextConfig(),
         )
 
-        session = factory.create_session(guardrails=guardrails)
+        session = factory.create_session(guardrails=guardrails, gateway=mock_gateway)
         sid = session.session_id
 
         # 构建非平凡状态
@@ -188,7 +190,7 @@ class TestCheckpointRecovery:
         # 恢复
         cp_mgr = CheckpointManager(store)
         resumer = SessionResumer(factory, cp_mgr)
-        restored = await resumer.resume_session(sid, guardrails)
+        restored = await resumer.resume_session(sid, guardrails, gateway=mock_gateway)
 
         assert restored is not None
         assert restored.session_id == sid
@@ -197,7 +199,9 @@ class TestCheckpointRecovery:
         assert len(restored.assembler.conversation_history) == 10
         assert restored.assembler.file_refs == ["a.py", "b.py", "c.py"]
 
-    async def test_repeated_save_restore_idempotent(self, store: PersistenceStore) -> None:
+    async def test_repeated_save_restore_idempotent(
+        self, store: PersistenceStore, mock_gateway: MagicMock,
+    ) -> None:
         """验证：重复保存/恢复的结果一致。"""
         guardrails = GuardrailEngine(RuleEngine(), PermissionManager())
         factory = SessionFactory(
@@ -207,7 +211,7 @@ class TestCheckpointRecovery:
             context_config=ContextConfig(),
         )
 
-        session = factory.create_session(guardrails=guardrails)
+        session = factory.create_session(guardrails=guardrails, gateway=mock_gateway)
         sid = session.session_id
         session.assembler.conversation_history = [
             {"role": "assistant", "content": "幂等性测试"},
@@ -219,7 +223,7 @@ class TestCheckpointRecovery:
 
         cp_mgr = CheckpointManager(store)
         resumer = SessionResumer(factory, cp_mgr)
-        restored = await resumer.resume_session(sid, guardrails)
+        restored = await resumer.resume_session(sid, guardrails, gateway=mock_gateway)
 
         assert restored is not None
         assert len(restored.assembler.conversation_history) == 1

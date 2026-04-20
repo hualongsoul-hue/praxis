@@ -61,6 +61,8 @@ class TelemetryCallback(CustomLogger):
 
 
 def register_callbacks() -> None:
-    """注册 Praxis 遥测回调到 LiteLLM。"""
-    callback = TelemetryCallback()
-    litellm.callbacks.append(callback)  # type: ignore[arg-type]
+    """注册 Praxis 遥测回调到 LiteLLM（幂等：重复调用不重复注册）。"""
+    for existing in litellm.callbacks:
+        if isinstance(existing, TelemetryCallback):
+            return
+    litellm.callbacks.append(TelemetryCallback())  # type: ignore[arg-type]

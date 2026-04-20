@@ -160,7 +160,6 @@ class PromptAssembler:
             assistant_msg: 助手响应消息。
         """
         self.conversation_history.append(assistant_msg)
-        self.total_turns += 1
 
     def get_token_usage(self) -> TokenUsage:
         """获取当前上下文 Token 用量。"""
@@ -188,9 +187,5 @@ class PromptAssembler:
 
     @property
     def total_turns(self) -> int:
-        """当前总轮次数。"""
+        """当前总轮次数（从对话历史的 assistant 消息计数）。"""
         return sum(1 for m in self.conversation_history if m.get("role") == "assistant")
-
-    @total_turns.setter
-    def total_turns(self, value: int) -> None:
-        """setter 仅用于内部兼容，实际轮次从对话历史中计算。"""

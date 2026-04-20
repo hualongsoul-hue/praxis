@@ -14,7 +14,10 @@ from praxis.config.schemas import (
     ToolsConfig,
 )
 from praxis.context.assembler import PromptAssembler
+from praxis.context.compaction import ContextCompactor
+from praxis.context.masking import ObservationMasker
 from praxis.context.tool_injection import ToolInjector
+from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.session.checkpoint import CheckpointManager
 from praxis.memory.pipeline import MemoryPipeline
@@ -32,10 +35,13 @@ from praxis.orchestrator.termination import TerminationManager
 from praxis.orchestrator.tool_coordination import ToolCoordinator
 from praxis.persistence.store import PersistenceStore
 from praxis.recovery.circuit_breaker import CircuitBreakerRegistry
+from praxis.recovery.fallback import FallbackRegistry
 from praxis.recovery.retry import RetryPolicy
 from praxis.skills.manager import SkillManager
+from praxis.telemetry.audit import configure_audit
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
+from praxis.tools.builtins.registration import register_builtins
 from praxis.tools.executor import ToolExecutor
 from praxis.tools.registry import ToolRegistry
 from praxis.tools.sandbox import Sandbox
@@ -158,15 +164,20 @@ class SessionFactory:
         self.session_config = session_config
         self.orchestrator_config = orchestrator_config
         self.context_config = context_config
+        # 配置 S2 审计持久化通道（护栏裁决事件写入 store 的 "audit" 命名空间）
+        configure_audit(store)
 
     def create_session(
         self,
         guardrails: GuardrailEngine,
+        gateway: GatewayRouter,
         registry: ToolRegistry | None = None,
         model: str = "default",
         memory: MemoryPipeline | None = None,
         skill_manager: SkillManager | None = None,
         verifier_registry: VerifierRegistry | None = None,
+        tools_config: ToolsConfig | None = None,
+        include_builtins: bool = True,
     ) -> Session:
         """创建新会话。
 
@@ -174,11 +185,14 @@ class SessionFactory:
 
         Args:
             guardrails: 护栏引擎（外部传入，因权限配置项目级别）。
+            gateway: S4 LLM 网关路由器（LiteLLM Router 封装）。
             registry: 工具注册表（可选，None 时创建新实例）。
             model: LLM 模型名。
             memory: S6 记忆管线（可选）。
             skill_manager: S14 技能管理器（可选）。
             verifier_registry: S10 验证器注册表（可选）。
+            tools_config: S5 工具系统配置（沙箱/超时等）；None 使用默认。
+            include_builtins: 是否自动注册内置工具（仅在创建新 registry 时生效）。
 
         Returns:
             初始化完毕的 Session。
@@ -186,18 +200,22 @@ class SessionFactory:
         metadata = SessionMetadata(status=SessionStatus.INITIALIZING)
 
         # S5: 工具系统
-        if registry is None:
+        created_new_registry = registry is None
+        if created_new_registry:
             registry = ToolRegistry()
-        sandbox = Sandbox(ToolsConfig())
+        sandbox = Sandbox(tools_config or ToolsConfig())
+        if created_new_registry and include_builtins:
+            register_builtins(registry, sandbox, store=self.store)
         executor = ToolExecutor(registry, sandbox)
         injector = ToolInjector(registry)
 
         # S7: 上下文引擎
         assembler = PromptAssembler(self.context_config, model=model)
 
-        # S9: 错误恢复
+        # S9: 错误恢复（熔断 / 重试 / 降级）
         circuits = CircuitBreakerRegistry()
         retry_policy = RetryPolicy()
+        fallbacks = FallbackRegistry()
 
         # S11: 编排循环
         emitter = EventEmitter()
@@ -212,17 +230,20 @@ class SessionFactory:
             circuit_registry=circuits,
             retry_policy=retry_policy,
             emitter=emitter,
+            fallback_registry=fallbacks,
         )
 
         # S14: 披露工具注册（使 LLM 可触发第二/三层技能披露）
         if skill_manager is not None:
             skill_manager.register_disclosure_tools()
 
-        # GatewayRouter 需要外部传入（因模型配置不在此层管理）
-        # loop 在运行时设置 gateway
+        # S7: 上下文压缩与遮蔽（Token 压力下自动启用）
+        compactor = ContextCompactor(self.context_config, gateway=gateway, model=model)
+        masker = ObservationMasker(self.context_config, model=model)
+
         loop = OrchestrationLoop(
             config=self.orchestrator_config,
-            gateway=None,  # type: ignore[arg-type]
+            gateway=gateway,
             assembler=assembler,
             tool_coordinator=coordinator,
             guardrails=guardrails,
@@ -234,6 +255,8 @@ class SessionFactory:
             memory=memory,
             verifier_registry=verifier_registry,
             skill_manager=skill_manager,
+            compactor=compactor,
+            masker=masker,
         )
 
         metadata.status = SessionStatus.ACTIVE

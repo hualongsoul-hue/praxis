@@ -4,6 +4,7 @@
 后台路径：append_message 内部触发异步任务自动提取+整合。
 """
 
+from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any
 
@@ -59,12 +60,14 @@ class MemoryPipeline:
         self.working_memory = WorkingMemory(session_id=session_id)
         self.pending_messages: list[dict[str, str]] = []
         self.last_processed_cursor: int = 0
+        self.on_append: Callable[[], None] | None = None
 
     def append_message(self, message: WorkingMemoryMessage) -> None:
         """追加消息到工作记忆，并记录待处理消息。
 
         此方法是同步的，不阻塞调用方。
-        后台任务通过 process_pending 消费待处理消息。
+        后台任务通过 process_pending 消费待处理消息；
+        若已订阅 on_append，则在追加后通知（如 BackgroundProcessor）。
 
         Args:
             message: 消息对象。
@@ -75,6 +78,8 @@ class MemoryPipeline:
             "content": message.content,
         })
         emit_metric("memory_message_appended", 1.0, {}, "counter")
+        if self.on_append is not None:
+            self.on_append()
 
     def get_message_history(self, limit: int | None = None) -> list[WorkingMemoryMessage]:
         """获取消息历史。

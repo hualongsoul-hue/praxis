@@ -4,6 +4,7 @@
 通过 S2 记录并通过流式接口实时推送。
 """
 
+import asyncio
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -104,7 +105,6 @@ class StreamCollector(EventListener):
     """
 
     def __init__(self) -> None:
-        import asyncio
         self.queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
 
     def on_event(self, event: AgentEvent) -> None:

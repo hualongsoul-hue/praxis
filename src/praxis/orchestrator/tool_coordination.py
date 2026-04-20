@@ -11,11 +11,12 @@ from typing import Any
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.models.guardrails import VerdictType
 from praxis.models.orchestrator import AgentEvent
-from praxis.models.recovery import CircuitState, ErrorCategory
+from praxis.models.recovery import CircuitState, ErrorCategory, ErrorClassification
 from praxis.models.tools import ToolCall, ToolResult
 from praxis.orchestrator.events import EventEmitter
 from praxis.recovery.circuit_breaker import CircuitBreakerRegistry
-from praxis.recovery.classifier import classify_error
+from praxis.recovery.classifier import classify_by_type_name, classify_error
+from praxis.recovery.fallback import FallbackRegistry
 from praxis.recovery.retry import RetryPolicy
 from praxis.telemetry.logger import get_logger
 from praxis.tools.executor import ToolExecutor
@@ -64,6 +65,7 @@ class ToolCoordinator:
         circuit_registry: CircuitBreakerRegistry,
         retry_policy: RetryPolicy,
         emitter: EventEmitter,
+        fallback_registry: FallbackRegistry | None = None,
     ) -> None:
         self.executor = executor
         self.registry = registry
@@ -71,6 +73,7 @@ class ToolCoordinator:
         self.circuits = circuit_registry
         self.retry_policy = retry_policy
         self.emitter = emitter
+        self.fallbacks = fallback_registry
 
     async def execute_tool_calls(
         self,
@@ -112,12 +115,24 @@ class ToolCoordinator:
         # 解析参数
         arguments = self.parse_arguments(raw_args)
 
+        # S9 降级：工具未注册时尝试查询降级替代
+        if not self.registry.has_tool(name) and self.fallbacks is not None:
+            fallback = self.fallbacks.get_fallback(name)
+            if fallback and self.registry.has_tool(fallback):
+                log.info("降级到替代工具", primary=name, fallback=fallback)
+                name = fallback
+                tool_call = ToolCall(
+                    id=tool_call.id,
+                    type=tool_call.type,
+                    function=tool_call.function.model_copy(update={"name": fallback}),
+                )
+
         # Step 1: S8 护栏检查
         if self.registry.has_tool(name):
             meta = self.registry.get_metadata(name)
             verdict = await self.guardrails.check_tool_call(name, arguments, meta)
 
-            if verdict.verdict == VerdictType.DENY:
+            if verdict.verdict in (VerdictType.DENY, VerdictType.BLOCK):
                 return self.make_skipped(
                     tool_call, turn, f"护栏拒绝: {verdict.reason}", tripwire=verdict.tripwire
                 )
@@ -130,10 +145,23 @@ class ToolCoordinator:
             if verdict.tripwire:
                 return self.make_skipped(tool_call, turn, "绊线触发", tripwire=True)
 
-        # Step 2: S9 熔断检查
+        # Step 2: S9 熔断检查（OPEN 时尝试降级）
         circuit_state = self.circuits.check_circuit(name)
         if circuit_state == CircuitState.OPEN:
-            return self.make_skipped(tool_call, turn, f"熔断器断开: {name}")
+            if self.fallbacks is not None:
+                fallback = self.fallbacks.get_fallback(name)
+                if fallback and self.registry.has_tool(fallback):
+                    fb_state = self.circuits.check_circuit(fallback)
+                    if fb_state != CircuitState.OPEN:
+                        log.info("熔断降级", primary=name, fallback=fallback)
+                        name = fallback
+                        tool_call = ToolCall(
+                            id=tool_call.id,
+                            type=tool_call.type,
+                            function=tool_call.function.model_copy(update={"name": fallback}),
+                        )
+            if self.circuits.check_circuit(name) == CircuitState.OPEN:
+                return self.make_skipped(tool_call, turn, f"熔断器断开: {name}")
 
         # Step 3: S5 工具执行
         result = await self.try_execute(name, arguments, tool_call.id, turn)
@@ -174,6 +202,7 @@ class ToolCoordinator:
                 success=False,
                 content="",
                 error=str(exc),
+                error_type=f"{type(exc).__module__}.{type(exc).__qualname__}",
             )
 
     async def handle_failure(
@@ -187,13 +216,17 @@ class ToolCoordinator:
 
         根据 S9 错误分类决定恢复策略。
         """
-        error = Exception(result.error or "unknown error")
-        classification = classify_error(error)
+        message = result.error or "unknown error"
+        classification: ErrorClassification | None = None
+        if result.error_type:
+            classification = classify_by_type_name(result.error_type, message)
+        if classification is None:
+            classification = classify_error(Exception(message))
 
         if classification.category == ErrorCategory.TRANSIENT:
             decision = self.retry_policy.get_retry_decision(name, 1)
             if decision.should_retry:
-                log.info("重试工具调用", tool_name=name, delay=decision.delay_seconds)
+                log.info("重试工具调用", tool_name=name, delay=decision.wait_seconds)
                 return result
 
         if classification.category == ErrorCategory.MODEL_RECOVERABLE:

@@ -40,4 +40,5 @@ Thumbs.db
 # Project
 progress.json
 *.log
+.windsurf/
 data/

@@ -6,6 +6,7 @@ prompts/list 发现 + prompts/get 获取 + 参数补全（Completion）。
 from typing import Any
 
 from mcp import ClientSession
+from mcp.types import PromptReference
 
 from praxis.models.mcp import MCPPromptInfo, MCPPromptMessage
 from praxis.telemetry.logger import get_logger
@@ -124,8 +125,6 @@ class MCPPromptsBridge:
         session = self.server_sessions.get(server_name)
         if session is None:
             raise RuntimeError(f"MCP Server 未连接: {server_name}")
-
-        from mcp.types import PromptReference
 
         result = await session.complete(
             ref=PromptReference(type="ref/prompt", name=prompt_name),

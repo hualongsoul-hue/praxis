@@ -88,6 +88,7 @@ class ToolExecutor:
                 success=False,
                 content="",
                 error=f"工具执行异常: {type(exc).__name__}: {exc}",
+                error_type=f"{type(exc).__module__}.{type(exc).__qualname__}",
                 execution_time_ms=elapsed,
             )
 

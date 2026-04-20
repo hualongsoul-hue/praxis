@@ -8,7 +8,7 @@ from praxis.config.schemas import TelemetryConfig
 from praxis.models.telemetry import AuditEvent
 from praxis.persistence.store import PersistenceStore, create_store
 from praxis.config.schemas import PersistenceConfig
-from praxis.telemetry.audit import configure_audit, query_audit, record_audit
+from praxis.telemetry.audit import configure_audit, flush_audit, query_audit, record_audit
 from praxis.telemetry.logger import (
     StructuredLogger,
     configure_logging,
@@ -174,6 +174,7 @@ class TestAudit:
             },
         )
         await record_audit(event)
+        await flush_audit()
         events = await query_audit()
         assert len(events) >= 1
         found = [e for e in events if e.event_id == event.event_id]

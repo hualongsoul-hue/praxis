@@ -5,6 +5,7 @@ list_checkpoints 查看历史，
 回退后 S6/S7/S11 状态全部恢复，可从回退点重新运行。
 """
 
+from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.session.checkpoint import CheckpointManager
 from praxis.session.resume import SessionResumer
@@ -49,6 +50,7 @@ class TimeTravelManager:
         session_id: str,
         checkpoint_id: str,
         guardrails: GuardrailEngine,
+        gateway: GatewayRouter,
         registry: ToolRegistry | None = None,
         model: str = "default",
         memory: MemoryPipeline | None = None,
@@ -75,6 +77,7 @@ class TimeTravelManager:
         session = await self.resumer.resume_session(
             session_id=session_id,
             guardrails=guardrails,
+            gateway=gateway,
             registry=registry,
             model=model,
             checkpoint_id=checkpoint_id,
@@ -105,6 +108,7 @@ class TimeTravelManager:
         session_id: str,
         checkpoint_id: str,
         guardrails: GuardrailEngine,
+        gateway: GatewayRouter,
         registry: ToolRegistry | None = None,
         model: str = "default",
         memory: MemoryPipeline | None = None,
@@ -129,7 +133,7 @@ class TimeTravelManager:
             恢复后的 Session。
         """
         session = await self.rollback(
-            session_id, checkpoint_id, guardrails, registry, model,
+            session_id, checkpoint_id, guardrails, gateway, registry, model,
             memory=memory,
             skill_manager=skill_manager,
             verifier_registry=verifier_registry,

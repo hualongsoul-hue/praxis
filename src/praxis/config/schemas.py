@@ -22,7 +22,7 @@ class TelemetryConfig(BaseModel):
     metrics_export: Literal["prometheus", "file"] = "file"
     metrics_file: str | None = None
     tracing_enabled: bool = True
-    tracing_export: Literal["otlp", "console"] = "console"
+    tracing_export: Literal["console"] = "console"
     audit_enabled: bool = True
 
 

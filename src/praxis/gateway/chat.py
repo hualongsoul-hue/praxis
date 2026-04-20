@@ -7,7 +7,7 @@
 from collections.abc import AsyncIterator
 from typing import Any
 
-from praxis.gateway.metering import completion_cost, record_usage
+from praxis.gateway.metering import check_budget, completion_cost, get_token_count, record_usage
 from praxis.gateway.resilience import map_litellm_exception
 from praxis.gateway.router import GatewayRouter
 from praxis.models.responses import (
@@ -120,6 +120,11 @@ async def chat(
     """
     model_name = model or gateway.config.default_model
 
+    # 预算检查（仅在 max_budget 配置时才计算 Token，避免热路径开销）
+    if gateway.config.max_budget is not None:
+        estimated = get_token_count(messages, model_name)
+        check_budget(gateway, estimated, model_name)
+
     call_kwargs: dict[str, Any] = {
         "model": model_name,
         "messages": messages,
@@ -172,6 +177,11 @@ async def chat_stream(
         ModelResponseChunk 流式响应块。
     """
     model_name = model or gateway.config.default_model
+
+    # 预算检查（仅在 max_budget 配置时才计算 Token）
+    if gateway.config.max_budget is not None:
+        estimated = get_token_count(messages, model_name)
+        check_budget(gateway, estimated, model_name)
 
     call_kwargs: dict[str, Any] = {
         "model": model_name,

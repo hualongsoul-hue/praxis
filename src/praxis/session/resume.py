@@ -6,9 +6,11 @@ resume_session 从 S3 加载检查点，
 
 from typing import Any
 
+from praxis.gateway.router import GatewayRouter
 from praxis.session.checkpoint import CheckpointManager
 from praxis.session.core import Session, SessionFactory
 from praxis.memory.pipeline import MemoryPipeline
+from praxis.models.orchestrator import LoopState
 from praxis.models.session import (
     ContinuationPhase,
     SessionMetadata,
@@ -42,6 +44,7 @@ class SessionResumer:
         self,
         session_id: str,
         guardrails: GuardrailEngine,
+        gateway: GatewayRouter,
         registry: ToolRegistry | None = None,
         model: str = "default",
         checkpoint_id: str | None = None,
@@ -80,6 +83,7 @@ class SessionResumer:
         # 创建新会话（重建无状态组件）
         session = self.factory.create_session(
             guardrails=guardrails,
+            gateway=gateway,
             registry=registry,
             model=model,
             memory=memory,
@@ -125,7 +129,6 @@ class SessionResumer:
     @staticmethod
     def restore_loop_state(session: Session, state: dict[str, Any]) -> None:
         """恢复 S11 循环状态。"""
-        from praxis.models.orchestrator import LoopState
         if state:
             session.loop.state = LoopState.model_validate(state)
 

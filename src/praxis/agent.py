@@ -20,7 +20,9 @@ from praxis.config.schemas import (
     OrchestratorConfig,
     SessionConfig,
     SubagentConfig,
+    ToolsConfig,
 )
+from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.memory.pipeline import MemoryPipeline
 from praxis.persistence.store import PersistenceStore
@@ -37,15 +39,18 @@ log = get_logger("agent")
 def create_agent_session(
     store: PersistenceStore,
     guardrails: GuardrailEngine,
+    gateway: GatewayRouter,
     session_config: SessionConfig | None = None,
     orchestrator_config: OrchestratorConfig | None = None,
     context_config: ContextConfig | None = None,
     subagent_config: SubagentConfig | None = None,
+    tools_config: ToolsConfig | None = None,
     registry: ToolRegistry | None = None,
     model: str = "default",
     memory: MemoryPipeline | None = None,
     skill_manager: SkillManager | None = None,
     verifier_registry: VerifierRegistry | None = None,
+    include_builtins: bool = True,
 ) -> Session:
     """创建带完整 S1~S14 集成的 Agent 会话。
 
@@ -55,6 +60,7 @@ def create_agent_session(
     Args:
         store: S3 持久化存储。
         guardrails: S8 护栏引擎。
+        gateway: S4 LLM 网关路由器。
         session_config: S12 会话配置（None 使用默认值）。
         orchestrator_config: S11 编排配置（None 使用默认值）。
         context_config: S7 上下文配置（None 使用默认值）。
@@ -81,11 +87,14 @@ def create_agent_session(
 
     session = factory.create_session(
         guardrails=guardrails,
+        gateway=gateway,
         registry=registry,
         model=model,
         memory=memory,
         skill_manager=skill_manager,
         verifier_registry=verifier_registry,
+        tools_config=tools_config,
+        include_builtins=include_builtins,
     )
 
     if subagent_config is not None:
@@ -93,6 +102,7 @@ def create_agent_session(
             session=session,
             store=store,
             guardrails=guardrails,
+            gateway=gateway,
             orchestrator_config=orchestrator_config,
             context_config=context_config,
             subagent_config=subagent_config,
