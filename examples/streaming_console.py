@@ -64,8 +64,14 @@ def print_event(event) -> None:
     elif t == "llm_request":
         tokens = d.get("token_count", "?")
         print(f"  >> LLM 请求 ({tokens} tokens)", flush=True)
+    elif t == "content_delta":
+        text = d.get("text", "")
+        print(text, end="", flush=True)
     elif t == "llm_response":
         tc = d.get("tool_call_count", 0)
+        has_content = d.get("has_content", False)
+        if has_content:
+            print(flush=True)
         if tc:
             print(f"  << LLM 响应 (工具调用 x{tc})", flush=True)
         else:
@@ -160,11 +166,6 @@ async def main() -> None:
         print()
         async for event in session.run_turn_stream(user_input):
             print_event(event)
-
-        for msg in reversed(session.assembler.conversation_history):
-            if msg.get("role") == "assistant" and msg.get("content"):
-                print(f"\n{msg['content']}")
-                break
 
     await session.terminate()
     await store.close()

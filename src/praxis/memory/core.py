@@ -73,7 +73,9 @@ class CognitiveMemory:
         # 向量索引
         self.vector_store = VectorStore(
             self.scoped_store,
-            embedding_model=self.config.embedding_model,
+            api_base=self.config.embedding_api_base,
+            api_key=self.config.embedding_api_key,
+            timeout=self.config.embedding_timeout,
         )
 
         # 生命周期管理

@@ -1,24 +1,48 @@
 """向量嵌入存储与语义搜索。
 
 记忆内容向量化存储，基于余弦相似度进行语义检索。
-嵌入通过 LiteLLM embedding API（S4）获取。
+嵌入通过 Hugging Face Text Embeddings Inference (TEI) 服务获取。
 """
 
 import math
 from collections.abc import Awaitable, Callable
 
-import litellm
+import httpx
 
 from praxis.memory.store import ScopedMemoryStore
 from praxis.models.memory import MemoryEntry, MemoryScope, MemoryStatus, MemoryType
+from praxis.telemetry.logger import get_logger
+
+log = get_logger("memory.vector")
 
 EmbeddingFunc = Callable[[str], Awaitable[list[float]]]
 
 
-async def litellm_embed(text: str, model: str = "text-embedding-3-small") -> list[float]:
-    """通过 LiteLLM 获取文本嵌入向量。"""
-    response = await litellm.aembedding(model=model, input=[text])
-    return response.data[0]["embedding"]
+async def tei_embed(
+    text: str,
+    api_base: str = "http://172.24.21.115:9079",
+    api_key: str = "",
+    timeout: float = 30.0,
+) -> list[float]:
+    """通过 TEI 服务获取文本嵌入向量。"""
+    url = f"{api_base.rstrip('/')}/embed"
+    headers: dict[str, str] = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    payload = {"inputs": [text], "normalize": True, "truncate": True}
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        embeddings = response.json()
+
+    if not isinstance(embeddings, list) or len(embeddings) == 0:
+        raise RuntimeError(f"TEI 返回异常结果: {str(embeddings)[:200]}")
+    return embeddings[0]
 
 
 def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
@@ -42,15 +66,24 @@ class VectorStore:
         self,
         scoped_store: ScopedMemoryStore,
         embed_func: EmbeddingFunc | None = None,
-        embedding_model: str = "text-embedding-3-small",
+        api_base: str = "http://172.24.21.115:9079",
+        api_key: str = "",
+        timeout: float = 30.0,
     ) -> None:
         self.scoped_store = scoped_store
-        self.embedding_model = embedding_model
+        self.api_base = api_base
+        self.api_key = api_key
+        self.timeout = timeout
         self.embed_func: EmbeddingFunc = embed_func or self.default_embed
         self.index: dict[str, tuple[MemoryEntry, list[float]]] = {}
 
     async def default_embed(self, text: str) -> list[float]:
-        return await litellm_embed(text, model=self.embedding_model)
+        return await tei_embed(
+            text,
+            api_base=self.api_base,
+            api_key=self.api_key,
+            timeout=self.timeout,
+        )
 
     async def add(self, entry: MemoryEntry) -> None:
         """添加记忆并建立嵌入索引。"""

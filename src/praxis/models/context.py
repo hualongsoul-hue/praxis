@@ -42,3 +42,12 @@ class CompactionResult(BaseModel):
     compacted_tokens: int = 0
     summary: str = ""
     retained_file_refs: list[str] = Field(default_factory=list)
+
+
+class RunContext(BaseModel):
+    """单次 run 期间的中间状态，跨公共方法传递。"""
+
+    turn_context: TurnContext
+    memory_index: str = ""
+    semantic_results: str = ""
+    skill_index: str = ""

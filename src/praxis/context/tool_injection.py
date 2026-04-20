@@ -11,16 +11,16 @@ from praxis.tools.registry import ToolRegistry
 
 log = get_logger("context.tool_injection")
 
-CORE_CATEGORIES = frozenset({"file_ops", "search", "shell", "system", "general", "autonomy"})
+CORE_CATEGORIES = frozenset({"file_ops", "search", "shell", "system", "network", "general", "autonomy"})
 EXTENSION_CATEGORIES = frozenset({"mcp", "skill_script", "utility", "subagent"})
 
 STAGE_TOOL_MAP: dict[str, set[str]] = {
     "general": CORE_CATEGORIES | EXTENSION_CATEGORIES,
-    "planning": {"system", "general", "autonomy", "mcp", "subagent"},
+    "planning": {"system", "network", "general", "autonomy", "mcp", "subagent"},
     "coding": CORE_CATEGORIES | EXTENSION_CATEGORIES,
     "testing": CORE_CATEGORIES | EXTENSION_CATEGORIES,
-    "debugging": {"file_ops", "search", "shell", "system", "general", "autonomy", "mcp", "subagent"},
-    "review": {"file_ops", "search", "system", "general", "autonomy", "mcp", "subagent"},
+    "debugging": {"file_ops", "search", "shell", "system", "network", "general", "autonomy", "mcp", "subagent"},
+    "review": {"file_ops", "search", "system", "network", "general", "autonomy", "mcp", "subagent"},
 }
 
 

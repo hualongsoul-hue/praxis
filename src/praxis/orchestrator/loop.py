@@ -2,10 +2,9 @@
 
 实现完整 TAO 循环：
 消息记录 → Prompt 组装 → LLM 推理 → 工具执行 → 上下文更新 → 终止检查。
-支持同步/异步/流式三种模式。
+支持完整调用（run）和流式调用（run_stream）两种独立路径。
 """
 
-import asyncio
 import time
 from collections.abc import AsyncIterator
 from typing import Any
@@ -15,11 +14,11 @@ from praxis.context.assembler import PromptAssembler
 from praxis.context.compaction import ContextCompactor
 from praxis.context.masking import ObservationMasker
 from praxis.context.tool_injection import ToolInjector
-from praxis.gateway.chat import chat
+from praxis.gateway.chat import chat, chat_stream
 from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.memory.core import CognitiveMemory
-from praxis.models.context import TurnContext
+from praxis.models.context import AssembledPrompt, RunContext, TurnContext
 from praxis.models.guardrails import VerdictType
 from praxis.models.memory import WorkingMemoryMessage
 from praxis.models.orchestrator import (
@@ -29,9 +28,10 @@ from praxis.models.orchestrator import (
     LoopState,
     TerminationReason,
 )
-from praxis.models.tools import ToolResult
-from praxis.orchestrator.events import EventEmitter, StreamCollector
-from praxis.orchestrator.parser import OutputParser
+
+from praxis.models.verification import QualityPhase
+from praxis.orchestrator.events import EventEmitter
+from praxis.orchestrator.parser import OutputParser, ParsedOutput, StreamAccumulator
 from praxis.orchestrator.strategy import LoopStrategy
 from praxis.orchestrator.termination import TerminationManager
 from praxis.orchestrator.tool_coordination import ToolCoordinator
@@ -39,7 +39,6 @@ from praxis.skills.manager import SkillManager
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
 from praxis.verification.registry import VerifierRegistry
-from praxis.models.verification import QualityPhase
 
 log = get_logger("orchestrator.loop")
 
@@ -87,29 +86,19 @@ class OrchestrationLoop:
         self.masker = masker
         self.state = LoopState()
 
-    async def run(
+    # ── 公共准备方法 ─────────────────────────────────────────────────────
+
+    def init_run(
         self,
         user_message: str,
         system_prompt_override: str | None = None,
         developer_instructions: str = "",
         user_instructions: str = "",
         task_stage: str = "general",
-    ) -> AgentResponse:
-        """同步运行完整 Agent 轮次。
-
-        Args:
-            user_message: 用户消息。
-            system_prompt_override: 系统提示覆盖。
-            developer_instructions: 开发者指令。
-            user_instructions: 用户指令。
-            task_stage: 任务阶段（用于工具集过滤），默认 ``general``。
-
-        Returns:
-            Agent 最终响应。
-        """
+    ) -> RunContext:
+        """初始化一次 run 的状态和上下文。"""
         self.state = LoopState(phase=LoopPhase.ASSEMBLING)
         self.emitter.clear()
-
         turn_context = TurnContext(
             user_message=user_message,
             system_prompt_override=system_prompt_override,
@@ -117,7 +106,17 @@ class OrchestrationLoop:
             user_instructions=user_instructions,
             task_stage=task_stage,
         )
+        return RunContext(turn_context=turn_context)
 
+    async def prepare_run(
+        self,
+        user_message: str,
+        ctx: RunContext,
+    ) -> AgentResponse | None:
+        """执行循环前的准备工作：记忆记录、输入护栏、记忆检索、技能加载、工具注入、策略。
+
+        返回 AgentResponse 表示提前终止（如输入被拦截），None 表示继续。
+        """
         # S6: 记录用户消息到工作记忆
         if self.memory is not None:
             self.memory.append_message(
@@ -133,81 +132,308 @@ class OrchestrationLoop:
             )
 
         # S6: 获取记忆索引和语义检索
-        memory_index_text = ""
-        semantic_text = ""
         if self.memory is not None:
             index_entries = await self.memory.get_memory_index()
             if index_entries:
-                memory_index_text = "\n".join(
+                ctx.memory_index = "\n".join(
                     f"- [{e.memory_type}] {e.summary}" for e in index_entries
                 )
             results = await self.memory.search_memory(user_message, top_k=5)
             if results:
-                semantic_text = "\n".join(
+                ctx.semantic_results = "\n".join(
                     f"[{r.relevance_score:.2f}] {r.entry.content[:200]}" for r in results
                 )
 
         # S14: 获取技能索引 + 自动激活
-        skill_index_text = ""
         if self.skill_manager is not None:
             skill_entries = self.skill_manager.get_skill_index()
             if skill_entries:
-                skill_index_text = "\n".join(
+                ctx.skill_index = "\n".join(
                     f"- {e.name}: {e.description}" for e in skill_entries
                 )
-                # 自动激活与当前任务相关的技能（注册技能脚本到工具注册表）
                 self.skill_manager.auto_activate_for_task(user_message)
 
-        # S5+S7: 刷新工具 Schema（含内置+MCP+技能脚本+披露工具）
+        # S5+S7: 刷新工具 Schema
         if self.tool_injector is not None:
-            schemas = self.tool_injector.get_tools_for_stage(turn_context.task_stage)
+            schemas = self.tool_injector.get_tools_for_stage(ctx.turn_context.task_stage)
             self.assembler.set_tool_schemas(schemas)
 
         # Plan-and-Execute 模式：注入步骤指令
-        plan_context = self.strategy.get_plan_context()
         step_instruction = self.strategy.get_step_instruction()
         if step_instruction:
-            turn_context.user_message += step_instruction
+            ctx.turn_context.user_message += step_instruction
 
-        # 主循环
-        while True:
-            self.state.current_turn += 1
-            self.state.phase = LoopPhase.ASSEMBLING
-            self.emitter.emit("turn_start", turn=self.state.current_turn)
+        return None
 
-            start_time = time.perf_counter()
+    async def prepare_turn(self, ctx: RunContext) -> AssembledPrompt:
+        """每轮迭代前的准备：遮蔽、压缩、Prompt 组装、历史追加。"""
+        self.state.current_turn += 1
+        self.state.phase = LoopPhase.ASSEMBLING
+        self.emitter.emit("turn_start", turn=self.state.current_turn)
 
-            # S7 观察遮蔽与压缩仅在历史足够长时触发，避免热路径开销
-            history_len = len(self.assembler.conversation_history)
-            if history_len >= 8:
-                if self.masker is not None:
-                    self.masker.apply_masking(
+        # S7 观察遮蔽与压缩仅在历史足够长时触发
+        history_len = len(self.assembler.conversation_history)
+        if history_len >= 8:
+            if self.masker is not None:
+                self.masker.apply_masking(
+                    self.assembler.conversation_history,
+                    self.state.current_turn,
+                )
+            if self.compactor is not None:
+                pre_usage = self.assembler.get_token_usage()
+                if pre_usage.compaction_needed:
+                    await self.compactor.compact(
                         self.assembler.conversation_history,
-                        self.state.current_turn,
+                        self.assembler.file_refs,
                     )
-                if self.compactor is not None:
-                    pre_usage = self.assembler.get_token_usage()
-                    if pre_usage.compaction_needed:
-                        await self.compactor.compact(
-                            self.assembler.conversation_history,
-                            self.assembler.file_refs,
-                        )
-                        self.assembler.compaction_count += 1
+                    self.assembler.compaction_count += 1
 
-            # Step 1: Prompt 组装（注入 S6 记忆 + S14 技能）
-            prompt = self.assembler.assemble_prompt(
-                turn_context,
-                memory_index=memory_index_text,
-                semantic_results=semantic_text or plan_context,
-                skill_index=skill_index_text,
+        # Step 1: Prompt 组装（注入 S6 记忆 + S14 技能）
+        prompt = self.assembler.assemble_prompt(
+            ctx.turn_context,
+            memory_index=ctx.memory_index,
+            semantic_results=ctx.semantic_results or self.strategy.get_plan_context(),
+            skill_index=ctx.skill_index,
+        )
+
+        # 将用户消息存入对话历史
+        if ctx.turn_context.user_message:
+            self.assembler.conversation_history.append(
+                {"role": "user", "content": ctx.turn_context.user_message}
             )
 
-            # 将用户消息存入对话历史，确保后续轮次（如工具执行后）
-            # conversation_history 包含完整的 user → assistant → tool 序列
-            if turn_context.user_message:
-                self.assembler.conversation_history.append(
-                    {"role": "user", "content": turn_context.user_message}
+        return prompt
+
+    # ── 公共后处理方法 ────────────────────────────────────────────────────
+
+    def check_final_termination(
+        self, parsed: ParsedOutput, finish_reason: str | None,
+    ) -> TerminationReason | None:
+        """终止条件检查（自然终止 / 安全拒绝）。"""
+        safety_refusal = finish_reason == "content_filter"
+        return self.termination.evaluate(
+            self.state,
+            safety_refusal=safety_refusal,
+            is_final_response=parsed.is_final,
+            token_usage=self.assembler.get_token_usage(),
+        )
+
+    async def handle_final_response(
+        self,
+        parsed: ParsedOutput,
+        reason: TerminationReason,
+    ) -> AgentResponse:
+        """处理最终响应：输出护栏、记忆记录、历史更新。"""
+        # 输出护栏（仅自然终止时检查）
+        if reason == TerminationReason.NATURAL and parsed.content:
+            out_verdict = await self.guardrails.check_output(parsed.content)
+            if out_verdict.tripwire or out_verdict.verdict == VerdictType.BLOCK:
+                return self.make_response(
+                    content=f"输出被拒绝: {out_verdict.reason}",
+                    reason=TerminationReason.TRIPWIRE,
                 )
+
+        # S6: 记录助手响应到工作记忆
+        if self.memory is not None and parsed.content:
+            self.memory.append_message(
+                WorkingMemoryMessage(role="assistant", content=parsed.content)
+            )
+        self.assembler.update_with_response({
+            "role": "assistant",
+            "content": parsed.content,
+        })
+        return self.make_response(content=parsed.content, reason=reason)
+
+    async def process_tool_outcomes(
+        self,
+        parsed: ParsedOutput,
+    ) -> tuple[list[Any], bool]:
+        """执行工具调用并处理结果。返回 (outcomes, tripwire)。"""
+        self.state.phase = LoopPhase.TOOL_EXECUTING
+        outcomes = await self.coordinator.execute_tool_calls(
+            parsed.tool_calls, self.state.current_turn
+        )
+
+        # 绊线检查
+        tripwire = any(
+            o.skipped and "绊线" in o.skip_reason for o in outcomes
+        )
+
+        # 记录助手响应（含工具调用）
+        assistant_msg: dict[str, Any] = {
+            "role": "assistant",
+            "content": parsed.content or None,
+        }
+        if parsed.tool_calls:
+            assistant_msg["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                }
+                for tc in parsed.tool_calls
+            ]
+        self.assembler.update_with_response(assistant_msg)
+
+        # 注入工具结果
+        tool_results: list[dict[str, Any]] = []
+        for outcome in outcomes:
+            if outcome.result is not None:
+                tool_results.append({
+                    "role": "tool",
+                    "tool_call_id": outcome.tool_call.id,
+                    "content": outcome.result.content if outcome.result.success
+                    else f"错误: {outcome.result.error}",
+                })
+            elif outcome.skipped:
+                tool_results.append({
+                    "role": "tool",
+                    "tool_call_id": outcome.tool_call.id,
+                    "content": f"跳过: {outcome.skip_reason}",
+                })
+            elif outcome.needs_user_confirm:
+                tool_results.append({
+                    "role": "tool",
+                    "tool_call_id": outcome.tool_call.id,
+                    "content": f"需要用户确认: {outcome.skip_reason}",
+                })
+
+        self.assembler.update_with_result(tool_results)
+        self.state.total_tool_calls += len(outcomes)
+
+        # S6: 记录工具调用摘要到工作记忆
+        if self.memory is not None:
+            summary_parts = []
+            if parsed.content:
+                summary_parts.append(parsed.content)
+            for o in outcomes:
+                if o.result is not None:
+                    summary_parts.append(
+                        f"[{o.tool_call.function.name}]: "
+                        f"{o.result.content[:100] if o.result.success else o.result.error}"
+                    )
+            self.memory.append_message(
+                WorkingMemoryMessage(role="assistant", content="\n".join(summary_parts))
+            )
+
+        # S10: 可选变更后验证
+        if self.verifier_registry is not None:
+            successful_tools = [
+                o for o in outcomes
+                if o.result is not None and o.result.success
+            ]
+            if successful_tools:
+                verification_results = await self.verifier_registry.run_computational(
+                    target={"tool_outcomes": [
+                        {"name": o.tool_call.function.name, "result": o.result.content}
+                        for o in successful_tools
+                    ]},
+                    phase=QualityPhase.POST_INTEGRATION,
+                )
+                for vr in verification_results:
+                    self.emitter.emit(
+                        "verification_result",
+                        turn=self.state.current_turn,
+                        data={"verifier": vr.verifier_name, "status": vr.status.value},
+                    )
+
+        return outcomes, tripwire
+
+    def check_handoff_result(
+        self, parsed: ParsedOutput, outcomes: list[Any],
+    ) -> AgentResponse | None:
+        """检查 Handoff 短路。有匹配结果则返回 AgentResponse，否则 None。"""
+        if not parsed.handoff_target:
+            return None
+        for outcome in outcomes:
+            if (
+                not outcome.skipped
+                and outcome.result is not None
+                and outcome.result.success
+                and outcome.tool_call.function.name.startswith("handoff_to_")
+            ):
+                self.state.total_tool_calls += len(outcomes)
+                return self.make_response(
+                    content=outcome.result.content,
+                    reason=TerminationReason.HANDOFF,
+                )
+        return None
+
+    def finish_turn(
+        self,
+        ctx: RunContext,
+        tripwire: bool,
+        start_time: float,
+    ) -> AgentResponse | None:
+        """轮次末尾：终止检查、策略推进、发射 turn_end。返回 AgentResponse 表示终止。"""
+        # 清空用户消息但保留系统/开发者/用户指令配置
+        ctx.turn_context = TurnContext(
+            user_message="",
+            system_prompt_override=ctx.turn_context.system_prompt_override,
+            developer_instructions=ctx.turn_context.developer_instructions,
+            user_instructions=ctx.turn_context.user_instructions,
+            task_stage=ctx.turn_context.task_stage,
+        )
+
+        reason = self.termination.evaluate(
+            self.state,
+            tripwire=tripwire,
+            token_usage=self.assembler.get_token_usage(),
+        )
+        if reason is not None:
+            return self.make_response(
+                content="循环终止",
+                reason=reason,
+            )
+
+        # Plan-and-Execute: 推进步骤
+        if not self.strategy.is_plan_complete():
+            self.strategy.advance_step()
+
+        self.emitter.emit("turn_end", turn=self.state.current_turn)
+
+        elapsed = (time.perf_counter() - start_time) * 1000
+        emit_metric("loop_turn_overhead_ms", elapsed, {}, "histogram")
+
+        return None
+
+    # ── 完整调用路径 ───────────────────────────────────────────────────────────────
+
+    async def run(
+        self,
+        user_message: str,
+        system_prompt_override: str | None = None,
+        developer_instructions: str = "",
+        user_instructions: str = "",
+        task_stage: str = "general",
+    ) -> AgentResponse:
+        """完整调用运行 Agent 轮次。
+
+        Args:
+            user_message: 用户消息。
+            system_prompt_override: 系统提示覆盖。
+            developer_instructions: 开发者指令。
+            user_instructions: 用户指令。
+            task_stage: 任务阶段（用于工具集过滤），默认 ``general``。
+
+        Returns:
+            Agent 最终响应。
+        """
+        ctx = self.init_run(
+            user_message, system_prompt_override,
+            developer_instructions, user_instructions, task_stage,
+        )
+
+        early = await self.prepare_run(user_message, ctx)
+        if early is not None:
+            return early
+
+        while True:
+            start_time = time.perf_counter()
+            prompt = await self.prepare_turn(ctx)
 
             # Step 2: LLM 推理
             self.state.phase = LoopPhase.LLM_CALLING
@@ -236,206 +462,135 @@ class OrchestrationLoop:
             self.state.phase = LoopPhase.PARSING
             parsed = self.parser.parse(response)
 
-            # 安全拒绝检测
-            safety_refusal = response.finish_reason == "content_filter"
-
-            # Step 4: 终止检查（自然终止/安全拒绝）
-            reason = self.termination.evaluate(
-                self.state,
-                safety_refusal=safety_refusal,
-                is_final_response=parsed.is_final,
-                token_usage=self.assembler.get_token_usage(),
-            )
+            # Step 4: 终止检查
+            reason = self.check_final_termination(parsed, response.finish_reason)
             if reason is not None:
-                # 输出护栏（仅自然终止时检查）
-                if reason == TerminationReason.NATURAL and parsed.content:
-                    out_verdict = await self.guardrails.check_output(parsed.content)
-                    if out_verdict.tripwire or out_verdict.verdict == VerdictType.BLOCK:
-                        return self.make_response(
-                            content=f"输出被拒绝: {out_verdict.reason}",
-                            reason=TerminationReason.TRIPWIRE,
-                        )
-
-                # S6: 记录助手响应到工作记忆
-                if self.memory is not None and parsed.content:
-                    self.memory.append_message(
-                        WorkingMemoryMessage(role="assistant", content=parsed.content)
-                    )
-                self.assembler.update_with_response({
-                    "role": "assistant",
-                    "content": parsed.content,
-                })
-                return self.make_response(content=parsed.content, reason=reason)
+                return await self.handle_final_response(parsed, reason)
 
             # Step 5: 工具执行
-            self.state.phase = LoopPhase.TOOL_EXECUTING
-            outcomes = await self.coordinator.execute_tool_calls(
-                parsed.tool_calls, self.state.current_turn
-            )
+            outcomes, tripwire = await self.process_tool_outcomes(parsed)
 
-            # Handoff 短路：专家代理结果直接作为最终响应，主代理不再处理
-            if parsed.handoff_target:
-                for outcome in outcomes:
-                    if (
-                        not outcome.skipped
-                        and outcome.result is not None
-                        and outcome.result.success
-                        and outcome.tool_call.function.name.startswith("handoff_to_")
-                    ):
-                        self.state.total_tool_calls += len(outcomes)
-                        return self.make_response(
-                            content=outcome.result.content,
-                            reason=TerminationReason.HANDOFF,
-                        )
+            # Handoff 短路
+            handoff_resp = self.check_handoff_result(parsed, outcomes)
+            if handoff_resp is not None:
+                return handoff_resp
 
-            # 检查绊线
-            tripwire = any(
-                o.skipped and "绊线" in o.skip_reason for o in outcomes
-            )
+            # 轮次结束
+            end_resp = self.finish_turn(ctx, tripwire, start_time)
+            if end_resp is not None:
+                return end_resp
 
-            # 记录助手响应（含工具调用）
-            assistant_msg: dict[str, Any] = {
-                "role": "assistant",
-                "content": parsed.content or None,
-            }
-            if parsed.tool_calls:
-                assistant_msg["tool_calls"] = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.function.name,
-                            "arguments": tc.function.arguments,
-                        },
-                    }
-                    for tc in parsed.tool_calls
-                ]
-            self.assembler.update_with_response(assistant_msg)
-
-            # 注入工具结果（每个 tool_call 必须有匹配的 tool result，否则 API 拒绝）
-            tool_results: list[dict[str, Any]] = []
-            for outcome in outcomes:
-                if outcome.result is not None:
-                    tool_results.append({
-                        "role": "tool",
-                        "tool_call_id": outcome.tool_call.id,
-                        "content": outcome.result.content if outcome.result.success
-                        else f"错误: {outcome.result.error}",
-                    })
-                elif outcome.skipped:
-                    tool_results.append({
-                        "role": "tool",
-                        "tool_call_id": outcome.tool_call.id,
-                        "content": f"跳过: {outcome.skip_reason}",
-                    })
-                elif outcome.needs_user_confirm:
-                    tool_results.append({
-                        "role": "tool",
-                        "tool_call_id": outcome.tool_call.id,
-                        "content": f"需要用户确认: {outcome.skip_reason}",
-                    })
-
-            self.assembler.update_with_result(tool_results)
-            self.state.total_tool_calls += len(outcomes)
-
-            # S6: 记录助手响应（含工具调用）到工作记忆
-            if self.memory is not None:
-                summary_parts = []
-                if parsed.content:
-                    summary_parts.append(parsed.content)
-                for o in outcomes:
-                    if o.result is not None:
-                        summary_parts.append(
-                            f"[{o.tool_call.function.name}]: "
-                            f"{o.result.content[:100] if o.result.success else o.result.error}"
-                        )
-                self.memory.append_message(
-                    WorkingMemoryMessage(role="assistant", content="\n".join(summary_parts))
-                )
-
-            # S10: 可选变更后验证
-            if self.verifier_registry is not None:
-                successful_tools = [
-                    o for o in outcomes
-                    if o.result is not None and o.result.success
-                ]
-                if successful_tools:
-                    verification_results = await self.verifier_registry.run_computational(
-                        target={"tool_outcomes": [
-                            {"name": o.tool_call.function.name, "result": o.result.content}
-                            for o in successful_tools
-                        ]},
-                        phase=QualityPhase.POST_INTEGRATION,
-                    )
-                    for vr in verification_results:
-                        self.emitter.emit(
-                            "verification_result",
-                            turn=self.state.current_turn,
-                            data={"verifier": vr.verifier_name, "status": vr.status.value},
-                        )
-
-            # 更新 turn_context：清空用户消息但保留系统/开发者/用户指令配置
-            turn_context = TurnContext(
-                user_message="",
-                system_prompt_override=turn_context.system_prompt_override,
-                developer_instructions=turn_context.developer_instructions,
-                user_instructions=turn_context.user_instructions,
-                task_stage=turn_context.task_stage,
-            )
-
-            # 终止检查（绊线/最大轮次/Token）
-            reason = self.termination.evaluate(
-                self.state,
-                tripwire=tripwire,
-                token_usage=self.assembler.get_token_usage(),
-            )
-            if reason is not None:
-                return self.make_response(
-                    content=parsed.content or "循环终止",
-                    reason=reason,
-                )
-
-            # Plan-and-Execute: 推进步骤
-            if not self.strategy.is_plan_complete():
-                self.strategy.advance_step()
-                plan_context = self.strategy.get_plan_context()
-
-            self.emitter.emit("turn_end", turn=self.state.current_turn)
-
-            elapsed = (time.perf_counter() - start_time) * 1000
-            emit_metric("loop_turn_overhead_ms", elapsed, {}, "histogram")
+    # ── 流式调用路径 ───────────────────────────────────────────────────────────────
 
     async def run_stream(
         self,
         user_message: str,
-        **kwargs: Any,
+        system_prompt_override: str | None = None,
+        developer_instructions: str = "",
+        user_instructions: str = "",
+        task_stage: str = "general",
     ) -> AsyncIterator[AgentEvent]:
-        """流式运行 Agent 轮次，逐事件输出。
+        """流式运行 Agent 轮次，逐事件 yield。
 
         Args:
             user_message: 用户消息。
-            **kwargs: 传递给 run() 的额外参数。
+            system_prompt_override: 系统提示覆盖。
+            developer_instructions: 开发者指令。
+            user_instructions: 用户指令。
+            task_stage: 任务阶段（用于工具集过滤），默认 ``general``。
 
         Yields:
             AgentEvent 事件流。
         """
-        collector = StreamCollector()
-        self.emitter.add_listener(collector)
+        ctx = self.init_run(
+            user_message, system_prompt_override,
+            developer_instructions, user_instructions, task_stage,
+        )
 
-        async def run_task() -> AgentResponse:
-            try:
-                return await self.run(user_message, **kwargs)
-            finally:
-                collector.close()
+        early = await self.prepare_run(user_message, ctx)
+        if early is not None:
+            yield self.emitter.events[-1]
+            return
 
-        task = asyncio.create_task(run_task())
+        while True:
+            start_time = time.perf_counter()
+            prompt = await self.prepare_turn(ctx)
 
-        try:
-            async for event in collector.iter_events():
+            # yield turn_start 事件
+            yield self.emitter.events[-1]
+
+            # LLM 推理
+            self.state.phase = LoopPhase.LLM_CALLING
+            llm_req_event = self.emitter.emit(
+                "llm_request",
+                turn=self.state.current_turn,
+                data={"token_count": prompt.token_count},
+            )
+            yield llm_req_event
+
+            # 逐 chunk 消费响应
+            accumulator = StreamAccumulator()
+            async for chunk in chat_stream(
+                self.gateway,
+                prompt.messages,
+                tools=prompt.tools if prompt.tools else None,
+            ):
+                delta_text = accumulator.feed(chunk)
+                if delta_text:
+                    delta_event = self.emitter.emit(
+                        "content_delta",
+                        turn=self.state.current_turn,
+                        data={"text": delta_text},
+                    )
+                    yield delta_event
+
+            response = accumulator.build_response()
+
+            llm_resp_event = self.emitter.emit(
+                "llm_response",
+                turn=self.state.current_turn,
+                data={
+                    "has_content": bool(response.content),
+                    "tool_call_count": len(response.tool_calls or []),
+                },
+            )
+            yield llm_resp_event
+
+            # 解析输出
+            self.state.phase = LoopPhase.PARSING
+            parsed = self.parser.parse(response)
+
+            # 终止检查
+            reason = self.check_final_termination(parsed, response.finish_reason)
+            if reason is not None:
+                await self.handle_final_response(parsed, reason)
+                yield self.emitter.events[-1]
+                return
+
+            # 工具执行（tool_call_start/end 事件由 coordinator 通过 emitter 产生）
+            pre_event_count = len(self.emitter.events)
+            outcomes, tripwire = await self.process_tool_outcomes(parsed)
+
+            # yield 工具执行期间产生的所有事件
+            for event in self.emitter.events[pre_event_count:]:
                 yield event
-        finally:
-            await task
-            self.emitter.remove_listener(collector)
+
+            # Handoff 短路
+            handoff_resp = self.check_handoff_result(parsed, outcomes)
+            if handoff_resp is not None:
+                yield self.emitter.events[-1]
+                return
+
+            # 轮次结束
+            end_resp = self.finish_turn(ctx, tripwire, start_time)
+            if end_resp is not None:
+                yield self.emitter.events[-1]
+                return
+
+            # yield turn_end 事件
+            yield self.emitter.events[-1]
+
+    # ── 控制方法 ──────────────────────────────────────────────────────────
 
     def abort(self) -> None:
         """中断循环。"""

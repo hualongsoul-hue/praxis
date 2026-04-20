@@ -10,7 +10,7 @@ from typing import Any
 from json_repair import repair_json
 from pydantic import BaseModel
 
-from praxis.models.responses import ModelResponse
+from praxis.models.responses import ModelResponse, ModelResponseChunk, Usage
 from praxis.models.tools import FunctionCall, ToolCall
 from praxis.telemetry.logger import get_logger
 
@@ -35,6 +35,78 @@ class ParsedOutput:
         self.tool_calls = tool_calls
         self.is_final = is_final
         self.handoff_target = handoff_target
+
+
+class StreamAccumulator:
+    """流式响应块累积器。
+
+    将 chat_stream 产出的 ModelResponseChunk 增量拼装为
+    完整的 ModelResponse，支持 content 和 tool_calls 两种增量。
+    """
+
+    def __init__(self) -> None:
+        self.response_id: str = ""
+        self.model: str = ""
+        self.content_parts: list[str] = []
+        self.tool_call_buffers: dict[int, dict[str, str]] = {}
+        self.finish_reason: str | None = None
+        self.usage: Usage | None = None
+
+    def feed(self, chunk: ModelResponseChunk) -> str | None:
+        """喂入一个 chunk，返回 content 增量文本（可能为 None）。"""
+        if chunk.id:
+            self.response_id = chunk.id
+        if chunk.model:
+            self.model = chunk.model
+        if chunk.finish_reason:
+            self.finish_reason = chunk.finish_reason
+        if chunk.usage is not None:
+            self.usage = chunk.usage
+
+        delta_text: str | None = None
+        if chunk.delta_content:
+            self.content_parts.append(chunk.delta_content)
+            delta_text = chunk.delta_content
+
+        if chunk.delta_tool_calls:
+            for tc_delta in chunk.delta_tool_calls:
+                idx = tc_delta.index
+                if idx not in self.tool_call_buffers:
+                    self.tool_call_buffers[idx] = {"id": "", "name": "", "arguments": ""}
+                buf = self.tool_call_buffers[idx]
+                if tc_delta.id:
+                    buf["id"] = tc_delta.id
+                if tc_delta.function:
+                    if tc_delta.function.name:
+                        buf["name"] += tc_delta.function.name
+                    if tc_delta.function.arguments:
+                        buf["arguments"] += tc_delta.function.arguments
+
+        return delta_text
+
+    def build_response(self) -> ModelResponse:
+        """累积完成后构建完整 ModelResponse。"""
+        content = "".join(self.content_parts) or None
+        tool_calls: list[ToolCall] | None = None
+        if self.tool_call_buffers:
+            tool_calls = [
+                ToolCall(
+                    id=buf["id"],
+                    type="function",
+                    function=FunctionCall(name=buf["name"], arguments=buf["arguments"]),
+                )
+                for _, buf in sorted(self.tool_call_buffers.items())
+            ]
+        usage = self.usage or Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
+        return ModelResponse(
+            id=self.response_id,
+            content=content,
+            tool_calls=tool_calls,
+            usage=usage,
+            model=self.model,
+            finish_reason=self.finish_reason,
+            created=0,
+        )
 
 
 class OutputParser:

@@ -14,7 +14,7 @@ from praxis.memory.retriever import MemoryRetriever
 from praxis.memory.scratchpad import Scratchpad
 from praxis.memory.store import ProfileStore, ScopedMemoryStore, entry_from_dict
 from praxis.memory.core import CognitiveMemory
-from praxis.memory.vector import VectorStore, cosine_similarity, litellm_embed
+from praxis.memory.vector import VectorStore, cosine_similarity, tei_embed
 from praxis.memory.worker import BackgroundWorker
 
 __all__ = [
@@ -36,5 +36,5 @@ __all__ = [
     "VectorStore",
     "cosine_similarity",
     "entry_from_dict",
-    "litellm_embed",
+    "tei_embed",
 ]

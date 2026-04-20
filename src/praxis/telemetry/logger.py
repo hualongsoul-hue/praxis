@@ -14,10 +14,10 @@ from typing import Any
 from praxis.config.schemas import TelemetryConfig
 
 STANDARD_ATTRS = frozenset({
-    "args", "created", "exc_info", "exc_text", "filename", "funcName",
-    "levelname", "levelno", "lineno", "message", "module", "msecs", "msg",
-    "name", "pathname", "process", "processName", "relativeCreated",
-    "stack_info", "thread", "threadName", "taskName",
+    "args", "asctime", "created", "exc_info", "exc_text", "filename",
+    "funcName", "levelname", "levelno", "lineno", "message", "module",
+    "msecs", "msg", "name", "pathname", "process", "processName",
+    "relativeCreated", "stack_info", "thread", "threadName", "taskName",
     "component", "session_id", "turn",
 })
 
@@ -60,7 +60,14 @@ class TextFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         if not hasattr(record, "component"):
             record.component = ""  # type: ignore[attr-defined]
-        return super().format(record)
+        base = super().format(record)
+        extra_parts: list[str] = []
+        for key, val in record.__dict__.items():
+            if key not in STANDARD_ATTRS and not key.startswith("_"):
+                extra_parts.append(f"{key}={val}")
+        if extra_parts:
+            return f"{base}  {' '.join(extra_parts)}"
+        return base
 
 
 class StructuredLogger:

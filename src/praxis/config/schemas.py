@@ -68,8 +68,10 @@ class ToolsConfig(BaseModel):
 class MemoryConfig(BaseModel):
     """S6 记忆系统配置。"""
 
-    embedding_model: str = "text-embedding-3-small"
-    vector_dimensions: int = 1536
+    embedding_api_base: str = "http://172.24.21.115:9079"
+    embedding_api_key: str = ""
+    embedding_timeout: float = 30.0
+    embedding_dimensions: int = 2560
     extraction_model: str | None = None
     extraction_prompts: dict[str, str] = Field(default_factory=dict)
     consolidation_similarity_threshold: float = 0.75
