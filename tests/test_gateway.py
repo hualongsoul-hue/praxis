@@ -15,7 +15,13 @@ from praxis.exceptions import (
     RateLimitError,
 )
 from praxis.gateway.callbacks import TelemetryCallback
-from praxis.gateway.chat import chat, chat_stream, convert_response, convert_stream_chunk
+from praxis.gateway.chat import (
+    build_usage,
+    chat,
+    chat_stream,
+    convert_response,
+    convert_stream_chunk,
+)
 from praxis.gateway.metering import get_max_tokens, get_token_count
 from praxis.gateway.resilience import EXCEPTION_MAP, map_litellm_exception
 from praxis.gateway.router import GatewayRouter
@@ -52,14 +58,26 @@ def make_raw_response(
     tool_calls: list | None = None,
     prompt_tokens: int = 10,
     completion_tokens: int = 20,
+    reasoning_content: str | None = None,
+    refusal: str | None = None,
+    reasoning_tokens: int = 0,
+    cached_tokens: int = 0,
+    system_fingerprint: str | None = None,
 ) -> SimpleNamespace:
     """构建模拟 LiteLLM 原始响应。"""
-    message = SimpleNamespace(content=content, tool_calls=tool_calls)
+    message = SimpleNamespace(
+        content=content,
+        tool_calls=tool_calls,
+        reasoning_content=reasoning_content,
+        refusal=refusal,
+    )
     choice = SimpleNamespace(message=message, finish_reason="stop")
     usage = SimpleNamespace(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=prompt_tokens + completion_tokens,
+        completion_tokens_details=SimpleNamespace(reasoning_tokens=reasoning_tokens),
+        prompt_tokens_details=SimpleNamespace(cached_tokens=cached_tokens),
     )
     return SimpleNamespace(
         id="chatcmpl-test-123",
@@ -67,21 +85,31 @@ def make_raw_response(
         usage=usage,
         model=model,
         created=1700000000,
+        system_fingerprint=system_fingerprint,
     )
 
 
 def make_raw_stream_chunk(
     content: str | None = "Hi",
     finish_reason: str | None = None,
+    reasoning_content: str | None = None,
+    refusal: str | None = None,
+    system_fingerprint: str | None = None,
 ) -> SimpleNamespace:
     """构建模拟 LiteLLM 流式响应块。"""
-    delta = SimpleNamespace(content=content, tool_calls=None)
+    delta = SimpleNamespace(
+        content=content,
+        tool_calls=None,
+        reasoning_content=reasoning_content,
+        refusal=refusal,
+    )
     choice = SimpleNamespace(delta=delta, finish_reason=finish_reason)
     return SimpleNamespace(
         id="chatcmpl-stream-123",
         choices=[choice],
         usage=None,
         model="gpt-4o",
+        system_fingerprint=system_fingerprint,
     )
 
 
@@ -170,6 +198,58 @@ class TestChat:
         chunk = convert_stream_chunk(raw)
         assert isinstance(chunk, ModelResponseChunk)
         assert chunk.delta_content == "partial"
+
+    def test_convert_response_with_reasoning(self) -> None:
+        raw = make_raw_response(content="答案", reasoning_content="推理过程…")
+        resp = convert_response(raw)
+        assert resp.content == "答案"
+        assert resp.reasoning_content == "推理过程…"
+
+    def test_convert_stream_chunk_with_reasoning(self) -> None:
+        raw = make_raw_stream_chunk(content=None, reasoning_content="思考中")
+        chunk = convert_stream_chunk(raw)
+        assert chunk.delta_content is None
+        assert chunk.delta_reasoning_content == "思考中"
+
+    def test_convert_response_without_reasoning(self) -> None:
+        raw = make_raw_response(content="no-think")
+        resp = convert_response(raw)
+        assert resp.reasoning_content is None
+
+    def test_convert_response_with_refusal(self) -> None:
+        raw = make_raw_response(content=None, refusal="不能回答该请求")
+        resp = convert_response(raw)
+        assert resp.refusal == "不能回答该请求"
+        assert resp.content is None
+
+    def test_convert_response_with_token_details(self) -> None:
+        raw = make_raw_response(
+            content="ok",
+            prompt_tokens=100,
+            completion_tokens=80,
+            reasoning_tokens=40,
+            cached_tokens=60,
+        )
+        resp = convert_response(raw)
+        assert resp.usage.reasoning_tokens == 40
+        assert resp.usage.cached_prompt_tokens == 60
+
+    def test_convert_response_with_system_fingerprint(self) -> None:
+        raw = make_raw_response(content="ok", system_fingerprint="fp_abc123")
+        resp = convert_response(raw)
+        assert resp.system_fingerprint == "fp_abc123"
+
+    def test_convert_stream_chunk_with_refusal(self) -> None:
+        raw = make_raw_stream_chunk(content=None, refusal="部分拒答")
+        chunk = convert_stream_chunk(raw)
+        assert chunk.delta_refusal == "部分拒答"
+
+    def test_build_usage_missing_details(self) -> None:
+        """缺少 *_tokens_details 的老版本响应需优雅退化为 0。"""
+        usage_data = SimpleNamespace(prompt_tokens=10, completion_tokens=20, total_tokens=30)
+        usage = build_usage(usage_data)
+        assert usage.reasoning_tokens == 0
+        assert usage.cached_prompt_tokens == 0
 
     @patch("praxis.gateway.router.register_callbacks")
     async def test_chat_success(self, mock_cb: MagicMock) -> None:

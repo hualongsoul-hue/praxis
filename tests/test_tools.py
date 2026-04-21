@@ -272,7 +272,7 @@ class TestShellAndSystem:
 
         result = await handle({})
         assert "OS:" in result
-        assert "Python:" in result
+        assert "Time:" in result
 
     async def test_ask_user(self) -> None:
         from praxis.tools.builtins.autonomy.ask_user import handle
@@ -486,7 +486,7 @@ class TestBuiltinRegistration:
             "grep_search", "find_by_name", "code_search",
             "run_command",
             "web_fetch", "web_search",
-            "get_system_info",
+            "get_system_info", "sleep",
             "update_plan", "update_notes", "ask_user", "submit_result",
         }
         registered = set(registry.list_tools())
@@ -498,7 +498,7 @@ class TestBuiltinRegistration:
         register_builtins(registry, sandbox)
 
         schemas = registry.get_tool_schemas()
-        assert len(schemas) == 15
+        assert len(schemas) == 16
         for s in schemas:
             assert s["type"] == "function"
             assert "name" in s["function"]

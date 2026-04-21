@@ -454,7 +454,13 @@ class OrchestrationLoop:
                 turn=self.state.current_turn,
                 data={
                     "has_content": bool(response.content),
+                    "has_reasoning": bool(response.reasoning_content),
+                    "has_refusal": bool(response.refusal),
                     "tool_call_count": len(response.tool_calls or []),
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "reasoning_tokens": response.usage.reasoning_tokens,
+                    "cached_prompt_tokens": response.usage.cached_prompt_tokens,
                 },
             )
 
@@ -535,12 +541,19 @@ class OrchestrationLoop:
                 prompt.messages,
                 tools=prompt.tools if prompt.tools else None,
             ):
-                delta_text = accumulator.feed(chunk)
-                if delta_text:
+                delta = accumulator.feed(chunk)
+                if delta.reasoning:
+                    reasoning_event = self.emitter.emit(
+                        "reasoning_delta",
+                        turn=self.state.current_turn,
+                        data={"text": delta.reasoning},
+                    )
+                    yield reasoning_event
+                if delta.content:
                     delta_event = self.emitter.emit(
                         "content_delta",
                         turn=self.state.current_turn,
-                        data={"text": delta_text},
+                        data={"text": delta.content},
                     )
                     yield delta_event
 
@@ -551,7 +564,13 @@ class OrchestrationLoop:
                 turn=self.state.current_turn,
                 data={
                     "has_content": bool(response.content),
+                    "has_reasoning": bool(response.reasoning_content),
+                    "has_refusal": bool(response.refusal),
                     "tool_call_count": len(response.tool_calls or []),
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "reasoning_tokens": response.usage.reasoning_tokens,
+                    "cached_prompt_tokens": response.usage.cached_prompt_tokens,
                 },
             )
             yield llm_resp_event

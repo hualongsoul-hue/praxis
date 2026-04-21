@@ -14,6 +14,10 @@ class TelemetryConfig(BaseModel):
 
     log_level: str = "INFO"
     log_format: Literal["json", "text"] = "text"
+    log_file: str | None = Field(
+        default=None,
+        description="日志输出文件路径；None 表示输出到 stderr",
+    )
     log_levels: dict[str, str] = Field(
         default_factory=dict,
         description="按组件独立设置日志级别，如 {'gateway': 'DEBUG'}",

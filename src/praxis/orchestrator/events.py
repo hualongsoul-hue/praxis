@@ -19,6 +19,7 @@ EVENT_TYPES = frozenset({
     "turn_start",
     "llm_request",
     "content_delta",
+    "reasoning_delta",
     "llm_response",
     "tool_call_start",
     "tool_call_end",

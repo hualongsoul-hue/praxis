@@ -20,6 +20,45 @@ from praxis.models.responses import (
 from praxis.models.tools import FunctionCall, ToolCall
 
 
+def extract_reasoning(obj: Any) -> str | None:
+    """从 LiteLLM message/delta 对象提取思考内容。
+
+    LiteLLM 将推理/思考内容统一映射到 ``reasoning_content``；
+    部分实现可能使用 ``thinking``，此处作为兼容兜底。
+    """
+    for attr in ("reasoning_content", "thinking"):
+        value = getattr(obj, attr, None)
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def extract_refusal(obj: Any) -> str | None:
+    """从 LiteLLM message/delta 提取 refusal（OpenAI 安全拒答）。"""
+    value = getattr(obj, "refusal", None)
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def build_usage(usage_data: Any) -> Usage:
+    """从 LiteLLM usage 结构构造 ``Usage``，兼容 *_tokens_details 嵌套字段。"""
+    def _detail(name: str, field: str) -> int:
+        details = getattr(usage_data, name, None)
+        if details is None:
+            return 0
+        val = getattr(details, field, None)
+        return int(val) if isinstance(val, int) else 0
+
+    return Usage(
+        prompt_tokens=getattr(usage_data, "prompt_tokens", 0) or 0,
+        completion_tokens=getattr(usage_data, "completion_tokens", 0) or 0,
+        total_tokens=getattr(usage_data, "total_tokens", 0) or 0,
+        reasoning_tokens=_detail("completion_tokens_details", "reasoning_tokens"),
+        cached_prompt_tokens=_detail("prompt_tokens_details", "cached_tokens"),
+    )
+
+
 def convert_response(raw: Any) -> ModelResponse:
     """将 LiteLLM 原始响应转换为 Praxis ModelResponse。"""
     choice = raw.choices[0]
@@ -39,21 +78,17 @@ def convert_response(raw: Any) -> ModelResponse:
             for tc in message.tool_calls
         ]
 
-    usage_data = raw.usage
-    usage = Usage(
-        prompt_tokens=usage_data.prompt_tokens,
-        completion_tokens=usage_data.completion_tokens,
-        total_tokens=usage_data.total_tokens,
-    )
-
     return ModelResponse(
         id=raw.id,
         content=message.content,
+        reasoning_content=extract_reasoning(message),
+        refusal=extract_refusal(message),
         tool_calls=tool_calls,
-        usage=usage,
+        usage=build_usage(raw.usage),
         model=raw.model,
         finish_reason=choice.finish_reason,
         created=raw.created,
+        system_fingerprint=getattr(raw, "system_fingerprint", None),
     )
 
 
@@ -63,10 +98,14 @@ def convert_stream_chunk(raw: Any) -> ModelResponseChunk:
     delta = choice.delta if choice else None
 
     delta_content: str | None = None
+    delta_reasoning: str | None = None
+    delta_refusal: str | None = None
     delta_tool_calls: list[ToolCallDelta] | None = None
 
     if delta:
         delta_content = delta.content
+        delta_reasoning = extract_reasoning(delta)
+        delta_refusal = extract_refusal(delta)
         if delta.tool_calls:
             delta_tool_calls = [
                 ToolCallDelta(
@@ -83,19 +122,18 @@ def convert_stream_chunk(raw: Any) -> ModelResponseChunk:
 
     usage: Usage | None = None
     if hasattr(raw, "usage") and raw.usage:
-        usage = Usage(
-            prompt_tokens=raw.usage.prompt_tokens or 0,
-            completion_tokens=raw.usage.completion_tokens or 0,
-            total_tokens=raw.usage.total_tokens or 0,
-        )
+        usage = build_usage(raw.usage)
 
     return ModelResponseChunk(
         id=raw.id,
         delta_content=delta_content,
+        delta_reasoning_content=delta_reasoning,
+        delta_refusal=delta_refusal,
         delta_tool_calls=delta_tool_calls,
         usage=usage,
         model=getattr(raw, "model", None),
         finish_reason=choice.finish_reason if choice else None,
+        system_fingerprint=getattr(raw, "system_fingerprint", None),
     )
 
 

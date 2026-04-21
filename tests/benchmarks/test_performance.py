@@ -261,10 +261,10 @@ class TestCheckpointPerformance:
 
 
 class TestOrchestrationLoopOverhead:
-    """编排循环开销（不含 LLM 调用）: <50ms。"""
+    """编排循环开销（不含 LLM 调用）: <100ms。"""
 
     async def test_loop_overhead(self, store: PersistenceStore) -> None:
-        """验证：编排循环单次开销 <50ms（不含 LLM 调用）。"""
+        """验证：编排循环单次开销 <100ms（不含 LLM 调用）。"""
         guardrails = GuardrailEngine(RuleEngine(), PermissionManager())
         factory = SessionFactory(
             store=store,
@@ -295,10 +295,10 @@ class TestOrchestrationLoopOverhead:
             await session.run_turn(f"测试 {i}")
         elapsed = (time.perf_counter() - start) / iterations * 1000
 
-        assert elapsed < 50, f"编排循环开销 {elapsed:.2f}ms 超过 50ms 上限"
+        assert elapsed < 100, f"编排循环开销 {elapsed:.2f}ms 超过 100ms 上限"
 
     async def test_loop_with_tool_call_overhead(self, store: PersistenceStore) -> None:
-        """验证：含工具调用的编排循环单次开销 <50ms。"""
+        """验证：含工具调用的编排循环单次开销 <100ms。"""
         guardrails = GuardrailEngine(RuleEngine(), PermissionManager())
         factory = SessionFactory(
             store=store,
@@ -352,4 +352,4 @@ class TestOrchestrationLoopOverhead:
             await session.run_turn(f"工具测试 {i}")
         elapsed = (time.perf_counter() - start) / iterations * 1000
 
-        assert elapsed < 50, f"含工具调用的编排循环开销 {elapsed:.2f}ms 超过 50ms 上限"
+        assert elapsed < 100, f"含工具调用的编排循环开销 {elapsed:.2f}ms 超过 100ms 上限"

@@ -37,23 +37,35 @@ class ParsedOutput:
         self.handoff_target = handoff_target
 
 
+class StreamDelta(BaseModel):
+    """一次 ``StreamAccumulator.feed`` 产生的增量信息。"""
+
+    content: str | None = None
+    reasoning: str | None = None
+    refusal: str | None = None
+
+
 class StreamAccumulator:
     """流式响应块累积器。
 
     将 chat_stream 产出的 ModelResponseChunk 增量拼装为
-    完整的 ModelResponse，支持 content 和 tool_calls 两种增量。
+    完整的 ModelResponse，支持 content、reasoning_content、refusal
+    与 tool_calls 增量。
     """
 
     def __init__(self) -> None:
         self.response_id: str = ""
         self.model: str = ""
         self.content_parts: list[str] = []
+        self.reasoning_parts: list[str] = []
+        self.refusal_parts: list[str] = []
         self.tool_call_buffers: dict[int, dict[str, str]] = {}
         self.finish_reason: str | None = None
         self.usage: Usage | None = None
+        self.system_fingerprint: str | None = None
 
-    def feed(self, chunk: ModelResponseChunk) -> str | None:
-        """喂入一个 chunk，返回 content 增量文本（可能为 None）。"""
+    def feed(self, chunk: ModelResponseChunk) -> StreamDelta:
+        """喂入一个 chunk，返回本次的 content / reasoning / refusal 增量。"""
         if chunk.id:
             self.response_id = chunk.id
         if chunk.model:
@@ -62,11 +74,19 @@ class StreamAccumulator:
             self.finish_reason = chunk.finish_reason
         if chunk.usage is not None:
             self.usage = chunk.usage
+        if chunk.system_fingerprint:
+            self.system_fingerprint = chunk.system_fingerprint
 
-        delta_text: str | None = None
+        delta = StreamDelta()
         if chunk.delta_content:
             self.content_parts.append(chunk.delta_content)
-            delta_text = chunk.delta_content
+            delta.content = chunk.delta_content
+        if chunk.delta_reasoning_content:
+            self.reasoning_parts.append(chunk.delta_reasoning_content)
+            delta.reasoning = chunk.delta_reasoning_content
+        if chunk.delta_refusal:
+            self.refusal_parts.append(chunk.delta_refusal)
+            delta.refusal = chunk.delta_refusal
 
         if chunk.delta_tool_calls:
             for tc_delta in chunk.delta_tool_calls:
@@ -82,11 +102,13 @@ class StreamAccumulator:
                     if tc_delta.function.arguments:
                         buf["arguments"] += tc_delta.function.arguments
 
-        return delta_text
+        return delta
 
     def build_response(self) -> ModelResponse:
         """累积完成后构建完整 ModelResponse。"""
         content = "".join(self.content_parts) or None
+        reasoning = "".join(self.reasoning_parts) or None
+        refusal = "".join(self.refusal_parts) or None
         tool_calls: list[ToolCall] | None = None
         if self.tool_call_buffers:
             tool_calls = [
@@ -101,11 +123,14 @@ class StreamAccumulator:
         return ModelResponse(
             id=self.response_id,
             content=content,
+            reasoning_content=reasoning,
+            refusal=refusal,
             tool_calls=tool_calls,
             usage=usage,
             model=self.model,
             finish_reason=self.finish_reason,
             created=0,
+            system_fingerprint=self.system_fingerprint,
         )
 
 

@@ -9,6 +9,7 @@ import json
 import logging
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from praxis.config.schemas import TelemetryConfig
@@ -120,7 +121,13 @@ def configure_logging(config: TelemetryConfig) -> None:
     root.handlers.clear()
     root.propagate = False
 
-    handler = logging.StreamHandler(sys.stderr)
+    handler: logging.Handler
+    if config.log_file:
+        log_path = Path(config.log_file)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(log_path, encoding="utf-8")
+    else:
+        handler = logging.StreamHandler(sys.stderr)
     if config.log_format == "json":
         handler.setFormatter(JsonFormatter())
     else:
