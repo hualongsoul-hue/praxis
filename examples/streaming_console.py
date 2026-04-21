@@ -24,6 +24,7 @@ from praxis.guardrails.permissions import (
 from praxis.guardrails.rules import RuleEngine
 from praxis.models.guardrails import VerdictType
 from praxis.persistence.store import create_store
+from praxis.skills import BUILTIN_SKILLS_PATH, SkillManager
 from praxis.tools.builtins.autonomy import ask_user
 from praxis.tools.override import override_tool
 
@@ -43,7 +44,7 @@ GATEWAY_CONFIG = GatewayConfig(
         {
             "model_name": "default",
             "litellm_params": {
-                "model": "openai/nvidia/Kimi-K2.5-NVFP4",
+                "model": "openai/glm-5.1",
                 "api_key": "sk-n69uaJWNmHaN2jGWrNmpDkVJ7PuX7rSs4M8LLrJq7icUobpV",
                 "api_base": "http://172.24.23.237:3000/v1",
                 "max_tokens": 128000,
@@ -78,17 +79,19 @@ def print_event(event) -> None:
             print("  << LLM 响应", flush=True)
     elif t == "tool_call_start":
         name = d.get("tool_name", "unknown")
+        tc_id = d.get("tool_call_id", "")
         args = d.get("arguments") or {}
         args_str = json.dumps(args, ensure_ascii=False)
         if len(args_str) > 200:
             args_str = args_str[:200] + "...(truncated)"
-        print(f"  [tool] {name} args={args_str}", flush=True)
+        print(f"  [tool] {name} id={tc_id} args={args_str}", flush=True)
     elif t == "tool_call_end":
         name = d.get("tool_name", "unknown")
+        tc_id = d.get("tool_call_id", "")
         if d.get("needs_user_confirm"):
-            print(f"  [tool] {name} -> NEEDS_CONFIRM ({d.get('reason', '')})", flush=True)
+            print(f"  [tool] {name} id={tc_id} -> NEEDS_CONFIRM ({d.get('reason', '')})", flush=True)
         elif d.get("skipped"):
-            print(f"  [tool] {name} -> SKIPPED ({d.get('reason', '')})", flush=True)
+            print(f"  [tool] {name} id={tc_id} -> SKIPPED ({d.get('reason', '')})", flush=True)
         else:
             ok = d.get("success", False)
             mark = "OK" if ok else "FAIL"
@@ -99,7 +102,7 @@ def print_event(event) -> None:
             ms = d.get("execution_time_ms")
             ms_str = f" [{ms:.0f}ms]" if isinstance(ms, (int, float)) else ""
             suffix = f" {detail_str}" if detail_str else ""
-            print(f"  [tool] {name} -> {mark}{ms_str}{suffix}", flush=True)
+            print(f"  [tool] {name} id={tc_id} -> {mark}{ms_str}{suffix}", flush=True)
     elif t == "termination":
         reason = d.get("reason", "unknown")
         print(f"  [终止: {reason}]", flush=True)
@@ -133,13 +136,21 @@ async def main() -> None:
         tools_config=tools_config,
     )
 
+    skill_manager = SkillManager(registry=session.registry, store=store)
+    await skill_manager.initialize([BUILTIN_SKILLS_PATH])
+    skill_manager.register_disclosure_tools()
+    session.loop.skill_manager = skill_manager
+    session.skill_manager = skill_manager
+
     # 覆盖 ask_user 为真实终端交互
     override_tool(session.registry, ask_user.DEFINITION, interactive_ask_user)
 
+    skill_names = [s.name for s in skill_manager.get_skill_index()]
     print("Praxis Agent 已就绪（流式，内建工具模式）")
     print(f"  沙箱路径: {workspace}")
     print(f"  已注册工具: {', '.join(sorted(session.registry.list_tools()))}")
-    print("输入 /quit 退出，/clear 清空上下文，/tools 列出工具")
+    print(f"  已加载技能: {', '.join(skill_names) if skill_names else '无'}")
+    print("输入 /quit 退出，/clear 清空上下文，/tools 列出工具，/skills 列出技能")
     print("-" * 50)
 
     while True:
@@ -161,6 +172,10 @@ async def main() -> None:
             for name in sorted(session.registry.list_tools()):
                 defn = session.registry.get_definition(name)
                 print(f"  - {name}: {defn.description}")
+            continue
+        if user_input == "/skills":
+            for entry in skill_manager.get_skill_index():
+                print(f"  - {entry.name}: {entry.description}")
             continue
 
         print()

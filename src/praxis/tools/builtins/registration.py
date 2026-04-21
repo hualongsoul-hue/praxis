@@ -9,7 +9,7 @@ from praxis.tools.builtins.file_ops import edit_file, list_dir, read_file, write
 from praxis.tools.builtins.network import web_fetch, web_search
 from praxis.tools.builtins.search import code_search, find_by_name, grep_search
 from praxis.tools.builtins.shell import run_command
-from praxis.tools.builtins.system import get_system_info
+from praxis.tools.builtins.system import get_system_info, sleep
 from praxis.tools.registry import ToolRegistry
 from praxis.tools.sandbox import Sandbox
 
@@ -41,6 +41,7 @@ def register_builtins(
     registry.register(web_search.DEFINITION, web_search.create_handler(sandbox))
 
     registry.register(get_system_info.DEFINITION, get_system_info.handle)
+    registry.register(sleep.DEFINITION, sleep.handle)
 
     registry.register(update_plan.DEFINITION, update_plan.create_handler(store))
     registry.register(update_notes.DEFINITION, update_notes.create_handler(store))

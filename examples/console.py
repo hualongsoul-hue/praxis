@@ -42,7 +42,7 @@ GATEWAY_CONFIG = GatewayConfig(
         {
             "model_name": "default",
             "litellm_params": {
-                "model": "openai/nvidia/Kimi-K2.5-NVFP4",
+                "model": "openai/glm-5.1",
                 "api_key": "sk-n69uaJWNmHaN2jGWrNmpDkVJ7PuX7rSs4M8LLrJq7icUobpV",
                 "api_base": "http://172.24.23.237:3000/v1",
                 "max_tokens": 128000,

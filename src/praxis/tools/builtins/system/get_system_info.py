@@ -5,14 +5,14 @@
 
 import os
 import platform
-import sys
+from datetime import datetime
 from typing import Any
 
 from praxis.models.tools import ToolDefinition, ToolMetadata
 
 DEFINITION = ToolDefinition(
     name="get_system_info",
-    description="返回当前操作系统、Python 版本、CPU 架构、工作目录等系统信息。",
+    description="返回当前操作系统、CPU 架构、工作目录、系统时间等信息。",
     parameters={
         "type": "object",
         "properties": {},
@@ -32,8 +32,8 @@ async def handle(args: dict[str, Any]) -> str:
         f"OS: {platform.system()} {platform.release()}",
         f"Platform: {platform.platform()}",
         f"Architecture: {platform.machine()}",
-        f"Python: {sys.version}",
         f"CWD: {os.getcwd()}",
         f"CPU count: {os.cpu_count()}",
+        f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
     ]
     return "\n".join(lines)
