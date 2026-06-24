@@ -22,6 +22,19 @@
 - **S6 衰减**: 梦境周期执行相关性衰减遗忘（`decay_enabled`）
 - **MCP**: 服务器装配到会话、Sampling/Elicitation 回调、资源/提示工具、OAuth 头注入
 
+### 生产化加固
+
+- **配置保真**: 装配 RecoveryConfig、default_strategy、VerificationConfig 开关、
+  max_checkpoints_per_session、input/output_guardrails_enabled、permissions_file、
+  audit_enabled——消除「配置了却无效」
+- **可观测**: `configure_telemetry` 统一初始化；Histogram 分桶/分位；
+  Prometheus /metrics 抓取端点；OTLP 追踪（可选依赖，未装则降级 console）；
+  修复 session_id/turn 标签导致的无界基数
+- **安全**: 收窄敏感信息正则降误报、护栏启停可配、文档明确为基础启发式
+- **持久化**: SQLite 启用 WAL + busy_timeout 加固并发
+- **运维**: `python -m praxis` CLI（version/validate/show-config/serve-metrics）
+- **集成验证**: 新增 LiteLLM 真实链路集成测试（mock_response，无网络）
+
 ## [1.0.0] - 2026-04-17
 
 ### 架构

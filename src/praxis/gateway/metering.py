@@ -10,7 +10,10 @@ import litellm
 
 from praxis.exceptions import BudgetExceededError
 from praxis.gateway.router import GatewayRouter
+from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
+
+log = get_logger("gateway.metering")
 
 
 def get_token_count(messages: list[dict[str, Any]], model: str = "default") -> int:
@@ -46,7 +49,8 @@ def get_max_tokens(model: str = "default") -> int:
     """
     try:
         return litellm.get_max_tokens(model)  # type: ignore[return-value]
-    except Exception:
+    except Exception as exc:
+        log.debug("get_max_tokens 回退默认值", model=model, error=str(exc))
         return DEFAULT_MAX_TOKENS
 
 
@@ -78,7 +82,8 @@ def estimate_input_cost(estimated_tokens: int, model: str = "default") -> float:
             completion_tokens=0,
         )
         return float(prompt_cost) + float(completion_cost_)
-    except Exception:
+    except Exception as exc:
+        log.debug("成本估算失败，按 0 计", model=model, error=str(exc))
         return 0.0
 
 
