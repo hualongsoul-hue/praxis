@@ -225,10 +225,11 @@ class SessionFactory:
         await memory.start()
 
         # S5: 工具系统
+        resolved_tools_config = tools_config or ToolsConfig()
         created_new_registry = registry is None
         if created_new_registry:
             registry = ToolRegistry()
-        sandbox = Sandbox(tools_config or ToolsConfig())
+        sandbox = Sandbox(resolved_tools_config)
         if created_new_registry and include_builtins:
             register_builtins(registry, sandbox, store=self.store)
             # S6: 记忆热路径接口暴露为 LLM 可调用工具（仅在装配了记忆系统时）
@@ -244,6 +245,9 @@ class SessionFactory:
         circuits = CircuitBreakerRegistry()
         retry_policy = RetryPolicy()
         fallbacks = FallbackRegistry()
+        # 从配置加载工具降级映射，激活协调器中的降级链路（否则映射恒为空）
+        if resolved_tools_config.fallback_mappings:
+            fallbacks.load_mappings(resolved_tools_config.fallback_mappings)
 
         # S11: 编排循环
         emitter = EventEmitter()

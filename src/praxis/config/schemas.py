@@ -67,6 +67,10 @@ class ToolsConfig(BaseModel):
     max_concurrent_readonly: int = 5
     shell_timeout: float = 120.0
     network_allowed: bool = True
+    fallback_mappings: dict[str, str] = Field(
+        default_factory=dict,
+        description="工具降级映射（首选工具名 → 降级替代工具名），S9 优雅降级使用",
+    )
 
 
 class MemoryConfig(BaseModel):

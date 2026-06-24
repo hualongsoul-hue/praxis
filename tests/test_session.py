@@ -104,6 +104,28 @@ class TestSessionFactory:
         await session.terminate()
         assert session.status == SessionStatus.TERMINATED
 
+    async def test_fallback_mappings_wired_from_config(
+        self,
+        factory: SessionFactory,
+        guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
+    ) -> None:
+        """ToolsConfig.fallback_mappings 应流入协调器的降级表，激活 S9 降级链路。"""
+        from praxis.config.schemas import ToolsConfig
+
+        tools_config = ToolsConfig(fallback_mappings={"web_search": "web_fetch"})
+        session = await factory.create_session(
+            guardrails=guardrails,
+            gateway=mock_gateway,
+            tools_config=tools_config,
+        )
+        try:
+            fallbacks = session.loop.coordinator.fallbacks
+            assert fallbacks is not None
+            assert fallbacks.get_fallback("web_search") == "web_fetch"
+        finally:
+            await session.terminate()
+
 
 # ── Task 13.3: 自动检查点 ───────────────────────────────────────────────────
 
