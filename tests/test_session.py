@@ -105,6 +105,29 @@ class TestSessionFactory:
         await session.terminate()
         assert session.status == SessionStatus.TERMINATED
 
+    async def test_auto_checkpoint_pruning(
+        self,
+        store: PersistenceStore,
+        guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
+    ) -> None:
+        """超过 max_checkpoints_per_session 的旧检查点应被裁剪。"""
+        factory = SessionFactory(
+            store=store,
+            session_config=SessionConfig(auto_checkpoint=True, max_checkpoints_per_session=3),
+            orchestrator_config=OrchestratorConfig(),
+            context_config=ContextConfig(),
+        )
+        session = await factory.create_session(guardrails=guardrails, gateway=mock_gateway)
+        try:
+            for _ in range(6):
+                await session.save_auto_checkpoint()
+            mgr = CheckpointManager(store)
+            infos = await mgr.list_checkpoints(session.session_id)
+            assert len(infos) == 3
+        finally:
+            await session.terminate()
+
     async def test_recovery_and_strategy_config_wired(
         self,
         store: PersistenceStore,

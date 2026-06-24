@@ -428,3 +428,25 @@ class TestVerifierRegistry:
         results = await reg.run_computational({"code": "test"})
         assert len(results) == 1
         assert results[0].feedback == "自定义检查通过"
+
+
+class TestVerifierConfigFlags:
+    """S10 配置启停开关。"""
+
+    async def test_disabled_types_skip(self) -> None:
+        from praxis.config.schemas import VerificationConfig
+        from praxis.verification.computational import LintVerifier
+
+        reg = VerifierRegistry.from_config(
+            VerificationConfig(
+                computational_enabled=False,
+                inferential_enabled=False,
+                visual_enabled=False,
+            ),
+        )
+        reg.register(LintVerifier())
+        assert await reg.run_computational({"code": "x=1\n"}) == []
+        r = await reg.run_inferential(criteria="x", content="y")
+        assert r.status == VerificationStatus.SKIP
+        r2 = await reg.run_visual(url="http://x", expectations="y")
+        assert r2.status == VerificationStatus.SKIP

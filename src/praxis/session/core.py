@@ -159,7 +159,20 @@ class Session:
             file_refs=self.assembler.file_refs,
             description=f"Auto checkpoint after turn {self.metadata.total_turns}",
         )
+        await self._prune_checkpoints(checkpoint_mgr)
         return checkpoint_id
+
+    async def _prune_checkpoints(self, checkpoint_mgr: CheckpointManager) -> None:
+        """按 max_checkpoints_per_session 保留最新若干个，删除最旧的多余检查点。"""
+        limit = self.config.max_checkpoints_per_session
+        if limit <= 0:
+            return
+        infos = await checkpoint_mgr.list_checkpoints(self.session_id)
+        if len(infos) <= limit:
+            return
+        infos.sort(key=lambda c: c.created_at)  # 旧→新
+        for stale in infos[: len(infos) - limit]:
+            await checkpoint_mgr.delete_checkpoint(self.session_id, stale.checkpoint_id)
 
     async def run_turn_stream(
         self,

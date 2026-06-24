@@ -4,7 +4,7 @@ register_verifier 接口，支持自定义验证器扩展。
 质量左移策略（集成前/集成后/持续监控/运行时反馈）配置。
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from praxis.gateway.router import GatewayRouter
 from praxis.models.verification import (
@@ -17,6 +17,9 @@ from praxis.verification.computational import Verifier, run_computational
 from praxis.verification.inferential import run_inferential
 from praxis.verification.visual import run_visual
 from praxis.telemetry.logger import get_logger
+
+if TYPE_CHECKING:
+    from praxis.config.schemas import VerificationConfig
 
 log = get_logger("verification.registry")
 
@@ -41,10 +44,33 @@ class VerifierRegistry:
     管理所有已注册的验证器，按类型和质量阶段组织。
     """
 
-    def __init__(self, gateway: GatewayRouter | None = None) -> None:
+    def __init__(
+        self,
+        gateway: GatewayRouter | None = None,
+        computational_enabled: bool = True,
+        inferential_enabled: bool = True,
+        visual_enabled: bool = True,
+    ) -> None:
         self.entries: dict[str, VerifierEntry] = {}
         # 推理型（LLM judge）与视觉型验证需要 S4 网关；可选注入以启用。
         self.gateway = gateway
+        self.computational_enabled = computational_enabled
+        self.inferential_enabled = inferential_enabled
+        self.visual_enabled = visual_enabled
+
+    @classmethod
+    def from_config(
+        cls,
+        config: "VerificationConfig",
+        gateway: GatewayRouter | None = None,
+    ) -> "VerifierRegistry":
+        """按 S10 配置构建注册表（消费三类验证的启停开关）。"""
+        return cls(
+            gateway=gateway,
+            computational_enabled=config.computational_enabled,
+            inferential_enabled=config.inferential_enabled,
+            visual_enabled=config.visual_enabled,
+        )
 
     def register(
         self,
@@ -116,6 +142,8 @@ class VerifierRegistry:
         Returns:
             验证结果列表。
         """
+        if not self.computational_enabled:
+            return []
         entries = self.list_verifiers(
             verification_type=VerificationType.COMPUTATIONAL,
             phase=phase,
@@ -135,6 +163,13 @@ class VerifierRegistry:
 
         需要注册表持有 S4 网关；未配置时返回 SKIP 结果。
         """
+        if not self.inferential_enabled:
+            return VerificationResult(
+                status=VerificationStatus.SKIP,
+                verification_type=VerificationType.INFERENTIAL,
+                verifier_name="inferential",
+                feedback="推理型验证已禁用",
+            )
         if self.gateway is None:
             log.warning("推理型验证已跳过：未配置网关")
             return VerificationResult(
@@ -162,6 +197,13 @@ class VerifierRegistry:
 
         需要注册表持有 S4 网关；未配置时返回 SKIP 结果。
         """
+        if not self.visual_enabled:
+            return VerificationResult(
+                status=VerificationStatus.SKIP,
+                verification_type=VerificationType.VISUAL,
+                verifier_name="visual",
+                feedback="视觉型验证已禁用",
+            )
         if self.gateway is None:
             log.warning("视觉型验证已跳过：未配置网关")
             return VerificationResult(
