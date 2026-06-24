@@ -76,7 +76,6 @@ def scoped(store: PersistenceStore) -> ScopedMemoryStore:
 def mock_gateway() -> GatewayRouter:
     gw = MagicMock(spec=GatewayRouter)
     gw.config = MagicMock()
-    gw.config.max_budget = None
     gw.config.default_model = "mock"
     gw.config.max_budget = None
     gw.router = MagicMock()
@@ -1001,3 +1000,75 @@ class TestCognitiveMemory:
                 assert ms.worker.pending == []
             finally:
                 await ms.stop()
+
+
+# ── 记忆工具：S6 热路径接口暴露为 LLM 可调用工具 ──────────────────────────────
+
+
+class TestMemoryTools:
+    async def test_register_and_invoke(
+        self, store: PersistenceStore, mock_gateway,
+    ) -> None:
+        from praxis.tools.builtins.memory_ops import register_memory_tools
+        from praxis.tools.registry import ToolRegistry
+
+        config = MemoryConfig(background_enabled=False, dream_enabled=False)
+        ms = CognitiveMemory(store, mock_gateway, session_id="s", config=config)
+        ms.vector_store.embed_func = mock_embed
+
+        registry = ToolRegistry()
+        names = register_memory_tools(registry, ms)
+        assert set(names) == {
+            "save_memory", "search_memory", "update_memory",
+            "delete_memory", "write_scratchpad", "read_scratchpad",
+        }
+        for name in names:
+            assert registry.has_tool(name)
+            assert registry.get_metadata(name).category == "memory"
+
+        # save → search 闭环
+        save = registry.get_entry("save_memory").handler
+        out = await save({"content": "用户偏好 Python", "tags": ["pref"]})
+        assert "已保存记忆" in out
+
+        search = registry.get_entry("search_memory").handler
+        results = await search({"query": "Python 偏好", "top_k": 5})
+        assert "Python" in results
+
+        # scratchpad 写读闭环（仅限白名单 key）
+        write = registry.get_entry("write_scratchpad").handler
+        await write({"key": "todos.json", "content": "写测试"})
+        read = registry.get_entry("read_scratchpad").handler
+        assert "写测试" in await read({"key": "todos.json"})
+        # 非白名单 key 被优雅拒绝
+        assert "不支持" in await write({"key": "bad", "content": "x"})
+
+    async def test_tools_surface_in_session(
+        self, store: PersistenceStore, mock_gateway,
+    ) -> None:
+        """记忆工具应出现在会话的 general 阶段注入工具集中。"""
+        from praxis.config.schemas import (
+            ContextConfig, OrchestratorConfig, SessionConfig,
+        )
+        from praxis.guardrails.engine import GuardrailEngine
+        from praxis.guardrails.permissions import PermissionManager
+        from praxis.guardrails.rules import RuleEngine
+        from praxis.session.core import SessionFactory
+
+        mock_gateway.config.background_enabled = False
+        guardrails = GuardrailEngine(RuleEngine(), PermissionManager())
+        factory = SessionFactory(
+            store=store,
+            session_config=SessionConfig(auto_checkpoint=False),
+            orchestrator_config=OrchestratorConfig(),
+            context_config=ContextConfig(),
+            memory_config=MemoryConfig(background_enabled=False, dream_enabled=False),
+        )
+        session = await factory.create_session(guardrails=guardrails, gateway=mock_gateway)
+        try:
+            schemas = session.injector.get_tools_for_stage("general")
+            tool_names = {s["function"]["name"] for s in schemas}
+            assert "save_memory" in tool_names
+            assert "search_memory" in tool_names
+        finally:
+            await session.terminate()

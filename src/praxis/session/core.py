@@ -42,6 +42,7 @@ from praxis.skills.manager import SkillManager
 from praxis.telemetry.audit import configure_audit
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
+from praxis.tools.builtins.memory_ops import register_memory_tools
 from praxis.tools.builtins.registration import register_builtins
 from praxis.tools.executor import ToolExecutor
 from praxis.tools.registry import ToolRegistry
@@ -230,6 +231,9 @@ class SessionFactory:
         sandbox = Sandbox(tools_config or ToolsConfig())
         if created_new_registry and include_builtins:
             register_builtins(registry, sandbox, store=self.store)
+            # S6: 记忆热路径接口暴露为 LLM 可调用工具（仅在装配了记忆系统时）
+            if memory is not None:
+                register_memory_tools(registry, memory)
         executor = ToolExecutor(registry, sandbox)
         injector = ToolInjector(registry)
 
