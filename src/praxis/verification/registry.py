@@ -4,8 +4,9 @@ register_verifier 接口，支持自定义验证器扩展。
 质量左移策略（集成前/集成后/持续监控/运行时反馈）配置。
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+from praxis.config.schemas import VerificationConfig
 from praxis.gateway.router import GatewayRouter
 from praxis.models.verification import (
     QualityPhase,
@@ -17,9 +18,6 @@ from praxis.verification.computational import Verifier, run_computational
 from praxis.verification.inferential import run_inferential
 from praxis.verification.visual import run_visual
 from praxis.telemetry.logger import get_logger
-
-if TYPE_CHECKING:
-    from praxis.config.schemas import VerificationConfig
 
 log = get_logger("verification.registry")
 
@@ -61,7 +59,7 @@ class VerifierRegistry:
     @classmethod
     def from_config(
         cls,
-        config: "VerificationConfig",
+        config: VerificationConfig,
         gateway: GatewayRouter | None = None,
     ) -> "VerifierRegistry":
         """按 S10 配置构建注册表（消费三类验证的启停开关）。"""

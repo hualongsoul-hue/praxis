@@ -5,10 +5,7 @@ create_session 创建新会话时初始化所有组件实例，
 """
 
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from praxis.session.continuation import ContinuationManager
+from typing import Any
 
 from praxis.config.schemas import (
     ContextConfig,
@@ -83,7 +80,7 @@ class Session:
         memory: CognitiveMemory | None = None,
         skill_manager: SkillManager | None = None,
         verifier_registry: VerifierRegistry | None = None,
-        continuation: "ContinuationManager | None" = None,
+        continuation: Any = None,
     ) -> None:
         self.metadata = metadata
         self.loop = loop

@@ -4,17 +4,15 @@
 绊线触发时返回 block + tripwire 标记。
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
+from praxis.config.schemas import GuardrailsConfig
 from praxis.guardrails.permissions import PermissionManager
 from praxis.guardrails.rules import RuleEngine, RuleTarget
 from praxis.models.guardrails import GuardrailVerdict, VerdictType
 from praxis.models.telemetry import AuditEvent
 from praxis.models.tools import ToolMetadata
 from praxis.telemetry.audit import record_audit
-
-if TYPE_CHECKING:
-    from praxis.config.schemas import GuardrailsConfig
 
 
 class GuardrailEngine:
@@ -141,7 +139,7 @@ class GuardrailEngine:
         ))
 
 
-def build_guardrail_engine(config: "GuardrailsConfig") -> GuardrailEngine:
+def build_guardrail_engine(config: GuardrailsConfig) -> GuardrailEngine:
     """从 S8 配置装配护栏引擎（消费 default_permission / permissions_file / 启停开关）。
 
     - 注册内置规则集（提示注入/敏感信息）。

@@ -7,14 +7,12 @@ LLM 可调用工具，使 Agent 能够发现并读取 MCP 资源、列出并取�
 """
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from praxis.models.tools import ToolDefinition, ToolMetadata
 from praxis.telemetry.logger import get_logger
+from praxis.tools.mcp.connection import MCPConnectionManager
 from praxis.tools.registry import ToolHandler, ToolRegistry
-
-if TYPE_CHECKING:
-    from praxis.tools.mcp.connection import MCPConnectionManager
 
 log = get_logger("tools.mcp.access_tools")
 
@@ -73,7 +71,7 @@ def _make_get_prompt(bridge: Any) -> ToolHandler:
 
 def register_mcp_access_tools(
     registry: ToolRegistry,
-    manager: "MCPConnectionManager",
+    manager: MCPConnectionManager,
 ) -> list[str]:
     """按连接的 Server 能力注册 MCP 资源/提示访问工具。
 
