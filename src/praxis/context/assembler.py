@@ -6,6 +6,7 @@
 XML/Markdown 标签分隔，关键内容放置首尾。
 """
 
+import json
 from typing import Any
 
 from praxis.config.schemas import ContextConfig
@@ -44,6 +45,9 @@ class PromptAssembler:
         self.tool_schemas: list[dict[str, Any]] = []
         self.file_refs: list[str] = []
         self.compaction_count: int = 0
+        # 最近一次组装时，对话历史之外的静态层（系统提示/记忆/语义/工具）Token 估算，
+        # 供 get_token_usage 计入真实上下文压力，避免只数对话历史导致的低估。
+        self._static_token_count: int = 0
 
     def assemble_prompt(
         self,
@@ -127,6 +131,23 @@ class PromptAssembler:
         max_tokens = get_max_tokens(self.model)
         token_count = get_token_count(messages, self.model)
 
+        # 记录对话历史之外的静态层 Token（系统提示 + 语义检索 + 工具定义），
+        # 供 get_token_usage 与对话历史相加，得到接近真实的上下文占用。
+        static_messages: list[dict[str, Any]] = [
+            {"role": "system", "content": system_content}
+        ]
+        if semantic_results:
+            static_messages.append({
+                "role": "system",
+                "content": f"<semantic_context>\n{semantic_results}\n</semantic_context>",
+            })
+        if self.tool_schemas:
+            static_messages.append({
+                "role": "system",
+                "content": json.dumps(self.tool_schemas, ensure_ascii=False),
+            })
+        self._static_token_count = get_token_count(static_messages, self.model)
+
         emit_metric(
             "context_assembled_tokens",
             float(token_count),
@@ -166,9 +187,14 @@ class PromptAssembler:
         self.conversation_history.append(assistant_msg)
 
     def get_token_usage(self) -> TokenUsage:
-        """获取当前上下文 Token 用量。"""
+        """获取当前上下文 Token 用量。
+
+        计入对话历史 + 最近一次组装的静态层（系统提示/记忆/语义/工具定义），
+        以反映真实的上下文窗口压力，避免仅统计对话历史造成的严重低估。
+        """
         max_tokens = get_max_tokens(self.model)
-        current = get_token_count(self.conversation_history, self.model) if self.conversation_history else 0
+        history = get_token_count(self.conversation_history, self.model) if self.conversation_history else 0
+        current = history + self._static_token_count
         ratio = current / max_tokens if max_tokens > 0 else 0.0
         return TokenUsage(
             current_tokens=current,
