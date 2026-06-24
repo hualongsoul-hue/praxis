@@ -18,13 +18,20 @@ log = get_logger("memory.vector")
 EmbeddingFunc = Callable[[str], Awaitable[list[float]]]
 
 
+DEFAULT_EMBEDDING_API_BASE = "http://localhost:8080"
+
+
 async def tei_embed(
     text: str,
-    api_base: str = "http://172.24.21.115:9079",
+    api_base: str = DEFAULT_EMBEDDING_API_BASE,
     api_key: str = "",
     timeout: float = 30.0,
+    client: httpx.AsyncClient | None = None,
 ) -> list[float]:
-    """通过 TEI 服务获取文本嵌入向量。"""
+    """通过 TEI 服务获取文本嵌入向量。
+
+    传入 ``client`` 时复用该连接池；否则临时创建并关闭一个客户端。
+    """
     url = f"{api_base.rstrip('/')}/embed"
     headers: dict[str, str] = {
         "Content-Type": "application/json",
@@ -35,10 +42,15 @@ async def tei_embed(
 
     payload = {"inputs": [text], "normalize": True, "truncate": True}
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    if client is not None:
         response = await client.post(url, json=payload, headers=headers)
         response.raise_for_status()
         embeddings = response.json()
+    else:
+        async with httpx.AsyncClient(timeout=timeout) as tmp_client:
+            response = await tmp_client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            embeddings = response.json()
 
     if not isinstance(embeddings, list) or len(embeddings) == 0:
         raise RuntimeError(f"TEI 返回异常结果: {str(embeddings)[:200]}")
@@ -66,7 +78,7 @@ class VectorStore:
         self,
         scoped_store: ScopedMemoryStore,
         embed_func: EmbeddingFunc | None = None,
-        api_base: str = "http://172.24.21.115:9079",
+        api_base: str = DEFAULT_EMBEDDING_API_BASE,
         api_key: str = "",
         timeout: float = 30.0,
     ) -> None:
@@ -76,6 +88,13 @@ class VectorStore:
         self.timeout = timeout
         self.embed_func: EmbeddingFunc = embed_func or self.default_embed
         self.index: dict[str, tuple[MemoryEntry, list[float]]] = {}
+        self._client: httpx.AsyncClient | None = None
+
+    def _get_client(self) -> httpx.AsyncClient:
+        """惰性创建并复用共享 httpx 客户端（连接池）。"""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=self.timeout)
+        return self._client
 
     async def default_embed(self, text: str) -> list[float]:
         return await tei_embed(
@@ -83,7 +102,14 @@ class VectorStore:
             api_base=self.api_base,
             api_key=self.api_key,
             timeout=self.timeout,
+            client=self._get_client(),
         )
+
+    async def aclose(self) -> None:
+        """关闭共享 httpx 客户端。"""
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+        self._client = None
 
     async def add(self, entry: MemoryEntry) -> None:
         """添加记忆并建立嵌入索引。"""

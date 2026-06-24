@@ -72,7 +72,7 @@ class ToolsConfig(BaseModel):
 class MemoryConfig(BaseModel):
     """S6 记忆系统配置。"""
 
-    embedding_api_base: str = "http://172.24.21.115:9079"
+    embedding_api_base: str = "http://localhost:8080"
     embedding_api_key: str = ""
     embedding_timeout: float = 30.0
     embedding_dimensions: int = 2560

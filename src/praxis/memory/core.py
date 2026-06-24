@@ -164,6 +164,7 @@ class CognitiveMemory:
         await self.worker.stop()
         await self.dream_scheduler.stop()
         await self.save_meta()
+        await self.vector_store.aclose()
         log.info("CognitiveMemory 已停止", session_id=self.session_id)
 
     # ──────────────────────────────────────────────────────────────────
