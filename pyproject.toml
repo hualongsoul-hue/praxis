@@ -28,6 +28,12 @@ dev = [
     "pytest-cov>=6.0",
 ]
 
+[project.scripts]
+praxis = "praxis.__main__:main"
+
+[project.optional-dependencies]
+otlp = ["opentelemetry-exporter-otlp-proto-grpc>=1.27"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
