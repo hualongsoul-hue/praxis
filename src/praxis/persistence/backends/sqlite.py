@@ -5,8 +5,9 @@
 
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
-from sqlalchemy import DateTime, Index, LargeBinary, String, delete, select
+from sqlalchemy import DateTime, Index, LargeBinary, String, delete, event, select
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -63,6 +64,18 @@ class SqliteBackend:
             f"sqlite+aiosqlite:///{db_path}",
             echo=False,
         )
+
+        # 生产并发加固：WAL 提升读写并发，busy_timeout 缓解 "database is locked"，
+        # NORMAL 同步级别在 WAL 下兼顾持久性与吞吐。
+        @event.listens_for(engine.sync_engine, "connect")
+        def _set_sqlite_pragmas(dbapi_conn: Any, _record: Any) -> None:
+            cur = dbapi_conn.cursor()
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA busy_timeout=5000")
+            cur.execute("PRAGMA synchronous=NORMAL")
+            cur.execute("PRAGMA foreign_keys=ON")
+            cur.close()
+
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
