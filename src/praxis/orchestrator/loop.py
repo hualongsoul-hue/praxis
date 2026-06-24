@@ -68,6 +68,7 @@ class OrchestrationLoop:
         skill_manager: SkillManager | None = None,
         compactor: ContextCompactor | None = None,
         masker: ObservationMasker | None = None,
+        compaction_min_history: int = 8,
     ) -> None:
         self.config = config
         self.gateway = gateway
@@ -84,6 +85,7 @@ class OrchestrationLoop:
         self.skill_manager = skill_manager
         self.compactor = compactor
         self.masker = masker
+        self.compaction_min_history = compaction_min_history
         self.state = LoopState()
         # 最近一次在关键节点（turn_start / turn_end / termination）发射的事件，
         # 供流式路径精确 yield，避免依赖 emitter.events[-1] 受子系统插入事件影响。
@@ -174,9 +176,9 @@ class OrchestrationLoop:
         self.state.phase = LoopPhase.ASSEMBLING
         self._last_event = self.emitter.emit("turn_start", turn=self.state.current_turn)
 
-        # S7 观察遮蔽与压缩仅在历史足够长时触发
+        # S7 观察遮蔽与压缩仅在历史足够长时触发（阈值由 S7 配置驱动）
         history_len = len(self.assembler.conversation_history)
-        if history_len >= 8:
+        if history_len >= self.compaction_min_history:
             if self.masker is not None:
                 self.masker.apply_masking(
                     self.assembler.conversation_history,

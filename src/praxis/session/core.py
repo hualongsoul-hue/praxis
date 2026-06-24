@@ -281,6 +281,7 @@ class SessionFactory:
             skill_manager=skill_manager,
             compactor=compactor,
             masker=masker,
+            compaction_min_history=self.context_config.compaction_min_history,
         )
 
         metadata.status = SessionStatus.ACTIVE

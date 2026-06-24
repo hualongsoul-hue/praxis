@@ -106,6 +106,10 @@ class ContextConfig(BaseModel):
     masking_turn_distance: int = 10
     masking_token_threshold: int = 2000
     recent_file_refs_keep: int = 5
+    compaction_min_history: int = Field(
+        default=8,
+        description="对话历史长度达到此值才触发观察遮蔽与上下文压缩检查",
+    )
 
 
 class GuardrailsConfig(BaseModel):
