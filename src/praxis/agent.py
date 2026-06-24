@@ -27,7 +27,9 @@ from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.memory.core import CognitiveMemory
 from praxis.persistence.store import PersistenceStore
+from praxis.session.checkpoint import CheckpointManager
 from praxis.session.core import Session, SessionFactory
+from praxis.session.resume import SessionResumer
 from praxis.skills.manager import SkillManager
 from praxis.subagent.tools import wire_subagent
 from praxis.telemetry.logger import get_logger
@@ -117,4 +119,59 @@ async def create_agent_session(
         session_id=session.session_id,
         subagent_enabled=subagent_config is not None,
     )
+    return session
+
+
+async def resume_agent_session(
+    store: PersistenceStore,
+    guardrails: GuardrailEngine,
+    gateway: GatewayRouter,
+    session_id: str,
+    checkpoint_id: str | None = None,
+    session_config: SessionConfig | None = None,
+    orchestrator_config: OrchestratorConfig | None = None,
+    context_config: ContextConfig | None = None,
+    memory_config: MemoryConfig | None = None,
+    registry: ToolRegistry | None = None,
+    model: str = "default",
+    memory: CognitiveMemory | None = None,
+    skill_manager: SkillManager | None = None,
+    verifier_registry: VerifierRegistry | None = None,
+) -> Session | None:
+    """从检查点恢复一个 Agent 会话（跨上下文窗口续接）。
+
+    通过 SessionResumer 重建无状态组件并恢复 S6/S7/S11 状态。
+
+    Args:
+        store: S3 持久化存储。
+        guardrails: S8 护栏引擎。
+        gateway: S4 LLM 网关路由器。
+        session_id: 待恢复的会话 ID。
+        checkpoint_id: 指定检查点 ID；None 时加载最新检查点。
+        其余参数同 create_agent_session。
+
+    Returns:
+        恢复后的 Session；检查点不存在时返回 None。
+    """
+    factory = SessionFactory(
+        store=store,
+        session_config=session_config or SessionConfig(),
+        orchestrator_config=orchestrator_config or OrchestratorConfig(),
+        context_config=context_config or ContextConfig(),
+        memory_config=memory_config,
+    )
+    resumer = SessionResumer(factory, CheckpointManager(store))
+    session = await resumer.resume_session(
+        session_id=session_id,
+        guardrails=guardrails,
+        gateway=gateway,
+        registry=registry,
+        model=model,
+        checkpoint_id=checkpoint_id,
+        memory=memory,
+        skill_manager=skill_manager,
+        verifier_registry=verifier_registry,
+    )
+    if session is not None:
+        log.info("Agent 会话已恢复", session_id=session_id)
     return session

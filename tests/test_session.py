@@ -250,6 +250,41 @@ class TestSessionResumer:
         session = await resumer.resume_session("nonexistent", guardrails, gateway=mock_gateway)
         assert session is None
 
+    async def test_top_level_resume_agent_session(
+        self,
+        store: PersistenceStore,
+        guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
+    ) -> None:
+        """顶层 resume_agent_session 应能从检查点恢复（公共入口链路）。"""
+        from praxis.agent import resume_agent_session
+
+        mgr = CheckpointManager(store)
+        metadata = SessionMetadata(session_id="top-resume", total_turns=3)
+        await mgr.save_checkpoint(
+            metadata,
+            {"messages": [{"role": "user", "content": "hi"}]},
+            {},
+            {},
+        )
+        session = await resume_agent_session(
+            store=store,
+            guardrails=guardrails,
+            gateway=mock_gateway,
+            session_id="top-resume",
+        )
+        try:
+            assert session is not None
+            assert session.session_id == "top-resume"
+            assert session.metadata.total_turns == 3
+        finally:
+            if session is not None:
+                await session.terminate()
+        assert await resume_agent_session(
+            store=store, guardrails=guardrails, gateway=mock_gateway,
+            session_id="does-not-exist",
+        ) is None
+
     async def test_validate_integrity(
         self,
         store: PersistenceStore,
