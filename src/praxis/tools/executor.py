@@ -1,7 +1,11 @@
 """工具执行管线。
 
-按序执行：参数验证（Schema 校验）→ 沙箱检查 → 执行 → 结果捕获 → 格式化。
+按序执行：参数验证（Schema 校验）→ 执行 → 结果捕获 → 格式化。
 支持并发策略（只读并发、写串行），可配置超时。
+
+注意：沙箱（文件白名单/网络出站/Shell 超时）由各工具处理器在执行时
+通过共享的 Sandbox 实例自行强制，执行管线本身不做通用路径/网络拦截
+（参数无统一的路径语义，无法在此层泛化检查）。
 """
 
 import asyncio
@@ -33,7 +37,8 @@ class ToolExecutor:
     ) -> ToolResult:
         """执行工具。
 
-        完整管线：参数验证 → 沙箱检查 → 执行 → 结果捕获 → 格式化。
+        完整管线：参数验证 → 执行 → 结果捕获 → 格式化。
+        （沙箱由工具处理器自行强制，见模块文档。）
 
         Args:
             name: 工具名称。
@@ -74,7 +79,6 @@ class ToolExecutor:
                         timeout=timeout,
                     )
         except asyncio.TimeoutError:
-            elapsed = (time.perf_counter() - start) * 1000
             raise ToolTimeoutError(
                 f"工具 '{name}' 执行超时（{timeout}s）",
                 details={"tool": name, "timeout": timeout},

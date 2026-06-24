@@ -346,6 +346,7 @@ class CognitiveMemory:
             "working_memory": self.working_memory.model_dump(mode="json"),
             "last_processed_message_id": self.worker.last_processed_message_id,
             "pending_count": len(self.worker.pending),
+            "pending": [m.model_dump(mode="json") for m in self.worker.pending],
             "dream_session_count": self.dream_session_count,
             "project_preloaded": self.project_preloaded,
         }
@@ -358,6 +359,12 @@ class CognitiveMemory:
         self.worker.last_processed_message_id = snapshot.get(
             "last_processed_message_id"
         )
+        # 恢复尚未消费的待提取消息（旧检查点可能仅有 pending_count，缺省为空）
+        pending_data = snapshot.get("pending")
+        if isinstance(pending_data, list):
+            self.worker.pending = [
+                WorkingMemoryMessage.model_validate(m) for m in pending_data
+            ]
         self.dream_session_count = int(snapshot.get("dream_session_count", 0) or 0)
         self.project_preloaded = bool(snapshot.get("project_preloaded", False))
 

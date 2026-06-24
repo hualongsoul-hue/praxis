@@ -215,5 +215,9 @@ class OutputParser:
         """
         if not content:
             return None
-        data = repair_json(content, return_objects=True)
-        return schema_model.model_validate(data)
+        try:
+            data = repair_json(content, return_objects=True)
+            return schema_model.model_validate(data)
+        except Exception as exc:
+            log.warning("结构化响应解析失败", error=str(exc))
+            return None
