@@ -89,6 +89,8 @@ class Session:
         self.continuation = continuation
         # MCP 连接（可选）：管理器 + 持有传输生命周期的退出栈，terminate 时关闭。
         self.mcp_manager: Any = None
+        self.mcp_sampling_manager: Any = None
+        self.mcp_elicitation_manager: Any = None
         self._mcp_stack: Any = None
 
     @property

@@ -16,6 +16,7 @@
 """
 
 from contextlib import AsyncExitStack
+from typing import Any
 
 from praxis.config.schemas import (
     ContextConfig,
@@ -26,6 +27,8 @@ from praxis.config.schemas import (
     ToolsConfig,
 )
 from praxis.models.mcp import MCPServerConfig
+from praxis.tools.mcp.elicitation import ElicitationManager
+from praxis.tools.mcp.sampling import SamplingManager
 from praxis.tools.mcp.wiring import connect_mcp_servers
 from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
@@ -61,6 +64,9 @@ async def create_agent_session(
     verifier_registry: VerifierRegistry | None = None,
     include_builtins: bool = True,
     mcp_servers: list[MCPServerConfig] | None = None,
+    mcp_sampling: bool = True,
+    mcp_sampling_review: Any | None = None,
+    mcp_elicitation_handler: Any | None = None,
 ) -> Session:
     """创建带完整 S1~S14 集成的 Agent 会话。
 
@@ -123,9 +129,24 @@ async def create_agent_session(
     # MCP：连接配置的 Server，将其工具注册进会话注册表（生命周期随会话关闭）
     if mcp_servers:
         stack = AsyncExitStack()
+        # Sampling：默认启用，经 S4 网关代理 MCP Server 的 LLM 采样请求；
+        # 可注入 review 函数实现 Human-in-the-loop。
+        sampling_mgr = None
+        if mcp_sampling:
+            sampling_mgr = SamplingManager(gateway)
+            if mcp_sampling_review is not None:
+                sampling_mgr.set_review_handler(mcp_sampling_review)
+        # Elicitation：转发用户征询；无 handler 时管理器安全地自动拒绝。
+        elicitation_mgr = ElicitationManager()
+        if mcp_elicitation_handler is not None:
+            elicitation_mgr.set_handler(mcp_elicitation_handler)
         session.mcp_manager = await connect_mcp_servers(
             session.registry, mcp_servers, stack,
+            sampling_manager=sampling_mgr,
+            elicitation_manager=elicitation_mgr,
         )
+        session.mcp_sampling_manager = sampling_mgr
+        session.mcp_elicitation_manager = elicitation_mgr
         session._mcp_stack = stack
 
     log.info(

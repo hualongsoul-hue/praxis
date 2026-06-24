@@ -519,7 +519,7 @@ class TestMCPWiring:
         session = make_mock_session()
 
         @asynccontextmanager
-        async def fake_transport(config: Any):
+        async def fake_transport(config: Any, *args: Any):
             yield session
 
         registry = ToolRegistry()
@@ -542,7 +542,7 @@ class TestMCPWiring:
         good = make_mock_session()
 
         @asynccontextmanager
-        async def flaky_transport(config: Any):
+        async def flaky_transport(config: Any, *args: Any):
             if config.name == "bad":
                 raise RuntimeError("传输失败")
             yield good
@@ -557,3 +557,80 @@ class TestMCPWiring:
                 manager = await connect_mcp_servers(registry, configs, stack)
         assert registry.has_tool("mcp_good_echo")
         assert "bad" not in manager.list_connected_servers()
+
+
+class TestMCPSamplingElicitationWiring:
+    """Sampling/Elicitation 回调适配器：SDK 类型 ↔ Praxis 管理器。"""
+
+    async def test_sampling_callback_adapter(self) -> None:
+        from mcp.types import (
+            CreateMessageRequestParams,
+            CreateMessageResult,
+            SamplingMessage,
+            TextContent,
+        )
+
+        from praxis.tools.mcp.sampling import SamplingManager
+        from praxis.tools.mcp.wiring import _make_sampling_callback
+
+        gw = MagicMock()
+        gw.config = MagicMock()
+        gw.config.max_budget = None
+        gw.config.default_model = "test-model"
+        manager = SamplingManager(gw)
+        manager.handle_sampling = AsyncMock(return_value={
+            "role": "assistant", "content": "代理回复", "model": "test-model",
+        })
+
+        cb = _make_sampling_callback("srv1", manager)
+        params = CreateMessageRequestParams(
+            messages=[SamplingMessage(
+                role="user", content=TextContent(type="text", text="你好"),
+            )],
+            maxTokens=256,
+        )
+        result = await cb(None, params)
+        assert isinstance(result, CreateMessageResult)
+        assert result.content.text == "代理回复"
+        # 适配器应把 SDK 消息转成 Praxis 请求
+        req = manager.handle_sampling.await_args.args[0]
+        assert req.server_name == "srv1"
+        assert req.messages[0]["content"] == "你好"
+
+    async def test_elicitation_callback_adapter_accept(self) -> None:
+        from mcp.types import ElicitRequestFormParams, ElicitResult
+
+        from praxis.models.mcp import MCPElicitationRequest, MCPElicitationResponse
+        from praxis.tools.mcp.elicitation import ElicitationManager
+        from praxis.tools.mcp.wiring import _make_elicitation_callback
+
+        manager = ElicitationManager()
+
+        async def handler(req: MCPElicitationRequest) -> MCPElicitationResponse:
+            assert req.server_name == "srv1"
+            return MCPElicitationResponse(accepted=True, data={"name": "Alice"})
+
+        manager.set_handler(handler)
+        cb = _make_elicitation_callback("srv1", manager)
+        params = ElicitRequestFormParams(
+            message="请输入姓名",
+            requestedSchema={"type": "object", "properties": {"name": {"type": "string"}}},
+        )
+        result = await cb(None, params)
+        assert isinstance(result, ElicitResult)
+        assert result.action == "accept"
+        assert result.content == {"name": "Alice"}
+
+    async def test_elicitation_callback_adapter_default_decline(self) -> None:
+        """无 handler 时安全拒绝（decline）。"""
+        from mcp.types import ElicitRequestFormParams, ElicitResult
+
+        from praxis.tools.mcp.elicitation import ElicitationManager
+        from praxis.tools.mcp.wiring import _make_elicitation_callback
+
+        manager = ElicitationManager()
+        cb = _make_elicitation_callback("srv1", manager)
+        params = ElicitRequestFormParams(message="确认？", requestedSchema={"type": "object"})
+        result = await cb(None, params)
+        assert isinstance(result, ElicitResult)
+        assert result.action == "decline"
