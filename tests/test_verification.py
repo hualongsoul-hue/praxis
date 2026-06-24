@@ -382,6 +382,33 @@ class TestVerifierRegistry:
         names = reg.get_phase_config(QualityPhase.PRE_INTEGRATION)
         assert set(names) == {"lint_ruff", "typecheck_mypy"}
 
+    async def test_run_inferential_via_registry(self) -> None:
+        """注册表持有网关时，可驱动推理型验证。"""
+        gw = MagicMock()
+        gw.config = MagicMock()
+        gw.config.max_budget = None
+        gw.config.default_model = "test-model"
+        reg = VerifierRegistry(gateway=gw)
+
+        mock_judge = JudgeResult(
+            verdict=True, confidence=0.88, reasoning="符合标准", raw_response="{}",
+        )
+        with patch("praxis.verification.inferential.judge", return_value=mock_judge):
+            result = await reg.run_inferential(criteria="是否正确", content="def f(): pass")
+            assert result.status == VerificationStatus.PASS
+            assert result.score == 0.88
+
+    async def test_run_inferential_without_gateway_skips(self) -> None:
+        """未配置网关时推理型验证返回 SKIP，而非抛错或静默丢失。"""
+        reg = VerifierRegistry()
+        result = await reg.run_inferential(criteria="x", content="y")
+        assert result.status == VerificationStatus.SKIP
+
+    async def test_run_visual_without_gateway_skips(self) -> None:
+        reg = VerifierRegistry()
+        result = await reg.run_visual(url="http://x", expectations="y")
+        assert result.status == VerificationStatus.SKIP
+
     async def test_custom_verifier(self) -> None:
         class CustomVerifier:
             @property

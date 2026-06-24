@@ -6,12 +6,16 @@ register_verifier 接口，支持自定义验证器扩展。
 
 from typing import Any
 
+from praxis.gateway.router import GatewayRouter
 from praxis.models.verification import (
     QualityPhase,
     VerificationResult,
+    VerificationStatus,
     VerificationType,
 )
 from praxis.verification.computational import Verifier, run_computational
+from praxis.verification.inferential import run_inferential
+from praxis.verification.visual import run_visual
 from praxis.telemetry.logger import get_logger
 
 log = get_logger("verification.registry")
@@ -37,8 +41,10 @@ class VerifierRegistry:
     管理所有已注册的验证器，按类型和质量阶段组织。
     """
 
-    def __init__(self) -> None:
+    def __init__(self, gateway: GatewayRouter | None = None) -> None:
         self.entries: dict[str, VerifierEntry] = {}
+        # 推理型（LLM judge）与视觉型验证需要 S4 网关；可选注入以启用。
+        self.gateway = gateway
 
     def register(
         self,
@@ -116,6 +122,60 @@ class VerifierRegistry:
         )
         verifiers = [e.verifier for e in entries]
         return await run_computational(verifiers, target)
+
+    async def run_inferential(
+        self,
+        criteria: str,
+        content: str,
+        model: str | None = None,
+        dimensions: list[str] | None = None,
+        pass_threshold: float = 0.7,
+    ) -> VerificationResult:
+        """执行推理型验证（独立 LLM judge）。
+
+        需要注册表持有 S4 网关；未配置时返回 SKIP 结果。
+        """
+        if self.gateway is None:
+            log.warning("推理型验证已跳过：未配置网关")
+            return VerificationResult(
+                status=VerificationStatus.SKIP,
+                verification_type=VerificationType.INFERENTIAL,
+                verifier_name="inferential",
+                feedback="未配置网关，推理型验证不可用",
+            )
+        return await run_inferential(
+            self.gateway,
+            criteria=criteria,
+            content=content,
+            model=model,
+            pass_threshold=pass_threshold,
+            dimensions=dimensions,
+        )
+
+    async def run_visual(
+        self,
+        url: str,
+        expectations: str,
+        model: str | None = None,
+    ) -> VerificationResult:
+        """执行视觉型验证（截图 + 多模态 LLM）。
+
+        需要注册表持有 S4 网关；未配置时返回 SKIP 结果。
+        """
+        if self.gateway is None:
+            log.warning("视觉型验证已跳过：未配置网关")
+            return VerificationResult(
+                status=VerificationStatus.SKIP,
+                verification_type=VerificationType.VISUAL,
+                verifier_name="visual",
+                feedback="未配置网关，视觉型验证不可用",
+            )
+        return await run_visual(
+            self.gateway,
+            url=url,
+            expectations=expectations,
+            model=model,
+        )
 
     def get_phase_config(self, phase: QualityPhase) -> list[str]:
         """获取指定阶段的验证器名称列表。

@@ -265,6 +265,10 @@ class SessionFactory:
             fallback_registry=fallbacks,
         )
 
+        # S10: 为验证器注册表注入网关，启用推理型/视觉型验证（否则二者不可用）
+        if verifier_registry is not None and verifier_registry.gateway is None:
+            verifier_registry.gateway = gateway
+
         # S14: 披露工具注册（使 LLM 可触发第二/三层技能披露）
         if skill_manager is not None:
             skill_manager.register_disclosure_tools()
