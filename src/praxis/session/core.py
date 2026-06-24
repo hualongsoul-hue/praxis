@@ -5,7 +5,10 @@ create_session 创建新会话时初始化所有组件实例，
 """
 
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from praxis.session.continuation import ContinuationManager
 
 from praxis.config.schemas import (
     ContextConfig,
@@ -70,6 +73,7 @@ class Session:
         memory: CognitiveMemory | None = None,
         skill_manager: SkillManager | None = None,
         verifier_registry: VerifierRegistry | None = None,
+        continuation: "ContinuationManager | None" = None,
     ) -> None:
         self.metadata = metadata
         self.loop = loop
@@ -81,6 +85,8 @@ class Session:
         self.memory = memory
         self.skill_manager = skill_manager
         self.verifier_registry = verifier_registry
+        # S12 跨窗口续接管理器（可选）；存在时按续接阶段注入热身/初始化序列。
+        self.continuation = continuation
 
     @property
     def session_id(self) -> str:
@@ -90,10 +96,20 @@ class Session:
     def status(self) -> SessionStatus:
         return self.metadata.status
 
+    def _apply_continuation(self, kwargs: dict[str, Any]) -> None:
+        """续接阶段（初始化/热身）按需注入开发者指令，不覆盖显式入参。"""
+        if self.continuation is None:
+            return
+        for key, value in self.continuation.prepare_turn(self).items():
+            kwargs.setdefault(key, value)
+
     async def run_turn(self, user_message: str, **kwargs: Any) -> AgentResponse:
         """执行一轮对话。"""
         self.metadata.status = SessionStatus.ACTIVE
+        self._apply_continuation(kwargs)
         response = await self.loop.run(user_message, **kwargs)
+        if self.continuation is not None:
+            self.continuation.advance_phase(self)
         self.metadata.total_turns += response.total_turns
         self.metadata.total_tokens += sum(
             e.data.get("token_count", 0) for e in response.events
@@ -136,13 +152,16 @@ class Session:
     ) -> AsyncIterator[AgentEvent]:
         """流式执行一轮对话。"""
         self.metadata.status = SessionStatus.ACTIVE
+        self._apply_continuation(kwargs)
         turn_tokens = 0
         async for event in self.loop.run_stream(user_message, **kwargs):
             if event.event_type == "llm_request":
                 turn_tokens += event.data.get("token_count", 0)
             yield event
 
-        # 与 run_turn 对齐：累加统计并触发自动检查点
+        # 与 run_turn 对齐：续接推进、累加统计并触发自动检查点
+        if self.continuation is not None:
+            self.continuation.advance_phase(self)
         self.metadata.total_turns += self.loop.state.current_turn
         self.metadata.total_tokens += turn_tokens
         if self.config.auto_checkpoint:

@@ -1,6 +1,7 @@
 """S12 会话管理单元测试。"""
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -284,6 +285,42 @@ class TestSessionResumer:
             store=store, guardrails=guardrails, gateway=mock_gateway,
             session_id="does-not-exist",
         ) is None
+
+    async def test_resumed_session_injects_warmup_and_advances(
+        self,
+        store: PersistenceStore,
+        guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
+    ) -> None:
+        """恢复的会话首轮应注入热身序列，并在轮后推进到 WORKING 阶段。"""
+        from praxis.agent import resume_agent_session
+        from praxis.session.continuation import WARMUP_SYSTEM_PROMPT
+
+        mgr = CheckpointManager(store)
+        await mgr.save_checkpoint(
+            SessionMetadata(session_id="warm-1", total_turns=1), {}, {}, {},
+        )
+        session = await resume_agent_session(
+            store=store, guardrails=guardrails, gateway=mock_gateway,
+            session_id="warm-1",
+        )
+        assert session is not None
+        try:
+            assert session.continuation is not None
+            assert session.metadata.continuation_phase == ContinuationPhase.WARMUP
+
+            captured: dict[str, Any] = {}
+
+            async def fake_run(user_message: str, **kwargs: Any) -> Any:
+                captured.update(kwargs)
+                return SimpleNamespace(total_turns=1, events=[])
+
+            session.loop.run = fake_run  # type: ignore[assignment]
+            await session.run_turn("继续")
+            assert captured.get("developer_instructions") == WARMUP_SYSTEM_PROMPT
+            assert session.metadata.continuation_phase == ContinuationPhase.WORKING
+        finally:
+            await session.terminate()
 
     async def test_validate_integrity(
         self,

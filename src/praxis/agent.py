@@ -28,6 +28,7 @@ from praxis.guardrails.engine import GuardrailEngine
 from praxis.memory.core import CognitiveMemory
 from praxis.persistence.store import PersistenceStore
 from praxis.session.checkpoint import CheckpointManager
+from praxis.session.continuation import ContinuationManager
 from praxis.session.core import Session, SessionFactory
 from praxis.session.resume import SessionResumer
 from praxis.skills.manager import SkillManager
@@ -173,5 +174,7 @@ async def resume_agent_session(
         verifier_registry=verifier_registry,
     )
     if session is not None:
+        # 恢复后处于 WARMUP 阶段：附加续接管理器，使下一轮注入标准热身序列
+        session.continuation = ContinuationManager()
         log.info("Agent 会话已恢复", session_id=session_id)
     return session
