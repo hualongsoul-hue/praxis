@@ -485,6 +485,35 @@ class TestOrchestrationLoop:
         )
         return loop
 
+    async def test_gav_feedback_injected_on_verification_failure(self) -> None:
+        """验证失败时，GAV 应把结构化反馈注入上下文并发 gav_feedback 事件。"""
+        from praxis.models.verification import (
+            VerificationResult, VerificationStatus, VerificationType,
+        )
+        from praxis.orchestrator.parser import ParsedOutput
+
+        loop = self.make_loop()
+        loop.verifier_registry = AsyncMock()
+        loop.verifier_registry.run_computational = AsyncMock(return_value=[
+            VerificationResult(
+                status=VerificationStatus.FAIL,
+                verification_type=VerificationType.COMPUTATIONAL,
+                verifier_name="lint_ruff",
+                feedback="语法错误",
+            )
+        ])
+        parsed = ParsedOutput(
+            content="", tool_calls=[make_tool_call()], is_final=False, handoff_target=None,
+        )
+        await loop.process_tool_outcomes(parsed)
+
+        # 最后一次 update_with_result 应注入验证反馈
+        last_call = loop.assembler.update_with_result.call_args_list[-1]
+        injected = last_call.args[0][0]["content"]
+        assert "verification_feedback" in injected
+        assert "语法错误" in injected
+        assert any(e.event_type == "gav_feedback" for e in loop.emitter.events)
+
     @patch("praxis.orchestrator.loop.chat")
     async def test_natural_termination(self, mock_chat: Any) -> None:
         mock_chat.return_value = make_model_response(content="最终回答")

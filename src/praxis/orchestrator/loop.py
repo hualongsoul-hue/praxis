@@ -29,7 +29,7 @@ from praxis.models.orchestrator import (
     TerminationReason,
 )
 
-from praxis.models.verification import QualityPhase
+from praxis.models.verification import QualityPhase, VerificationType
 from praxis.orchestrator.events import EventEmitter
 from praxis.orchestrator.parser import OutputParser, ParsedOutput, StreamAccumulator
 from praxis.orchestrator.strategy import LoopStrategy
@@ -38,6 +38,7 @@ from praxis.orchestrator.tool_coordination import ToolCoordinator
 from praxis.skills.manager import SkillManager
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
+from praxis.verification.gav import GAVController, GAVVerifyRequest
 from praxis.verification.registry import VerifierRegistry
 
 log = get_logger("orchestrator.loop")
@@ -86,6 +87,8 @@ class OrchestrationLoop:
         self.compactor = compactor
         self.masker = masker
         self.compaction_min_history = compaction_min_history
+        # S10→S11 验证反馈控制器（GAV Verify 阶段编排与上下文注入格式化）
+        self.gav = GAVController()
         self.state = LoopState()
         # 最近一次在关键节点（turn_start / turn_end / termination）发射的事件，
         # 供流式路径精确 yield，避免依赖 emitter.events[-1] 受子系统插入事件影响。
@@ -344,6 +347,27 @@ class OrchestrationLoop:
                         turn=self.state.current_turn,
                         data={"verifier": vr.verifier_name, "status": vr.status.value},
                     )
+                # S10→S11 反馈：GAV 评估，验证失败时把结构化反馈注入上下文，
+                # 供下一轮 LLM 自我修正（否则验证结果仅产生事件、无人消费）。
+                if verification_results:
+                    gav_response = self.gav.evaluate(GAVVerifyRequest(
+                        results=verification_results,
+                        quadrant=GAVController.select_quadrant(
+                            is_feedforward=False,
+                            verification_type=VerificationType.COMPUTATIONAL,
+                        ),
+                    ))
+                    if not gav_response.passed:
+                        feedback = GAVController.format_for_context(gav_response)
+                        self.assembler.update_with_result([{
+                            "role": "system",
+                            "content": f"<verification_feedback>\n{feedback}\n</verification_feedback>",
+                        }])
+                        self.emitter.emit(
+                            "gav_feedback",
+                            turn=self.state.current_turn,
+                            data={"passed": False, "retry_hint": gav_response.retry_hint},
+                        )
 
         return outcomes, tripwire
 

@@ -25,6 +25,7 @@ EVENT_TYPES = frozenset({
     "tool_call_end",
     "tool_retry",
     "verification_result",
+    "gav_feedback",
     "turn_end",
     "termination",
 })
