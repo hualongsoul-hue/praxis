@@ -504,3 +504,35 @@ class TestBuiltinRegistration:
             assert "name" in s["function"]
             assert "description" in s["function"]
             assert "parameters" in s["function"]
+
+
+class TestJITTools:
+    """S7 JIT 懒加载工具注册。"""
+
+    def test_not_registered_without_content_loader(self) -> None:
+        from praxis.context.jit_retrieval import JITRetriever
+        from praxis.tools.builtins.jit_ops import register_jit_tools
+        from praxis.tools.registry import ToolRegistry
+
+        reg = ToolRegistry()
+        assert register_jit_tools(reg, JITRetriever()) == []
+        assert not reg.has_tool("jit_load_content")
+
+    async def test_registered_and_loads_with_content_loader(self) -> None:
+        from praxis.context.jit_retrieval import ContentLoader, JITRetriever
+        from praxis.tools.builtins.jit_ops import register_jit_tools
+        from praxis.tools.registry import ToolRegistry
+
+        async def reader(source: str, identifier: str) -> str:
+            return f"内容[{source}:{identifier}]"
+
+        jit = JITRetriever()
+        jit.set_content_loader(ContentLoader(reader))
+        jit.register_identifier("foo", "function", "f.py")
+
+        reg = ToolRegistry()
+        names = register_jit_tools(reg, jit)
+        assert names == ["jit_load_content"]
+        handler = reg.get_entry("jit_load_content").handler
+        out = await handler({"identifier": "foo"})
+        assert "内容[f.py:foo]" in out
