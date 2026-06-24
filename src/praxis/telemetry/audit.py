@@ -17,13 +17,15 @@ log = get_logger("telemetry.audit")
 AUDIT_NAMESPACE = "audit"
 
 audit_store: PersistenceStore | None = None
+audit_enabled: bool = True
 pending_tasks: set[asyncio.Task[None]] = set()
 
 
-def configure_audit(store: PersistenceStore) -> None:
-    """配置审计日志的持久化存储。由 S12 生命周期管理在初始化时调用。"""
-    global audit_store
+def configure_audit(store: PersistenceStore, enabled: bool = True) -> None:
+    """配置审计日志的持久化存储与开关。由 S12 生命周期管理在初始化时调用。"""
+    global audit_store, audit_enabled
     audit_store = store
+    audit_enabled = enabled
 
 
 async def write_audit(store: PersistenceStore, event: AuditEvent) -> None:
@@ -44,7 +46,7 @@ async def record_audit(event: AuditEvent) -> None:
     Args:
         event: 审计事件对象。
     """
-    if audit_store is None:
+    if audit_store is None or not audit_enabled:
         return
     task = asyncio.create_task(write_audit(audit_store, event))
     pending_tasks.add(task)

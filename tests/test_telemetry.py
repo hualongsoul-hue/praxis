@@ -193,3 +193,60 @@ class TestAudit:
         )
         await record_audit(event)
         audit_mod.audit_store = saved
+
+
+class TestTelemetryProductionHardening:
+    """生产化加固：直方图分桶/分位、审计开关、统一初始化、基数。"""
+
+    def test_histogram_buckets_and_quantile(self) -> None:
+        from praxis.telemetry.metrics import Histogram
+
+        h = Histogram(buckets=(10.0, 100.0, 1000.0))
+        for v in (5, 5, 50, 500, 5000):
+            h.record(v)
+        assert h.count == 5
+        # 分位：p50 应落在含中位数的桶
+        assert h.quantile(0.5) in (10.0, 100.0)
+        lines = h.bucket_lines("lat", '{svc="x"}')
+        assert any('le="+Inf"' in ln for ln in lines)
+        # +Inf 桶应等于总计数
+        assert any(ln.endswith(" 5") and 'le="+Inf"' in ln for ln in lines)
+
+    def test_export_includes_buckets(self) -> None:
+        from praxis.telemetry.metrics import MetricsCollector
+
+        c = MetricsCollector()
+        c.histogram("op_ms", 12.0)
+        out = c.export_prometheus()
+        assert "op_ms_bucket" in out
+        assert "op_ms_count" in out and "op_ms_sum" in out
+
+    async def test_audit_disabled_writes_nothing(self) -> None:
+        from praxis.config.schemas import PersistenceConfig
+        from praxis.persistence.store import create_store
+        from praxis.telemetry.audit import (
+            configure_audit, flush_audit, query_audit, record_audit,
+        )
+
+        store = await create_store(PersistenceConfig())
+        try:
+            configure_audit(store, enabled=False)
+            await record_audit(AuditEvent(
+                event_type="tool_call", component="c", action="a", details={},
+            ))
+            await flush_audit()
+            assert await query_audit() == []
+        finally:
+            configure_audit(store, enabled=True)
+            await store.close()
+
+    def test_configure_telemetry_applies(self) -> None:
+        from praxis.telemetry import configure_telemetry
+        from praxis.telemetry.metrics import get_collector
+
+        configure_telemetry(TelemetryConfig(
+            metrics_enabled=True, metrics_export="file", tracing_enabled=False,
+        ))
+        # 指标采集器可用
+        get_collector().counter("probe", 1.0)
+        assert "probe" in get_collector().export_prometheus()

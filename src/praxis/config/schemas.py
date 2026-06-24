@@ -25,8 +25,16 @@ class TelemetryConfig(BaseModel):
     metrics_enabled: bool = True
     metrics_export: Literal["prometheus", "file"] = "file"
     metrics_file: str | None = None
+    metrics_port: int = Field(
+        default=9090,
+        description="metrics_export=prometheus 时 /metrics 抓取端点的监听端口",
+    )
     tracing_enabled: bool = True
-    tracing_export: Literal["console"] = "console"
+    tracing_export: Literal["console", "otlp", "none"] = "console"
+    otlp_endpoint: str | None = Field(
+        default=None,
+        description="tracing_export=otlp 时的 OTLP Collector 端点；None 用 OTEL_EXPORTER_OTLP_ENDPOINT 环境变量",
+    )
     audit_enabled: bool = True
 
 

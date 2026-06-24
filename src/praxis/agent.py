@@ -25,6 +25,7 @@ from praxis.config.schemas import (
     RecoveryConfig,
     SessionConfig,
     SubagentConfig,
+    TelemetryConfig,
     ToolsConfig,
 )
 from praxis.models.mcp import MCPServerConfig
@@ -41,6 +42,7 @@ from praxis.session.core import Session, SessionFactory
 from praxis.session.resume import SessionResumer
 from praxis.skills.manager import SkillManager
 from praxis.subagent.tools import wire_subagent
+from praxis.telemetry import configure_telemetry
 from praxis.telemetry.logger import get_logger
 from praxis.tools.registry import ToolRegistry
 from praxis.verification.registry import VerifierRegistry
@@ -57,6 +59,7 @@ async def create_agent_session(
     context_config: ContextConfig | None = None,
     memory_config: MemoryConfig | None = None,
     recovery_config: RecoveryConfig | None = None,
+    telemetry_config: TelemetryConfig | None = None,
     subagent_config: SubagentConfig | None = None,
     tools_config: ToolsConfig | None = None,
     registry: ToolRegistry | None = None,
@@ -97,6 +100,10 @@ async def create_agent_session(
     orchestrator_config = orchestrator_config or OrchestratorConfig()
     context_config = context_config or ContextConfig()
 
+    # 进程级遥测初始化（日志/指标/追踪）；审计开关经工厂应用到 store
+    if telemetry_config is not None:
+        configure_telemetry(telemetry_config)
+
     factory = SessionFactory(
         store=store,
         session_config=session_config,
@@ -104,6 +111,7 @@ async def create_agent_session(
         context_config=context_config,
         memory_config=memory_config,
         recovery_config=recovery_config,
+        audit_enabled=telemetry_config.audit_enabled if telemetry_config else True,
     )
 
     session = await factory.create_session(

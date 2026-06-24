@@ -6,7 +6,7 @@
 
 import threading
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from praxis.config.schemas import TelemetryConfig
 
@@ -49,20 +49,32 @@ class Gauge:
         return self._value
 
 
+# Prometheus histogram 桶上界（秒/毫秒通用的对数刻度，覆盖亚毫秒到分钟级）
+DEFAULT_BUCKETS: tuple[float, ...] = (
+    1, 5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000, 60000,
+)
+
+
 class Histogram:
-    """分布统计（计数 + 累计和）。"""
+    """分布统计（计数 + 累计和 + 分桶），支持 Prometheus 直方图与分位估算。"""
 
-    __slots__ = ("_count", "_sum", "_lock")
+    __slots__ = ("_count", "_sum", "_buckets", "_bounds", "_lock")
 
-    def __init__(self) -> None:
+    def __init__(self, buckets: tuple[float, ...] = DEFAULT_BUCKETS) -> None:
         self._count = 0
         self._sum = 0.0
+        self._bounds = buckets
+        self._buckets = [0] * len(buckets)  # 每个 ≤ 上界的累计计数（非累积，导出时累加）
         self._lock = threading.Lock()
 
     def record(self, value: float) -> None:
         with self._lock:
             self._count += 1
             self._sum += value
+            for i, bound in enumerate(self._bounds):
+                if value <= bound:
+                    self._buckets[i] += 1
+                    break
 
     @property
     def count(self) -> int:
@@ -71,6 +83,33 @@ class Histogram:
     @property
     def sum(self) -> float:
         return self._sum
+
+    def bucket_lines(self, name: str, labels: str) -> list[str]:
+        """生成 Prometheus 累积桶行（含 +Inf）。"""
+        lines: list[str] = []
+        cumulative = 0
+        # labels 形如 {k="v"} 或 ""；需在花括号内追加 le 标签
+        inner = labels[1:-1] if labels else ""
+        for i, bound in enumerate(self._bounds):
+            cumulative += self._buckets[i]
+            le = f'le="{bound}"'
+            tag = "{" + (f"{inner}," if inner else "") + le + "}"
+            lines.append(f"{name}_bucket{tag} {cumulative}")
+        inf_tag = "{" + (f"{inner}," if inner else "") + 'le="+Inf"}'
+        lines.append(f"{name}_bucket{inf_tag} {self._count}")
+        return lines
+
+    def quantile(self, q: float) -> float:
+        """基于桶的近似分位数（返回命中桶的上界）。"""
+        if self._count == 0:
+            return 0.0
+        target = q * self._count
+        cumulative = 0
+        for i, bound in enumerate(self._bounds):
+            cumulative += self._buckets[i]
+            if cumulative >= target:
+                return bound
+        return float("inf")
 
 
 def format_labels(tags: tuple[tuple[str, str], ...]) -> str:
@@ -141,6 +180,7 @@ class MetricsCollector:
                 lines.append(f"# TYPE {name} histogram")
                 seen.add(name)
             labels = format_labels(tags)
+            lines.extend(h.bucket_lines(name, labels))
             lines.append(f"{name}_count{labels} {h.count}")
             lines.append(f"{name}_sum{labels} {h.sum}")
 
@@ -152,15 +192,50 @@ class MetricsCollector:
 
 
 collector: MetricsCollector | None = None
+_metrics_server: Any = None
+
+
+def _start_metrics_server(port: int) -> None:
+    """在后台线程启动一个仅暴露 /metrics 的 Prometheus 抓取端点。"""
+    global _metrics_server
+    if _metrics_server is not None:
+        return
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.rstrip("/") in ("/metrics", ""):
+                body = export_prometheus().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; version=0.0.4")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            else:
+                self.send_response(404)
+                self.end_headers()
+
+        def log_message(self, *args: Any) -> None:  # 静默 HTTP 访问日志
+            return
+
+    server = ThreadingHTTPServer(("0.0.0.0", port), _Handler)
+    thread = threading.Thread(target=server.serve_forever, name="praxis-metrics", daemon=True)
+    thread.start()
+    _metrics_server = server
 
 
 def configure_metrics(config: TelemetryConfig) -> None:
-    """初始化指标采集器。"""
+    """初始化指标采集器；按 metrics_export 选择导出方式。"""
     global collector
-    if config.metrics_enabled:
-        collector = MetricsCollector()
-    else:
+    if not config.metrics_enabled:
         collector = None
+        return
+    collector = MetricsCollector()
+    if config.metrics_export == "prometheus":
+        try:
+            _start_metrics_server(config.metrics_port)
+        except Exception:  # 端口占用等不应阻断主流程
+            pass
 
 
 def get_collector() -> MetricsCollector:

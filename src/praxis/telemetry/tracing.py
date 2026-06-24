@@ -4,27 +4,57 @@
 每个 Span 携带：组件名、操作类型、耗时、状态码。
 """
 
+from typing import Any
+
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (
+    BatchSpanProcessor,
     ConsoleSpanExporter,
     SimpleSpanProcessor,
 )
 from opentelemetry.trace import Span
 
 from praxis.config.schemas import TelemetryConfig
+from praxis.telemetry.logger import get_logger
+
+log = get_logger("telemetry.tracing")
 
 tracer: trace.Tracer | None = None
 
 
+def _otlp_processor(endpoint: str | None) -> Any:
+    """构造 OTLP BatchSpanProcessor；导出器未安装时返回 None 并降级。"""
+    try:
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+            OTLPSpanExporter,
+        )
+    except Exception:
+        log.warning(
+            "未安装 OTLP 导出器（opentelemetry-exporter-otlp），追踪降级为 console。"
+            "生产环境请安装该依赖。",
+        )
+        return None
+    exporter = OTLPSpanExporter(endpoint=endpoint) if endpoint else OTLPSpanExporter()
+    return BatchSpanProcessor(exporter)
+
+
 def configure_tracing(config: TelemetryConfig) -> None:
-    """根据配置初始化分布式追踪。"""
+    """根据配置初始化分布式追踪。
+
+    tracing_export: console（默认）/ otlp（生产，需 otlp 导出器）/ none（关闭）。
+    """
     global tracer
 
     provider = TracerProvider()
 
-    if config.tracing_enabled:
-        provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
+    if config.tracing_enabled and config.tracing_export != "none":
+        processor = None
+        if config.tracing_export == "otlp":
+            processor = _otlp_processor(config.otlp_endpoint)
+        if processor is None:  # console 或 otlp 降级
+            processor = SimpleSpanProcessor(ConsoleSpanExporter())
+        provider.add_span_processor(processor)
 
     trace.set_tracer_provider(provider)
     tracer = trace.get_tracer("praxis")

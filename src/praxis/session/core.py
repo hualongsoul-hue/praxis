@@ -212,6 +212,7 @@ class SessionFactory:
         context_config: ContextConfig,
         memory_config: MemoryConfig | None = None,
         recovery_config: RecoveryConfig | None = None,
+        audit_enabled: bool = True,
     ) -> None:
         self.store = store
         self.session_config = session_config
@@ -220,7 +221,7 @@ class SessionFactory:
         self.memory_config = memory_config or MemoryConfig()
         self.recovery_config = recovery_config or RecoveryConfig()
         # 配置 S2 审计持久化通道（护栏裁决事件写入 store 的 "audit" 命名空间）
-        configure_audit(store)
+        configure_audit(store, enabled=audit_enabled)
 
     async def create_session(
         self,
@@ -346,7 +347,8 @@ class SessionFactory:
 
         metadata.status = SessionStatus.ACTIVE
 
-        emit_metric("session_created", 1.0, {"session_id": metadata.session_id}, "counter")
+        # 注意：不以 session_id 作为指标标签（会造成无界基数）；session_id 见日志/追踪
+        emit_metric("session_created", 1.0, {}, "counter")
         log.info("会话已创建", session_id=metadata.session_id)
 
         return Session(

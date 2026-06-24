@@ -64,10 +64,11 @@ class EventEmitter:
         )
         self.events.append(event)
 
+        # 仅以 event_type 作标签；turn 是无界值，不入指标标签（避免基数爆炸）
         emit_metric(
             "orchestrator_event",
             1.0,
-            {"event_type": event_type, "turn": str(turn)},
+            {"event_type": event_type},
             "counter",
         )
 
