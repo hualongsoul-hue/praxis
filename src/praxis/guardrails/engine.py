@@ -75,7 +75,9 @@ class GuardrailEngine:
             context={"tool_name": tool_name, "metadata": metadata.model_dump()},
         )
 
-        if rule_verdict.verdict in (VerdictType.BLOCK, VerdictType.DENY):
+        # 规则裁决为 BLOCK/DENY，或虽放行但触发绊线，都应返回规则裁决，
+        # 避免 ALLOW+tripwire 时绊线标记被 perm_verdict 吞掉。
+        if rule_verdict.verdict in (VerdictType.BLOCK, VerdictType.DENY) or rule_verdict.tripwire:
             await self.audit_verdict("check_tool_call", rule_verdict, tool_name=tool_name)
             return rule_verdict
 
