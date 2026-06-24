@@ -121,6 +121,7 @@ class CognitiveMemory:
             model=self.config.extraction_model,
             min_hours_since_last=self.config.dream_min_hours,
             min_sessions=self.config.dream_min_sessions,
+            decay_enabled=self.config.decay_enabled,
         )
         self.dream_scopes: list[MemoryScope] = [
             MemoryScope.from_string(s) for s in self.config.dream_scopes

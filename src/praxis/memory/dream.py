@@ -54,6 +54,7 @@ class DreamReport(BaseModel):
     conflicts_resolved: int = 0
     stale_marked: int = 0
     merged_count: int = 0
+    decayed_count: int = 0
     summary: str = ""
 
 
@@ -69,6 +70,7 @@ class DreamConsolidator:
         model: str | None = None,
         min_hours_since_last: float = 24.0,
         min_sessions: int = 5,
+        decay_enabled: bool = True,
     ) -> None:
         self.gateway = gateway
         self.scoped_store = scoped_store
@@ -77,6 +79,7 @@ class DreamConsolidator:
         self.model = model
         self.min_hours_since_last = min_hours_since_last
         self.min_sessions = min_sessions
+        self.decay_enabled = decay_enabled
 
     async def should_run(self, session_count: int) -> bool:
         """检查是否满足触发条件（24h 且 ≥5 sessions）。"""
@@ -150,6 +153,10 @@ class DreamConsolidator:
         report.merged_count = await self.apply_merges(
             actions.get("merge_suggestions", []), entry_map,
         )
+        # 基于时间/不活跃度的相关性衰减遗忘（配置开关 decay_enabled）
+        if self.decay_enabled:
+            for scope in scopes:
+                report.decayed_count += await self.retention.run_decay_sweep(scope)
         report.summary = str(actions.get("summary", ""))
         report.completed_at = datetime.now(timezone.utc)
 
@@ -158,6 +165,7 @@ class DreamConsolidator:
         emit_metric("dream_anchored", float(report.anchored_count), {}, "counter")
         emit_metric("dream_stale", float(report.stale_marked), {}, "counter")
         emit_metric("dream_merged", float(report.merged_count), {}, "counter")
+        emit_metric("dream_decayed", float(report.decayed_count), {}, "counter")
 
         log.info(
             "梦境整理完成",
@@ -165,6 +173,7 @@ class DreamConsolidator:
             anchored=report.anchored_count,
             stale=report.stale_marked,
             merged=report.merged_count,
+            decayed=report.decayed_count,
         )
         return report
 

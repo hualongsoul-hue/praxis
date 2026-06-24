@@ -701,6 +701,61 @@ class TestDream:
         loaded = await scoped.load(scope, stale.memory_id)
         assert loaded.status == MemoryStatus.INACTIVE
 
+    async def test_run_dream_runs_decay_when_enabled(
+        self, store: PersistenceStore, mock_gateway,
+    ) -> None:
+        """梦境周期应在 decay_enabled 时执行相关性衰减遗忘。"""
+        scoped = ScopedMemoryStore(store)
+        rm = RetentionManager(
+            scoped, store, inactivity_threshold_days=0.001, min_access_count=0,
+        )
+        scope = MemoryScope(scope_type=ScopeType.GLOBAL)
+        old = SemanticMemory(
+            scope=scope, content="极旧记忆",
+            access_count=0, confidence=0.01,
+            created_at=datetime.now(timezone.utc) - timedelta(days=365),
+            updated_at=datetime.now(timezone.utc) - timedelta(days=365),
+            last_accessed_at=datetime.now(timezone.utc) - timedelta(days=365),
+        )
+        await scoped.save(old)
+
+        response = make_chat_response(json.dumps({
+            "anchored": [], "conflicts": [], "stale": [],
+            "merge_suggestions": [], "summary": "无",
+        }))
+        with patch("praxis.memory.dream.chat", AsyncMock(return_value=response)):
+            dream = DreamConsolidator(mock_gateway, scoped, rm, store, decay_enabled=True)
+            report = await dream.run_dream([scope])
+        assert report.decayed_count == 1
+        loaded = await scoped.load(scope, old.memory_id)
+        assert loaded.status == MemoryStatus.INACTIVE
+
+    async def test_run_dream_skips_decay_when_disabled(
+        self, store: PersistenceStore, mock_gateway,
+    ) -> None:
+        scoped = ScopedMemoryStore(store)
+        rm = RetentionManager(
+            scoped, store, inactivity_threshold_days=0.001, min_access_count=0,
+        )
+        scope = MemoryScope(scope_type=ScopeType.GLOBAL)
+        old = SemanticMemory(
+            scope=scope, content="极旧记忆", access_count=0, confidence=0.01,
+            created_at=datetime.now(timezone.utc) - timedelta(days=365),
+            updated_at=datetime.now(timezone.utc) - timedelta(days=365),
+            last_accessed_at=datetime.now(timezone.utc) - timedelta(days=365),
+        )
+        await scoped.save(old)
+        response = make_chat_response(json.dumps({
+            "anchored": [], "conflicts": [], "stale": [],
+            "merge_suggestions": [], "summary": "无",
+        }))
+        with patch("praxis.memory.dream.chat", AsyncMock(return_value=response)):
+            dream = DreamConsolidator(mock_gateway, scoped, rm, store, decay_enabled=False)
+            report = await dream.run_dream([scope])
+        assert report.decayed_count == 0
+        loaded = await scoped.load(scope, old.memory_id)
+        assert loaded.status == MemoryStatus.ACTIVE
+
     async def test_scheduler_triggers_on_condition(
         self, store: PersistenceStore, mock_gateway,
     ) -> None:
