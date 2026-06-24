@@ -485,6 +485,40 @@ class TestOrchestrationLoop:
         )
         return loop
 
+    @patch("praxis.orchestrator.loop.chat")
+    async def test_plan_and_execute_generates_plan(self, mock_chat: Any) -> None:
+        """plan-and-execute 模式应在 prepare_run 生成并设置计划（否则退化为 ReAct）。"""
+        from praxis.models.orchestrator import StrategyMode
+        from praxis.orchestrator.strategy import LoopStrategy
+        from praxis.models.context import RunContext, TurnContext
+
+        loop = self.make_loop()
+        loop.strategy = LoopStrategy(StrategyMode.PLAN_AND_EXECUTE)
+        mock_chat.return_value = make_model_response(
+            content='[{"description":"分析需求"},{"description":"编写代码"},{"description":"运行测试"}]'
+        )
+        ctx = RunContext(turn_context=TurnContext(user_message="实现功能X"))
+        early = await loop.prepare_run("实现功能X", ctx)
+        assert early is None
+        assert len(loop.strategy.plan) == 3
+        assert loop.strategy.plan[0].description == "分析需求"
+        assert any(e.event_type == "plan_created" for e in loop.emitter.events)
+
+    @patch("praxis.orchestrator.loop.chat")
+    async def test_plan_generation_failure_degrades_to_react(self, mock_chat: Any) -> None:
+        """规划 LLM 调用失败时应退化为 ReAct（plan 留空），不中断。"""
+        from praxis.models.orchestrator import StrategyMode
+        from praxis.orchestrator.strategy import LoopStrategy
+        from praxis.models.context import RunContext, TurnContext
+
+        loop = self.make_loop()
+        loop.strategy = LoopStrategy(StrategyMode.PLAN_AND_EXECUTE)
+        mock_chat.side_effect = RuntimeError("LLM 不可用")
+        ctx = RunContext(turn_context=TurnContext(user_message="任务"))
+        early = await loop.prepare_run("任务", ctx)
+        assert early is None
+        assert loop.strategy.plan == []
+
     async def test_gav_feedback_injected_on_verification_failure(self) -> None:
         """验证失败时，GAV 应把结构化反馈注入上下文并发 gav_feedback 事件。"""
         from praxis.models.verification import (

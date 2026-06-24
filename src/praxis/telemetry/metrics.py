@@ -159,23 +159,32 @@ class MetricsCollector:
         self._histograms[key].record(value)
 
     def export_prometheus(self) -> str:
-        """导出 Prometheus 文本格式。"""
+        """导出 Prometheus 文本格式。
+
+        在锁内对三类指标取快照，避免与并发 emit（如指标 HTTP 端点线程
+        与主线程同时访问）发生 "dictionary changed size during iteration"。
+        """
+        with self._lock:
+            counters = list(self._counters.items())
+            gauges = list(self._gauges.items())
+            histograms = list(self._histograms.items())
+
         lines: list[str] = []
         seen: set[str] = set()
 
-        for (name, tags), c in sorted(self._counters.items()):
+        for (name, tags), c in sorted(counters):
             if name not in seen:
                 lines.append(f"# TYPE {name} counter")
                 seen.add(name)
             lines.append(f"{name}{format_labels(tags)} {c.value}")
 
-        for (name, tags), g in sorted(self._gauges.items()):
+        for (name, tags), g in sorted(gauges):
             if name not in seen:
                 lines.append(f"# TYPE {name} gauge")
                 seen.add(name)
             lines.append(f"{name}{format_labels(tags)} {g.value}")
 
-        for (name, tags), h in sorted(self._histograms.items()):
+        for (name, tags), h in sorted(histograms):
             if name not in seen:
                 lines.append(f"# TYPE {name} histogram")
                 seen.add(name)

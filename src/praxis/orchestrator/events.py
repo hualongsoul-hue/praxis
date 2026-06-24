@@ -16,6 +16,7 @@ from praxis.telemetry.metrics import emit_metric
 log = get_logger("orchestrator.events")
 
 EVENT_TYPES = frozenset({
+    "plan_created",
     "turn_start",
     "llm_request",
     "content_delta",

@@ -10,6 +10,7 @@ class LoopPhase(str, Enum):
     """循环阶段。"""
 
     IDLE = "idle"
+    PLANNING = "planning"
     ASSEMBLING = "assembling"
     LLM_CALLING = "llm_calling"
     PARSING = "parsing"

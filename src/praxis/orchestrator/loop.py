@@ -9,6 +9,8 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
+from json_repair import repair_json
+
 from praxis.config.schemas import OrchestratorConfig
 from praxis.context.assembler import PromptAssembler
 from praxis.context.compaction import ContextCompactor
@@ -27,13 +29,14 @@ from praxis.models.orchestrator import (
     AgentResponse,
     LoopPhase,
     LoopState,
+    StrategyMode,
     TerminationReason,
 )
 
 from praxis.models.verification import QualityPhase, VerificationType
 from praxis.orchestrator.events import EventEmitter
 from praxis.orchestrator.parser import OutputParser, ParsedOutput, StreamAccumulator
-from praxis.orchestrator.strategy import LoopStrategy
+from praxis.orchestrator.strategy import LoopStrategy, PlanStep
 from praxis.orchestrator.termination import TerminationManager
 from praxis.orchestrator.tool_coordination import ToolCoordinator
 from praxis.skills.manager import SkillManager
@@ -43,6 +46,13 @@ from praxis.verification.gav import GAVController, GAVVerifyRequest
 from praxis.verification.registry import VerifierRegistry
 
 log = get_logger("orchestrator.loop")
+
+PLANNING_SYSTEM_PROMPT = (
+    "你是任务规划专家。将用户任务分解为有序、可独立执行的步骤。\n"
+    "要求：步骤 3~8 个，粒度适中、彼此衔接、覆盖完整任务。\n"
+    "仅输出 JSON 数组，每项为 {\"description\": \"步骤描述\", \"tool_hint\": \"可选工具提示\"}，"
+    "不要输出任何额外文字。"
+)
 
 
 class OrchestrationLoop:
@@ -181,12 +191,51 @@ class OrchestrationLoop:
             schemas = self.tool_injector.get_tools_for_stage(ctx.turn_context.task_stage)
             self.assembler.set_tool_schemas(schemas)
 
+        # Plan-and-Execute 模式：首次进入时先生成计划（否则 plan 恒空，退化为 ReAct）
+        if self.strategy.mode == StrategyMode.PLAN_AND_EXECUTE and not self.strategy.plan:
+            await self.generate_plan(user_message)
+
         # Plan-and-Execute 模式：注入步骤指令
         step_instruction = self.strategy.get_step_instruction()
         if step_instruction:
             ctx.turn_context.user_message += step_instruction
 
         return None
+
+    async def generate_plan(self, user_message: str) -> None:
+        """Plan-and-Execute：调用 LLM 将任务分解为有序步骤并 set_plan。
+
+        失败或解析不出步骤时静默退化为 ReAct（plan 留空）。
+        """
+        self.state.phase = LoopPhase.PLANNING
+        messages = [
+            {"role": "system", "content": PLANNING_SYSTEM_PROMPT},
+            {"role": "user", "content": user_message},
+        ]
+        try:
+            response = await chat(self.gateway, messages)
+        except Exception as exc:  # 规划失败不应中断主流程
+            log.warning("计划生成失败，退化为 ReAct", error=str(exc))
+            return
+
+        data = repair_json(response.content or "[]", return_objects=True)
+        steps: list[PlanStep] = []
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict) and item.get("description"):
+                    steps.append(PlanStep(
+                        description=str(item["description"]),
+                        tool_hint=str(item.get("tool_hint", "")),
+                    ))
+        if steps:
+            self.strategy.set_plan(steps)
+            self.emitter.emit(
+                "plan_created",
+                turn=self.state.current_turn,
+                data={"step_count": len(steps)},
+            )
+        else:
+            log.info("未解析出有效计划步骤，退化为 ReAct")
 
     async def prepare_turn(self, ctx: RunContext) -> AssembledPrompt:
         """每轮迭代前的准备：遮蔽、压缩、Prompt 组装、历史追加。"""

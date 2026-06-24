@@ -250,3 +250,34 @@ class TestTelemetryProductionHardening:
         # 指标采集器可用
         get_collector().counter("probe", 1.0)
         assert "probe" in get_collector().export_prometheus()
+
+
+class TestMetricsConcurrency:
+    """指标导出与并发 emit 不应崩溃（HTTP 端点线程场景）。"""
+
+    def test_export_during_concurrent_emit(self) -> None:
+        import threading
+        from praxis.telemetry.metrics import MetricsCollector
+
+        c = MetricsCollector()
+        errors: list[Exception] = []
+
+        def emitter() -> None:
+            # 插入有界但持续新增的 key，制造导出迭代期间的字典扩容
+            for i in range(3000):
+                c.counter(f"m_{i}", 1.0)
+                c.histogram("lat", float(i % 100))
+
+        def exporter() -> None:
+            try:
+                while emit_thread.is_alive():
+                    c.export_prometheus()
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        emit_thread = threading.Thread(target=emitter)
+        emit_thread.start()
+        exporter()
+        emit_thread.join()
+        # 修复前：export 在锁外迭代 → "dictionary changed size during iteration"
+        assert errors == []
