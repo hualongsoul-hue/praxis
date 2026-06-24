@@ -85,7 +85,6 @@ recovery:
 orchestrator:
   max_turns: 100
   default_strategy: "react"  # react / plan-and-execute
-  stream_events: true
 
 # ── S12 会话管理 ───────────────────────────────────────────
 session:

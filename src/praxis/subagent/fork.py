@@ -61,6 +61,7 @@ class ForkManager:
         Returns:
             各子代理结果列表。
         """
+        default_max_turns = self.resource_ctrl.config.default_max_turns
         specs: list[SubagentSpec] = []
         for t in tasks:
             specs.append(SubagentSpec(
@@ -68,7 +69,7 @@ class ForkManager:
                 mode=SubagentMode.FORK,
                 tool_names=t.get("tool_names", []),
                 context_summary=context_summary,
-                max_turns=t.get("max_turns", 50),
+                max_turns=t.get("max_turns", default_max_turns),
                 timeout_seconds=timeout_seconds,
             ))
 

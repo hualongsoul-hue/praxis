@@ -156,7 +156,6 @@ class OrchestratorConfig(BaseModel):
 
     max_turns: int = 100
     default_strategy: Literal["react", "plan-and-execute"] = "react"
-    stream_events: bool = True
 
 
 class SessionConfig(BaseModel):

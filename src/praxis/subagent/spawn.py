@@ -55,8 +55,8 @@ class SubagentSpawner:
         task: str,
         tool_names: list[str] | None = None,
         context_summary: str = "",
-        max_turns: int = 50,
-        timeout_seconds: float = 300.0,
+        max_turns: int | None = None,
+        timeout_seconds: float | None = None,
     ) -> SubagentResult:
         """创建并运行 Agent-as-Tool 子代理。
 
@@ -64,19 +64,20 @@ class SubagentSpawner:
             task: 子任务描述。
             tool_names: 授予的工具子集。
             context_summary: 上下文摘要。
-            max_turns: 最大轮次。
-            timeout_seconds: 超时秒数。
+            max_turns: 最大轮次；None 时取 SubagentConfig.default_max_turns。
+            timeout_seconds: 超时秒数；None 时取 SubagentConfig.default_timeout。
 
         Returns:
             子代理执行结果。
         """
+        cfg = self.resource_ctrl.config
         spec = SubagentSpec(
             task=task,
             mode=SubagentMode.AGENT_AS_TOOL,
             tool_names=tool_names or [],
             context_summary=context_summary,
-            max_turns=max_turns,
-            timeout_seconds=timeout_seconds,
+            max_turns=max_turns if max_turns is not None else cfg.default_max_turns,
+            timeout_seconds=timeout_seconds if timeout_seconds is not None else cfg.default_timeout,
             system_prompt_override=SUBAGENT_SYSTEM_PROMPT,
         )
 

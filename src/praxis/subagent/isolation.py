@@ -68,7 +68,6 @@ class IsolatedContext:
         sub_orch_config = OrchestratorConfig(
             max_turns=spec.max_turns,
             default_strategy=self.orchestrator_config.default_strategy,
-            stream_events=False,
         )
 
         factory = SessionFactory(

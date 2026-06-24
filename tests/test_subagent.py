@@ -312,6 +312,36 @@ class TestSubagentSpawner:
         assert result.summary == "子任务完成"
         assert result.mode == SubagentMode.AGENT_AS_TOOL
 
+    async def test_spawn_uses_config_default_max_turns(
+        self,
+        resource_ctrl: ResourceController,
+        guardrails: GuardrailEngine,
+        registry: ToolRegistry,
+    ) -> None:
+        """未显式指定时，spawn 应采用 SubagentConfig.default_max_turns/default_timeout。"""
+        captured: dict[str, Any] = {}
+        mock_session = MagicMock()
+        mock_session.run_turn = AsyncMock(return_value=AgentResponse(
+            content="ok", total_turns=1,
+            termination_reason=TerminationReason.NATURAL, events=[],
+        ))
+        mock_session.terminate = AsyncMock()
+
+        async def cap(spec: Any, **kwargs: Any) -> Any:
+            captured["max_turns"] = spec.max_turns
+            captured["timeout"] = spec.timeout_seconds
+            return mock_session
+
+        iso = MagicMock()
+        iso.create_isolated_session = cap
+        spawner = SubagentSpawner(
+            isolation=iso, resource_ctrl=resource_ctrl,
+            guardrails=guardrails, parent_registry=registry,
+        )
+        await spawner.spawn_agent_as_tool(task="任务")
+        assert captured["max_turns"] == 10   # SubagentConfig(default_max_turns=10)
+        assert captured["timeout"] == 5.0    # SubagentConfig(default_timeout=5.0)
+
     @patch("praxis.session.core.Session.run_turn")
     async def test_spawn_timeout(
         self,
