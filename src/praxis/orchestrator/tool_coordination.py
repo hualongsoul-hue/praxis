@@ -5,6 +5,7 @@ S8.check_tool_call → S9.check_circuit → S5.execute_tool →
 S9.record_outcome → 失败时 S9.classify_error 决策。
 """
 
+import asyncio
 from typing import Any
 
 from json_repair import repair_json
@@ -178,15 +179,8 @@ class ToolCoordinator:
             if self.circuits.check_circuit(name) == CircuitState.OPEN:
                 return self.make_skipped(tool_call, turn, f"熔断器断开: {name}")
 
-        # Step 3: S5 工具执行
-        result = await self.try_execute(name, arguments, tool_call.id, turn)
-
-        # Step 4: S9 记录结果
-        self.circuits.record_outcome(name, result.success)
-
-        # Step 5: 失败处理
-        if not result.success and result.error:
-            result = await self.handle_failure(name, result, tool_call.id, turn)
+        # Step 3~5: S5 执行 + S9 记录结果 + 瞬态错误按退避策略真正重试
+        result = await self.execute_with_retry(name, arguments, tool_call.id, turn)
 
         self.emitter.emit(
             "tool_call_end",
@@ -223,34 +217,74 @@ class ToolCoordinator:
                 error_type=f"{type(exc).__module__}.{type(exc).__qualname__}",
             )
 
-    async def handle_failure(
+    async def execute_with_retry(
         self,
         name: str,
-        result: ToolResult,
+        arguments: dict[str, Any],
         tool_call_id: str,
         turn: int,
     ) -> ToolResult:
-        """处理工具执行失败。
+        """执行工具，并对瞬态错误按 S9 退避策略真正重试。
 
-        根据 S9 错误分类决定恢复策略。
+        每次尝试都向熔断器记录结果；仅 TRANSIENT 类错误重试，
+        其余分类（含 MODEL_RECOVERABLE）直接返回交由 LLM 自修正。
         """
+        attempt = 0
+        while True:
+            result = await self.try_execute(name, arguments, tool_call_id, turn)
+
+            # S9 记录结果（每次实际执行都计入熔断器）
+            self.circuits.record_outcome(name, result.success)
+
+            if result.success or not result.error:
+                self.retry_policy.reset(name)
+                return result
+
+            classification = self.classify_result(result)
+            if classification.category != ErrorCategory.TRANSIENT:
+                if classification.category == ErrorCategory.MODEL_RECOVERABLE:
+                    log.info("错误返回 LLM 自修正", tool_name=name)
+                self.retry_policy.reset(name)
+                return result
+
+            decision = self.retry_policy.get_retry_decision(name, attempt)
+            if not decision.should_retry:
+                log.info("瞬态错误重试已达上限", tool_name=name, attempts=attempt)
+                self.retry_policy.reset(name)
+                return result
+
+            log.info(
+                "重试工具调用",
+                tool_name=name,
+                attempt=attempt + 1,
+                delay=decision.wait_seconds,
+            )
+            self.emitter.emit(
+                "tool_retry",
+                turn=turn,
+                data={
+                    "tool_name": name,
+                    "tool_call_id": tool_call_id,
+                    "attempt": attempt + 1,
+                    "delay_seconds": decision.wait_seconds,
+                    "error": result.error,
+                },
+            )
+            self.retry_policy.record_attempt(name)
+            if decision.wait_seconds > 0:
+                await asyncio.sleep(decision.wait_seconds)
+            attempt += 1
+
+    @staticmethod
+    def classify_result(result: ToolResult) -> ErrorClassification:
+        """根据工具结果的错误信息推断 S9 错误分类。"""
         message = result.error or "unknown error"
         classification: ErrorClassification | None = None
         if result.error_type:
             classification = classify_by_type_name(result.error_type, message)
         if classification is None:
             classification = classify_error(Exception(message))
-
-        if classification.category == ErrorCategory.TRANSIENT:
-            decision = self.retry_policy.get_retry_decision(name, 1)
-            if decision.should_retry:
-                log.info("重试工具调用", tool_name=name, delay=decision.wait_seconds)
-                return result
-
-        if classification.category == ErrorCategory.MODEL_RECOVERABLE:
-            log.info("错误返回 LLM 自修正", tool_name=name)
-
-        return result
+        return classification
 
     def make_skipped(
         self,

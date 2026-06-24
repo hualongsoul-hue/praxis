@@ -23,6 +23,7 @@ EVENT_TYPES = frozenset({
     "llm_response",
     "tool_call_start",
     "tool_call_end",
+    "tool_retry",
     "verification_result",
     "turn_end",
     "termination",
