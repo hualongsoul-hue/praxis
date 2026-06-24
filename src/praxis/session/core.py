@@ -87,6 +87,9 @@ class Session:
         self.verifier_registry = verifier_registry
         # S12 跨窗口续接管理器（可选）；存在时按续接阶段注入热身/初始化序列。
         self.continuation = continuation
+        # MCP 连接（可选）：管理器 + 持有传输生命周期的退出栈，terminate 时关闭。
+        self.mcp_manager: Any = None
+        self._mcp_stack: Any = None
 
     @property
     def session_id(self) -> str:
@@ -172,9 +175,12 @@ class Session:
         self.loop.abort()
 
     async def terminate(self) -> None:
-        """终止会话：停止后台记忆 Worker 与 Dream 调度器。"""
+        """终止会话：停止后台记忆 Worker、Dream 调度器并关闭 MCP 连接。"""
         if self.memory is not None:
             await self.memory.stop()
+        if self._mcp_stack is not None:
+            await self._mcp_stack.aclose()
+            self._mcp_stack = None
         self.metadata.status = SessionStatus.TERMINATED
         log.info("会话已终止", session_id=self.session_id)
 

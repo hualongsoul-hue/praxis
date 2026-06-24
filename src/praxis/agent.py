@@ -15,6 +15,8 @@
     response = await session.run_turn("你好")
 """
 
+from contextlib import AsyncExitStack
+
 from praxis.config.schemas import (
     ContextConfig,
     MemoryConfig,
@@ -23,6 +25,8 @@ from praxis.config.schemas import (
     SubagentConfig,
     ToolsConfig,
 )
+from praxis.models.mcp import MCPServerConfig
+from praxis.tools.mcp.wiring import connect_mcp_servers
 from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.memory.core import CognitiveMemory
@@ -56,6 +60,7 @@ async def create_agent_session(
     skill_manager: SkillManager | None = None,
     verifier_registry: VerifierRegistry | None = None,
     include_builtins: bool = True,
+    mcp_servers: list[MCPServerConfig] | None = None,
 ) -> Session:
     """创建带完整 S1~S14 集成的 Agent 会话。
 
@@ -115,10 +120,19 @@ async def create_agent_session(
             model=model,
         )
 
+    # MCP：连接配置的 Server，将其工具注册进会话注册表（生命周期随会话关闭）
+    if mcp_servers:
+        stack = AsyncExitStack()
+        session.mcp_manager = await connect_mcp_servers(
+            session.registry, mcp_servers, stack,
+        )
+        session._mcp_stack = stack
+
     log.info(
         "Agent 会话已创建",
         session_id=session.session_id,
         subagent_enabled=subagent_config is not None,
+        mcp_servers=len(mcp_servers) if mcp_servers else 0,
     )
     return session
 

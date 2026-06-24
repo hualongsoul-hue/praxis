@@ -503,3 +503,57 @@ class TestMCPAuthManager:
             client_id="client-1",
         ))
         assert await mgr.initiate_auth_flow("srv") is False
+
+
+# ── MCP 装配入口（connect_mcp_servers）─────────────────────────────────────
+
+
+class TestMCPWiring:
+    """MCP 服务器装配到会话注册表的端到端链路。"""
+
+    async def test_connect_registers_tools(self) -> None:
+        from contextlib import AsyncExitStack, asynccontextmanager
+
+        from praxis.tools.mcp.wiring import connect_mcp_servers
+
+        session = make_mock_session()
+
+        @asynccontextmanager
+        async def fake_transport(config: Any):
+            yield session
+
+        registry = ToolRegistry()
+        config = MCPServerConfig(
+            name="srv1", transport=MCPTransportType.STDIO, command="echo",
+        )
+        with patch("praxis.tools.mcp.wiring.create_transport", fake_transport):
+            async with AsyncExitStack() as stack:
+                manager = await connect_mcp_servers(registry, [config], stack)
+                # MCP 工具应已注册并以 mcp_ 前缀命名
+                assert registry.has_tool("mcp_srv1_echo")
+                assert "srv1" in manager.list_connected_servers()
+
+    async def test_connect_failure_is_isolated(self) -> None:
+        """单个服务器连接失败不应中断装配，其余服务器仍连接。"""
+        from contextlib import AsyncExitStack, asynccontextmanager
+
+        from praxis.tools.mcp.wiring import connect_mcp_servers
+
+        good = make_mock_session()
+
+        @asynccontextmanager
+        async def flaky_transport(config: Any):
+            if config.name == "bad":
+                raise RuntimeError("传输失败")
+            yield good
+
+        registry = ToolRegistry()
+        configs = [
+            MCPServerConfig(name="bad", transport=MCPTransportType.STDIO, command="x"),
+            MCPServerConfig(name="good", transport=MCPTransportType.STDIO, command="y"),
+        ]
+        with patch("praxis.tools.mcp.wiring.create_transport", flaky_transport):
+            async with AsyncExitStack() as stack:
+                manager = await connect_mcp_servers(registry, configs, stack)
+        assert registry.has_tool("mcp_good_echo")
+        assert "bad" not in manager.list_connected_servers()
