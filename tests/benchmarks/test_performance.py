@@ -276,6 +276,7 @@ class TestOrchestrationLoopOverhead:
         # 使用即时返回的 mock gateway
         mock_gw = MagicMock(spec=GatewayRouter)
         mock_gw.config = MagicMock()
+        mock_gw.config.max_budget = None
         mock_gw.config.default_model = "test-model"
         mock_gw.router = MagicMock()
         mock_gw.router.acompletion = AsyncMock(
@@ -309,6 +310,7 @@ class TestOrchestrationLoopOverhead:
 
         mock_gw = MagicMock(spec=GatewayRouter)
         mock_gw.config = MagicMock()
+        mock_gw.config.max_budget = None
         mock_gw.config.default_model = "test-model"
         mock_gw.router = MagicMock()
         session = await factory.create_session(guardrails=guardrails, gateway=mock_gw)

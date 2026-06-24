@@ -85,6 +85,9 @@ class OrchestrationLoop:
         self.compactor = compactor
         self.masker = masker
         self.state = LoopState()
+        # 最近一次在关键节点（turn_start / turn_end / termination）发射的事件，
+        # 供流式路径精确 yield，避免依赖 emitter.events[-1] 受子系统插入事件影响。
+        self._last_event: AgentEvent | None = None
 
     # ── 公共准备方法 ─────────────────────────────────────────────────────
 
@@ -169,7 +172,7 @@ class OrchestrationLoop:
         """每轮迭代前的准备：遮蔽、压缩、Prompt 组装、历史追加。"""
         self.state.current_turn += 1
         self.state.phase = LoopPhase.ASSEMBLING
-        self.emitter.emit("turn_start", turn=self.state.current_turn)
+        self._last_event = self.emitter.emit("turn_start", turn=self.state.current_turn)
 
         # S7 观察遮蔽与压缩仅在历史足够长时触发
         history_len = len(self.assembler.conversation_history)
@@ -355,7 +358,7 @@ class OrchestrationLoop:
                 and outcome.result.success
                 and outcome.tool_call.function.name.startswith("handoff_to_")
             ):
-                self.state.total_tool_calls += len(outcomes)
+                # 工具调用计数已在 process_tool_outcomes 累加，此处不再重复累加
                 return self.make_response(
                     content=outcome.result.content,
                     reason=TerminationReason.HANDOFF,
@@ -393,7 +396,7 @@ class OrchestrationLoop:
         if not self.strategy.is_plan_complete():
             self.strategy.advance_step()
 
-        self.emitter.emit("turn_end", turn=self.state.current_turn)
+        self._last_event = self.emitter.emit("turn_end", turn=self.state.current_turn)
 
         elapsed = (time.perf_counter() - start_time) * 1000
         emit_metric("loop_turn_overhead_ms", elapsed, {}, "histogram")
@@ -515,7 +518,7 @@ class OrchestrationLoop:
 
         early = await self.prepare_run(user_message, ctx)
         if early is not None:
-            yield self.emitter.events[-1]
+            yield self._last_event
             return
 
         while True:
@@ -523,7 +526,7 @@ class OrchestrationLoop:
             prompt = await self.prepare_turn(ctx)
 
             # yield turn_start 事件
-            yield self.emitter.events[-1]
+            yield self._last_event
 
             # LLM 推理
             self.state.phase = LoopPhase.LLM_CALLING
@@ -583,7 +586,7 @@ class OrchestrationLoop:
             reason = self.check_final_termination(parsed, response.finish_reason)
             if reason is not None:
                 await self.handle_final_response(parsed, reason)
-                yield self.emitter.events[-1]
+                yield self._last_event
                 return
 
             # 工具执行（tool_call_start/end 事件由 coordinator 通过 emitter 产生）
@@ -597,17 +600,17 @@ class OrchestrationLoop:
             # Handoff 短路
             handoff_resp = self.check_handoff_result(parsed, outcomes)
             if handoff_resp is not None:
-                yield self.emitter.events[-1]
+                yield self._last_event
                 return
 
             # 轮次结束
             end_resp = self.finish_turn(ctx, tripwire, start_time)
             if end_resp is not None:
-                yield self.emitter.events[-1]
+                yield self._last_event
                 return
 
             # yield turn_end 事件
-            yield self.emitter.events[-1]
+            yield self._last_event
 
     # ── 控制方法 ──────────────────────────────────────────────────────────
 
@@ -629,10 +632,10 @@ class OrchestrationLoop:
         self.state.phase = LoopPhase.TERMINATING
         self.state.termination_reason = reason
 
-        self.emitter.emit(
+        self._last_event = self.emitter.emit(
             "termination",
             turn=self.state.current_turn,
-            data={"reason": reason.value},
+            data={"reason": reason.value, "content": content},
         )
 
         return AgentResponse(

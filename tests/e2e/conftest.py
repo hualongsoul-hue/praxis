@@ -149,6 +149,7 @@ def mock_gateway() -> GatewayRouter:
     """创建 mock Gateway（控制 LLM 返回）。"""
     gw = MagicMock(spec=GatewayRouter)
     gw.config = MagicMock()
+    gw.config.max_budget = None
     gw.config.default_model = "test-model"
     gw.router = MagicMock()
     return gw

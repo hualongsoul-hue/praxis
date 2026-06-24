@@ -135,8 +135,17 @@ class Session:
     ) -> AsyncIterator[AgentEvent]:
         """流式执行一轮对话。"""
         self.metadata.status = SessionStatus.ACTIVE
+        turn_tokens = 0
         async for event in self.loop.run_stream(user_message, **kwargs):
+            if event.event_type == "llm_request":
+                turn_tokens += event.data.get("token_count", 0)
             yield event
+
+        # 与 run_turn 对齐：累加统计并触发自动检查点
+        self.metadata.total_turns += self.loop.state.current_turn
+        self.metadata.total_tokens += turn_tokens
+        if self.config.auto_checkpoint:
+            await self.save_auto_checkpoint()
 
     def abort(self) -> None:
         """中断当前会话。"""

@@ -30,6 +30,7 @@ def build_mock_gateway(default_model: str = "default") -> MagicMock:
     """构造一个 MagicMock(spec=GatewayRouter)，含最低可用配置。"""
     gw = MagicMock(spec=GatewayRouter)
     gw.config = MagicMock()
+    gw.config.max_budget = None
     gw.config.default_model = default_model
     gw.router = MagicMock()
     gw.router.acompletion = AsyncMock()

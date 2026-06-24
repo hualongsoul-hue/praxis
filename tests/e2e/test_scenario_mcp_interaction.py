@@ -134,6 +134,7 @@ class TestMCPInteraction:
         """验证：Sampling 请求处理。"""
         mock_router = MagicMock(spec=GatewayRouter)
         mock_router.config = MagicMock()
+        mock_router.config.max_budget = None
         mock_router.config.default_model = "test-model"
 
         # mock chat 返回

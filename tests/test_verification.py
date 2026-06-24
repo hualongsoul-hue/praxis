@@ -175,6 +175,7 @@ class TestInferentialVerifier:
     async def test_pass_verdict(self) -> None:
         gw = MagicMock()
         gw.config = MagicMock()
+        gw.config.max_budget = None
         gw.config.default_model = "test-model"
 
         mock_judge = JudgeResult(
@@ -191,6 +192,7 @@ class TestInferentialVerifier:
     async def test_fail_verdict(self) -> None:
         gw = MagicMock()
         gw.config = MagicMock()
+        gw.config.max_budget = None
         gw.config.default_model = "test-model"
 
         mock_judge = JudgeResult(
@@ -207,6 +209,7 @@ class TestInferentialVerifier:
     async def test_error_handling(self) -> None:
         gw = MagicMock()
         gw.config = MagicMock()
+        gw.config.max_budget = None
         gw.config.default_model = "test-model"
 
         with patch("praxis.verification.inferential.judge", side_effect=RuntimeError("LLM down")):
@@ -218,6 +221,7 @@ class TestInferentialVerifier:
     async def test_with_dimensions(self) -> None:
         gw = MagicMock()
         gw.config = MagicMock()
+        gw.config.max_budget = None
         gw.config.default_model = "test-model"
 
         mock_judge = JudgeResult(

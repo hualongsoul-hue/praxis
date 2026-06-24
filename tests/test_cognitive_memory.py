@@ -76,6 +76,7 @@ def scoped(store: PersistenceStore) -> ScopedMemoryStore:
 def mock_gateway() -> GatewayRouter:
     gw = MagicMock(spec=GatewayRouter)
     gw.config = MagicMock()
+    gw.config.max_budget = None
     gw.config.default_model = "mock"
     gw.config.max_budget = None
     gw.router = MagicMock()
