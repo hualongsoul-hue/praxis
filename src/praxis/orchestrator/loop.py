@@ -33,7 +33,7 @@ from praxis.models.orchestrator import (
     TerminationReason,
 )
 
-from praxis.models.verification import QualityPhase, VerificationType
+from praxis.models.verification import QualityPhase, VerificationStatus, VerificationType
 from praxis.orchestrator.events import EventEmitter
 from praxis.orchestrator.parser import OutputParser, ParsedOutput, StreamAccumulator
 from praxis.orchestrator.strategy import LoopStrategy, PlanStep
@@ -260,11 +260,16 @@ class OrchestrationLoop:
                     )
                     self.assembler.compaction_count += 1
 
-        # Step 1: Prompt 组装（注入 S6 记忆 + S14 技能）
+        # Step 1: Prompt 组装（注入 S6 记忆 + S14 技能 + 计划进度）
+        # 计划上下文与语义检索并存（此前用 or 互斥：有记忆结果时计划进度会丢失）
+        plan_context = self.strategy.get_plan_context()
+        semantic_block = "\n\n".join(
+            s for s in (ctx.semantic_results, plan_context) if s
+        )
         prompt = self.assembler.assemble_prompt(
             ctx.turn_context,
             memory_index=ctx.memory_index,
-            semantic_results=ctx.semantic_results or self.strategy.get_plan_context(),
+            semantic_results=semantic_block,
             skill_index=ctx.skill_index,
             identifier_index=ctx.identifier_index,
             few_shot_messages=ctx.few_shot_messages,
@@ -423,7 +428,12 @@ class OrchestrationLoop:
                             verification_type=VerificationType.COMPUTATIONAL,
                         ),
                     ))
-                    if not gav_response.passed:
+                    # 仅在存在真正的 FAIL 时注入自我修正反馈；SKIP（未运行）与
+                    # ERROR（验证器自身故障）不应打扰模型。
+                    has_fail = any(
+                        r.status == VerificationStatus.FAIL for r in verification_results
+                    )
+                    if not gav_response.passed and has_fail:
                         feedback = GAVController.format_for_context(gav_response)
                         self.assembler.update_with_result([{
                             "role": "system",

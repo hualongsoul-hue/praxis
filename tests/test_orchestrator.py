@@ -548,6 +548,39 @@ class TestOrchestrationLoop:
         assert "语法错误" in injected
         assert any(e.event_type == "gav_feedback" for e in loop.emitter.events)
 
+    async def test_gav_no_feedback_on_skip_or_error(self) -> None:
+        """验证结果仅为 SKIP/ERROR（非 FAIL）时不应注入自我修正反馈。"""
+        from praxis.models.verification import (
+            VerificationResult, VerificationStatus, VerificationType,
+        )
+        from praxis.orchestrator.parser import ParsedOutput
+
+        loop = self.make_loop()
+        loop.verifier_registry = AsyncMock()
+        loop.verifier_registry.run_computational = AsyncMock(return_value=[
+            VerificationResult(
+                status=VerificationStatus.ERROR,
+                verification_type=VerificationType.COMPUTATIONAL,
+                verifier_name="broken", feedback="缺少参数",
+            ),
+            VerificationResult(
+                status=VerificationStatus.SKIP,
+                verification_type=VerificationType.COMPUTATIONAL,
+                verifier_name="skipped",
+            ),
+        ])
+        parsed = ParsedOutput(
+            content="", tool_calls=[make_tool_call()], is_final=False, handoff_target=None,
+        )
+        before = loop.assembler.update_with_result.call_count
+        await loop.process_tool_outcomes(parsed)
+        # 只应有工具结果一次注入，无 verification_feedback
+        assert not any(
+            "verification_feedback" in str(c.args)
+            for c in loop.assembler.update_with_result.call_args_list[before:]
+        )
+        assert not any(e.event_type == "gav_feedback" for e in loop.emitter.events)
+
     @patch("praxis.orchestrator.loop.chat")
     async def test_natural_termination(self, mock_chat: Any) -> None:
         mock_chat.return_value = make_model_response(content="最终回答")
