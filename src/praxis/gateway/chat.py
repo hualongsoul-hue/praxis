@@ -182,6 +182,8 @@ async def chat(
         cost = completion_cost(raw)
     except Exception:
         cost = 0.0
+    # 累计实际花费，供后续调用的预算检查使用
+    gateway.add_spend(cost)
     record_usage(
         response.model,
         response.usage.prompt_tokens,

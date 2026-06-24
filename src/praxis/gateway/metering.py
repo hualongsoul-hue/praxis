@@ -65,10 +65,28 @@ def completion_cost(response: Any) -> float:
     return float(cost)
 
 
-def check_budget(gateway: GatewayRouter, estimated_tokens: int, model: str = "default") -> None:
-    """调用前预算检查。
+def estimate_input_cost(estimated_tokens: int, model: str = "default") -> float:
+    """按模型价格表估算给定输入 Token 数的成本（USD）。
 
-    如果配置了 max_budget 且预估成本将超出预算，抛出 BudgetExceededError。
+    使用 ``litellm.cost_per_token`` 直接基于 Token 数计价，
+    未收录的模型回退为 0.0（不计入预算）。
+    """
+    try:
+        prompt_cost, completion_cost_ = litellm.cost_per_token(
+            model=model,
+            prompt_tokens=estimated_tokens,
+            completion_tokens=0,
+        )
+        return float(prompt_cost) + float(completion_cost_)
+    except Exception:
+        return 0.0
+
+
+def check_budget(gateway: GatewayRouter, estimated_tokens: int, model: str = "default") -> None:
+    """调用前预算检查（累计花费 + 本次预估）。
+
+    如果配置了 max_budget 且「已累计花费 + 本次预估输入成本」将超出预算，
+    抛出 BudgetExceededError。
 
     Args:
         gateway: 网关路由器实例。
@@ -79,20 +97,18 @@ def check_budget(gateway: GatewayRouter, estimated_tokens: int, model: str = "de
     if max_budget is None:
         return
 
-    try:
-        estimated_cost = litellm.completion_cost(
-            model=model,
-            prompt=str(estimated_tokens),
-            completion="",
-        )
-    except Exception:
-        return
+    already_spent = gateway.total_spend
+    estimated_cost = estimate_input_cost(estimated_tokens, model)
+    projected = already_spent + estimated_cost
 
-    if estimated_cost > max_budget:
+    if projected > max_budget:
         raise BudgetExceededError(
-            f"预估成本 ${estimated_cost:.4f} 超出预算上限 ${max_budget:.4f}",
+            f"预估累计成本 ${projected:.4f}（已花费 ${already_spent:.4f} + "
+            f"本次 ${estimated_cost:.4f}）超出预算上限 ${max_budget:.4f}",
             details={
+                "already_spent": already_spent,
                 "estimated_cost": estimated_cost,
+                "projected": projected,
                 "max_budget": max_budget,
                 "model": model,
             },

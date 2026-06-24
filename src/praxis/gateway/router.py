@@ -23,6 +23,7 @@ class GatewayRouter:
     def __init__(self, config: GatewayConfig) -> None:
         self._config = config
         self._router = self._build_router(config)
+        self._total_spend_usd: float = 0.0
         register_callbacks()
 
     @staticmethod
@@ -50,6 +51,16 @@ class GatewayRouter:
     def config(self) -> GatewayConfig:
         """获取当前网关配置。"""
         return self._config
+
+    @property
+    def total_spend(self) -> float:
+        """本会话累计已花费成本（USD）。"""
+        return self._total_spend_usd
+
+    def add_spend(self, cost: float) -> None:
+        """累加一次调用的实际成本（USD）。"""
+        if cost > 0:
+            self._total_spend_usd += cost
 
     def get_model_names(self) -> list[str]:
         """获取所有已注册的模型别名列表。"""
