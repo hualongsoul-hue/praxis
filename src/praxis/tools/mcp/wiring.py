@@ -16,6 +16,7 @@ from praxis.models.mcp import (
     MCPServerConfig,
 )
 from praxis.telemetry.logger import get_logger
+from praxis.tools.mcp.access_tools import register_mcp_access_tools
 from praxis.tools.mcp.connection import MCPConnectionManager
 from praxis.tools.mcp.elicitation import ElicitationManager
 from praxis.tools.mcp.prompts import MCPPromptsBridge
@@ -144,5 +145,8 @@ async def connect_mcp_servers(
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
+
+    # 将具备能力的 Server 的资源/提示暴露为 LLM 可调用工具
+    register_mcp_access_tools(registry, manager)
 
     return manager

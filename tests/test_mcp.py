@@ -634,3 +634,60 @@ class TestMCPSamplingElicitationWiring:
         result = await cb(None, params)
         assert isinstance(result, ElicitResult)
         assert result.action == "decline"
+
+
+class TestMCPAccessTools:
+    """MCP 资源/提示暴露为 agent 工具。"""
+
+    async def test_resource_and_prompt_tools_registered_and_proxy(self) -> None:
+        from contextlib import AsyncExitStack, asynccontextmanager
+
+        from praxis.tools.mcp.wiring import connect_mcp_servers
+
+        session = make_mock_session()
+
+        @asynccontextmanager
+        async def fake_transport(config: Any, *args: Any):
+            yield session
+
+        registry = ToolRegistry()
+        config = MCPServerConfig(
+            name="srv1", transport=MCPTransportType.STDIO, command="echo",
+        )
+        with patch("praxis.tools.mcp.wiring.create_transport", fake_transport):
+            async with AsyncExitStack() as stack:
+                await connect_mcp_servers(registry, [config], stack)
+
+                # 资源/提示工具应已注册（mock session 声明了 resources/prompts 能力）
+                for name in (
+                    "mcp_list_resources", "mcp_read_resource",
+                    "mcp_list_prompts", "mcp_get_prompt",
+                ):
+                    assert registry.has_tool(name)
+                    assert registry.get_metadata(name).category == "mcp"
+
+                # 代理读取资源
+                read = registry.get_entry("mcp_read_resource").handler
+                out = await read({"server_name": "srv1", "uri": "file:///test.txt"})
+                assert "file content" in out
+
+                # 代理获取提示
+                get_prompt = registry.get_entry("mcp_get_prompt").handler
+                out = await get_prompt({"server_name": "srv1", "prompt_name": "greet"})
+                assert "Hello World" in out
+
+    async def test_access_tools_skipped_without_capabilities(self) -> None:
+        """Server 无 resources/prompts 能力时不注册对应工具。"""
+        from praxis.tools.mcp.access_tools import register_mcp_access_tools
+
+        registry = ToolRegistry()
+        manager = MagicMock()
+        manager.list_connected_servers.return_value = ["srv1"]
+        caps = MagicMock()
+        caps.resources = False
+        caps.prompts = False
+        manager.get_server_capabilities.return_value = caps
+
+        registered = register_mcp_access_tools(registry, manager)
+        assert registered == []
+        assert not registry.has_tool("mcp_list_resources")
