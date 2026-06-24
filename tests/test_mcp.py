@@ -691,3 +691,38 @@ class TestMCPAccessTools:
         registered = register_mcp_access_tools(registry, manager)
         assert registered == []
         assert not registry.has_tool("mcp_list_resources")
+
+
+class TestMCPAuthWiring:
+    """OAuth 头注入装配链路。"""
+
+    async def test_auth_headers_injected_before_connect(self) -> None:
+        from contextlib import AsyncExitStack, asynccontextmanager
+
+        from praxis.tools.mcp.wiring import connect_mcp_servers
+
+        session = make_mock_session()
+        seen: dict[str, Any] = {}
+
+        @asynccontextmanager
+        async def capture_transport(config: Any, *args: Any):
+            seen["headers"] = dict(config.headers)
+            yield session
+
+        auth_manager = MagicMock()
+        auth_manager.initiate_auth_flow = AsyncMock(return_value=True)
+        auth_manager.get_auth_headers.return_value = {"Authorization": "Bearer tok-123"}
+
+        registry = ToolRegistry()
+        config = MCPServerConfig(
+            name="srv1", transport=MCPTransportType.HTTP, url="http://x",
+        )
+        with patch("praxis.tools.mcp.wiring.create_transport", capture_transport):
+            async with AsyncExitStack() as stack:
+                await connect_mcp_servers(
+                    registry, [config], stack, auth_manager=auth_manager,
+                )
+        auth_manager.initiate_auth_flow.assert_awaited_once_with("srv1")
+        assert seen["headers"].get("Authorization") == "Bearer tok-123"
+        # 原始 config 不被就地修改
+        assert config.headers == {}

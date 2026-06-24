@@ -17,6 +17,7 @@ from praxis.models.mcp import (
 )
 from praxis.telemetry.logger import get_logger
 from praxis.tools.mcp.access_tools import register_mcp_access_tools
+from praxis.tools.mcp.auth import MCPAuthManager
 from praxis.tools.mcp.connection import MCPConnectionManager
 from praxis.tools.mcp.elicitation import ElicitationManager
 from praxis.tools.mcp.prompts import MCPPromptsBridge
@@ -92,6 +93,7 @@ async def connect_mcp_servers(
     exit_stack: AsyncExitStack,
     sampling_manager: SamplingManager | None = None,
     elicitation_manager: ElicitationManager | None = None,
+    auth_manager: MCPAuthManager | None = None,
 ) -> MCPConnectionManager:
     """连接一组 MCP Server，并将其工具注册到 registry。
 
@@ -119,6 +121,15 @@ async def connect_mcp_servers(
 
     for config in configs:
         try:
+            # OAuth：若配置了该 Server 的授权，先完成流程并注入 Bearer 头
+            if auth_manager is not None:
+                await auth_manager.initiate_auth_flow(config.name)
+                headers = auth_manager.get_auth_headers(config.name)
+                if headers:
+                    config = config.model_copy(
+                        update={"headers": {**config.headers, **headers}}
+                    )
+
             sampling_cb = (
                 _make_sampling_callback(config.name, sampling_manager)
                 if sampling_manager is not None else None

@@ -91,6 +91,7 @@ class Session:
         self.mcp_manager: Any = None
         self.mcp_sampling_manager: Any = None
         self.mcp_elicitation_manager: Any = None
+        self.mcp_auth_manager: Any = None
         self._mcp_stack: Any = None
 
     @property

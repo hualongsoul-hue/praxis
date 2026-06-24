@@ -67,6 +67,7 @@ async def create_agent_session(
     mcp_sampling: bool = True,
     mcp_sampling_review: Any | None = None,
     mcp_elicitation_handler: Any | None = None,
+    mcp_auth_manager: Any | None = None,
 ) -> Session:
     """创建带完整 S1~S14 集成的 Agent 会话。
 
@@ -144,9 +145,11 @@ async def create_agent_session(
             session.registry, mcp_servers, stack,
             sampling_manager=sampling_mgr,
             elicitation_manager=elicitation_mgr,
+            auth_manager=mcp_auth_manager,
         )
         session.mcp_sampling_manager = sampling_mgr
         session.mcp_elicitation_manager = elicitation_mgr
+        session.mcp_auth_manager = mcp_auth_manager
         session._mcp_stack = stack
 
     log.info(
