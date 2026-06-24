@@ -45,18 +45,23 @@ tools:
   max_concurrent_readonly: 5
   shell_timeout: 120.0
   network_allowed: true
+  # S9 工具降级映射：首选工具不可用/熔断时切换到替代工具
+  # fallback_mappings:
+  #   web_search: "web_fetch"
 
 # ── S6 记忆系统 ────────────────────────────────────────────
 memory:
-  vector_dimensions: 1536
+  embedding_api_base: "http://localhost:8080"  # TEI 嵌入服务地址
+  # embedding_api_key: "${TEI_API_KEY}"
   max_memories: 10000
-  decay_enabled: true
+  decay_enabled: true       # 梦境周期执行相关性衰减遗忘
   background_batch_threshold: 5
   background_interval_seconds: 10.0
 
 # ── S7 上下文引擎 ──────────────────────────────────────────
 context:
-  compaction_threshold: 0.8   # Token 占比超过 80% 触发压缩
+  compaction_threshold: 0.8     # Token 占比超过 80% 触发压缩
+  compaction_min_history: 8     # 对话历史达到此长度才检查遮蔽/压缩
   masking_turn_distance: 10
   masking_token_threshold: 2000
   recent_file_refs_keep: 5

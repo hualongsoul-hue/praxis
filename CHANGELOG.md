@@ -2,6 +2,26 @@
 
 本项目遵循 [Semantic Versioning](https://semver.org/)。
 
+## [Unreleased]
+
+### 缺陷修复
+
+- **S9 重试失效**: 工具瞬态错误此前只记录日志不重试，改为按退避策略真正重连执行
+- **S4 预算失效**: 修正预算预检查算法（误把 token 数字符串当文本计价），新增累计花费追踪
+- **S7 Token 低估**: 上下文用量纳入系统提示/记忆/工具定义层，修正压缩与终止误判
+- **S11 流式终止**: 提前终止内容透传、Handoff 工具计数翻倍、事件捕获健壮性
+- **S8 护栏**: ALLOW 放行但触发绊线时不再丢失绊线标记
+- **S6 记忆**: 移除硬编码内网嵌入地址、复用 httpx 连接池、检查点恢复待提取消息
+
+### 功能链补全（消除「实现但未接入」）
+
+- **S6 记忆工具**: save/search/update/delete/scratchpad 暴露为 LLM 可调用工具
+- **S9 降级**: 工具降级映射经 `tools.fallback_mappings` 配置装配
+- **S10 验证**: 验证器注册表支持推理型/视觉型验证（注入网关）
+- **S12 续接**: `resume_agent_session` 顶层入口 + `ContinuationManager` 热身序列接通
+- **S6 衰减**: 梦境周期执行相关性衰减遗忘（`decay_enabled`）
+- **MCP**: 服务器装配到会话、Sampling/Elicitation 回调、资源/提示工具、OAuth 头注入
+
 ## [1.0.0] - 2026-04-17
 
 ### 架构
