@@ -67,6 +67,7 @@ async def create_agent_session(
     memory: CognitiveMemory | None = None,
     skill_manager: SkillManager | None = None,
     verifier_registry: VerifierRegistry | None = None,
+    jit_retriever: Any = None,
     include_builtins: bool = True,
     mcp_servers: list[MCPServerConfig] | None = None,
     mcp_sampling: bool = True,
@@ -124,6 +125,7 @@ async def create_agent_session(
         verifier_registry=verifier_registry,
         tools_config=tools_config,
         include_builtins=include_builtins,
+        jit_retriever=jit_retriever,
     )
 
     if subagent_config is not None:

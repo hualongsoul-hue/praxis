@@ -51,3 +51,5 @@ class RunContext(BaseModel):
     memory_index: str = ""
     semantic_results: str = ""
     skill_index: str = ""
+    identifier_index: str = ""
+    few_shot_messages: list[dict[str, Any]] = Field(default_factory=list)

@@ -56,6 +56,8 @@ class PromptAssembler:
         working_memory: list[dict[str, Any]] | None = None,
         semantic_results: str = "",
         skill_index: str = "",
+        identifier_index: str = "",
+        few_shot_messages: list[dict[str, Any]] | None = None,
     ) -> AssembledPrompt:
         """组装完整 Prompt。
 
@@ -97,8 +99,18 @@ class PromptAssembler:
             system_content += f"\n\n<memory_index>\n{memory_index}\n</memory_index>"
             layers.append("memory_index")
 
+        # Layer 5: S7 JIT 标识符索引（轻量符号清单，按需 load_content）
+        if identifier_index:
+            system_content += f"\n\n<identifier_index>\n{identifier_index}\n</identifier_index>"
+            layers.append("identifier_index")
+
         messages.append({"role": "system", "content": system_content})
         layers.append("system_prompt")
+
+        # S7 JIT Few-shot 示例（演示，置于历史之前）
+        if few_shot_messages:
+            messages.extend(few_shot_messages)
+            layers.append("few_shot")
 
         # Layer 6: 工作记忆（对话历史）
         if working_memory:
@@ -146,6 +158,8 @@ class PromptAssembler:
                 "role": "system",
                 "content": json.dumps(self.tool_schemas, ensure_ascii=False),
             })
+        if few_shot_messages:
+            static_messages.extend(few_shot_messages)
         self._static_token_count = get_token_count(static_messages, self.model)
 
         emit_metric(

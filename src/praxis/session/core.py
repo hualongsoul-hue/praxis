@@ -244,6 +244,7 @@ class SessionFactory:
         verifier_registry: VerifierRegistry | None = None,
         tools_config: ToolsConfig | None = None,
         include_builtins: bool = True,
+        jit_retriever: Any = None,
     ) -> Session:
         """创建新会话。
 
@@ -353,6 +354,7 @@ class SessionFactory:
             compactor=compactor,
             masker=masker,
             compaction_min_history=self.context_config.compaction_min_history,
+            jit_retriever=jit_retriever,
         )
 
         metadata.status = SessionStatus.ACTIVE

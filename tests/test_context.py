@@ -418,3 +418,66 @@ class TestJITRetriever:
         jit = JITRetriever()
         content = await jit.load_content("nonexistent")
         assert content is None
+
+
+class TestJITInjection:
+    """S7 JIT few-shot 与标识符索引注入。"""
+
+    def test_assemble_injects_few_shot_and_identifier(self) -> None:
+        from praxis.config.schemas import ContextConfig
+        from praxis.context.assembler import PromptAssembler
+        from praxis.models.context import TurnContext
+
+        asm = PromptAssembler(ContextConfig(), model="gpt-4o-mini")
+        prompt = asm.assemble_prompt(
+            TurnContext(user_message="实现快排"),
+            identifier_index="- [function] quicksort (algos.py)",
+            few_shot_messages=[
+                {"role": "user", "content": "示例问"},
+                {"role": "assistant", "content": "示例答"},
+            ],
+        )
+        # 标识符索引进系统消息
+        assert "identifier_index" in prompt.messages[0]["content"]
+        assert "quicksort" in prompt.messages[0]["content"]
+        # few-shot 作为演示消息出现
+        contents = [m.get("content") for m in prompt.messages]
+        assert "示例问" in contents and "示例答" in contents
+        assert "few_shot" in prompt.layers_included
+
+    async def test_loop_pulls_jit_by_task_stage(self) -> None:
+        """循环 prepare_run 应按 task_stage 从 JITRetriever 取示例与索引。"""
+        from praxis.context.assembler import PromptAssembler
+        from praxis.config.schemas import ContextConfig
+        from praxis.context.jit_retrieval import JITRetriever
+        from praxis.models.context import RunContext, TurnContext
+        from praxis.orchestrator.loop import OrchestrationLoop
+        from unittest.mock import AsyncMock, MagicMock
+
+        jit = JITRetriever()
+        jit.add_example("coding", "如何排序", "用 sorted()", tags=["py"])
+        jit.register_identifier("quicksort", "function", "algos.py")
+
+        loop = OrchestrationLoop(
+            config=MagicMock(),
+            gateway=MagicMock(),
+            assembler=PromptAssembler(ContextConfig(), model="gpt-4o-mini"),
+            tool_coordinator=MagicMock(),
+            guardrails=AsyncMock(),
+            termination=MagicMock(),
+            strategy=MagicMock(),
+            parser=MagicMock(),
+            emitter=MagicMock(),
+            jit_retriever=jit,
+        )
+        loop.guardrails.check_input = AsyncMock(
+            return_value=MagicMock(tripwire=False, verdict=None)
+        )
+        loop.strategy.get_step_instruction = MagicMock(return_value="")
+        ctx = RunContext(turn_context=TurnContext(user_message="排序", task_stage="coding"))
+
+        early = await loop.prepare_run("排序", ctx)
+        assert early is None
+        # JIT 段应按 task_stage 填充 few-shot 与标识符索引
+        assert ctx.few_shot_messages and ctx.few_shot_messages[0]["content"] == "如何排序"
+        assert "quicksort" in ctx.identifier_index

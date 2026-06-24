@@ -12,6 +12,7 @@ from typing import Any
 from praxis.config.schemas import OrchestratorConfig
 from praxis.context.assembler import PromptAssembler
 from praxis.context.compaction import ContextCompactor
+from praxis.context.jit_retrieval import JITRetriever
 from praxis.context.masking import ObservationMasker
 from praxis.context.tool_injection import ToolInjector
 from praxis.gateway.chat import chat, chat_stream
@@ -70,6 +71,7 @@ class OrchestrationLoop:
         compactor: ContextCompactor | None = None,
         masker: ObservationMasker | None = None,
         compaction_min_history: int = 8,
+        jit_retriever: JITRetriever | None = None,
     ) -> None:
         self.config = config
         self.gateway = gateway
@@ -89,6 +91,8 @@ class OrchestrationLoop:
         self.compaction_min_history = compaction_min_history
         # S10→S11 验证反馈控制器（GAV Verify 阶段编排与上下文注入格式化）
         self.gav = GAVController()
+        # S7 即时检索：按任务阶段注入 few-shot 示例与轻量标识符索引
+        self.jit_retriever = jit_retriever
         self.state = LoopState()
         # 最近一次在关键节点（turn_start / turn_end / termination）发射的事件，
         # 供流式路径精确 yield，避免依赖 emitter.events[-1] 受子系统插入事件影响。
@@ -161,6 +165,17 @@ class OrchestrationLoop:
                 )
                 self.skill_manager.auto_activate_for_task(user_message)
 
+        # S7 JIT: 按任务阶段取 few-shot 示例 + 标识符索引
+        if self.jit_retriever is not None:
+            ctx.few_shot_messages = self.jit_retriever.get_examples_for_task(
+                ctx.turn_context.task_stage
+            )
+            id_index = self.jit_retriever.get_identifier_index()
+            if id_index:
+                ctx.identifier_index = "\n".join(
+                    f"- [{e['kind']}] {e['identifier']} ({e['source']})" for e in id_index
+                )
+
         # S5+S7: 刷新工具 Schema
         if self.tool_injector is not None:
             schemas = self.tool_injector.get_tools_for_stage(ctx.turn_context.task_stage)
@@ -202,6 +217,8 @@ class OrchestrationLoop:
             memory_index=ctx.memory_index,
             semantic_results=ctx.semantic_results or self.strategy.get_plan_context(),
             skill_index=ctx.skill_index,
+            identifier_index=ctx.identifier_index,
+            few_shot_messages=ctx.few_shot_messages,
         )
 
         # 将用户消息存入对话历史
