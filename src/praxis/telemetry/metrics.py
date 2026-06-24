@@ -234,12 +234,17 @@ def _start_metrics_server(port: int) -> None:
 
 
 def configure_metrics(config: TelemetryConfig) -> None:
-    """初始化指标采集器；按 metrics_export 选择导出方式。"""
+    """初始化指标采集器；按 metrics_export 选择导出方式。
+
+    幂等：已存在采集器时保留之（避免 create_agent_session 每会话重复调用
+    时清空累计指标）。
+    """
     global collector
     if not config.metrics_enabled:
         collector = None
         return
-    collector = MetricsCollector()
+    if collector is None:
+        collector = MetricsCollector()
     if config.metrics_export == "prometheus":
         try:
             _start_metrics_server(config.metrics_port)
