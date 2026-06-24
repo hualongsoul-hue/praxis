@@ -5,6 +5,7 @@
 """
 
 import threading
+import time
 from pathlib import Path
 from typing import Any, Literal
 
@@ -202,6 +203,26 @@ class MetricsCollector:
 
 collector: MetricsCollector | None = None
 _metrics_server: Any = None
+_file_exporter_started: bool = False
+
+
+def _start_file_exporter(path: str, interval: float = 15.0) -> None:
+    """后台线程：周期性把指标快照写入文件（metrics_export=file）。"""
+    global _file_exporter_started
+    if _file_exporter_started:
+        return
+
+    def _loop() -> None:
+        while True:
+            time.sleep(interval)
+            try:
+                get_collector().export_to_file(path)
+            except Exception:  # 写文件失败不应使线程退出
+                pass
+
+    thread = threading.Thread(target=_loop, name="praxis-metrics-file", daemon=True)
+    thread.start()
+    _file_exporter_started = True
 
 
 def _start_metrics_server(port: int) -> None:
@@ -249,6 +270,11 @@ def configure_metrics(config: TelemetryConfig) -> None:
         try:
             _start_metrics_server(config.metrics_port)
         except Exception:  # 端口占用等不应阻断主流程
+            pass
+    elif config.metrics_export == "file" and config.metrics_file:
+        try:
+            _start_file_exporter(config.metrics_file)
+        except Exception:
             pass
 
 
