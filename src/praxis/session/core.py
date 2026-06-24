@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 from praxis.config.schemas import (
     ContextConfig,
     MemoryConfig,
+    RecoveryConfig,
     SessionConfig,
     OrchestratorConfig,
     ToolsConfig,
@@ -35,6 +36,7 @@ from praxis.orchestrator.events import EventEmitter
 from praxis.orchestrator.loop import OrchestrationLoop
 from praxis.orchestrator.parser import OutputParser
 from praxis.orchestrator.strategy import LoopStrategy
+from praxis.models.orchestrator import StrategyMode
 from praxis.orchestrator.termination import TerminationManager
 from praxis.orchestrator.tool_coordination import ToolCoordinator
 from praxis.persistence.store import PersistenceStore
@@ -53,6 +55,14 @@ from praxis.tools.sandbox import Sandbox
 from praxis.verification.registry import VerifierRegistry
 
 log = get_logger("session.core")
+
+
+def _strategy_mode(name: str) -> StrategyMode:
+    """将 OrchestratorConfig.default_strategy 字符串映射为 StrategyMode。"""
+    try:
+        return StrategyMode(name)
+    except ValueError:
+        return StrategyMode.REACT
 
 
 class Session:
@@ -201,12 +211,14 @@ class SessionFactory:
         orchestrator_config: OrchestratorConfig,
         context_config: ContextConfig,
         memory_config: MemoryConfig | None = None,
+        recovery_config: RecoveryConfig | None = None,
     ) -> None:
         self.store = store
         self.session_config = session_config
         self.orchestrator_config = orchestrator_config
         self.context_config = context_config
         self.memory_config = memory_config or MemoryConfig()
+        self.recovery_config = recovery_config or RecoveryConfig()
         # 配置 S2 审计持久化通道（护栏裁决事件写入 store 的 "audit" 命名空间）
         configure_audit(store)
 
@@ -269,9 +281,17 @@ class SessionFactory:
         # S7: 上下文引擎
         assembler = PromptAssembler(self.context_config, model=model)
 
-        # S9: 错误恢复（熔断 / 重试 / 降级）
-        circuits = CircuitBreakerRegistry()
-        retry_policy = RetryPolicy()
+        # S9: 错误恢复（熔断 / 重试 / 降级）——从 RecoveryConfig 装配
+        rc = self.recovery_config
+        circuits = CircuitBreakerRegistry(
+            failure_threshold=rc.circuit_breaker_threshold,
+            cooldown_seconds=rc.circuit_breaker_cooldown,
+        )
+        retry_policy = RetryPolicy(
+            max_retries=rc.max_retries,
+            initial_delay=rc.base_delay,
+            max_delay=rc.max_delay,
+        )
         fallbacks = FallbackRegistry()
         # 从配置加载工具降级映射，激活协调器中的降级链路（否则映射恒为空）
         if resolved_tools_config.fallback_mappings:
@@ -281,7 +301,7 @@ class SessionFactory:
         emitter = EventEmitter()
         parser = OutputParser()
         termination = TerminationManager(self.orchestrator_config)
-        strategy = LoopStrategy()
+        strategy = LoopStrategy(mode=_strategy_mode(self.orchestrator_config.default_strategy))
 
         coordinator = ToolCoordinator(
             executor=executor,

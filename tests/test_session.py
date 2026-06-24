@@ -105,6 +105,35 @@ class TestSessionFactory:
         await session.terminate()
         assert session.status == SessionStatus.TERMINATED
 
+    async def test_recovery_and_strategy_config_wired(
+        self,
+        store: PersistenceStore,
+        guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
+    ) -> None:
+        """RecoveryConfig 与 default_strategy 应装配进 session（此前用硬编码默认值）。"""
+        from praxis.config.schemas import OrchestratorConfig, RecoveryConfig
+        from praxis.models.orchestrator import StrategyMode
+
+        factory = SessionFactory(
+            store=store,
+            session_config=SessionConfig(),
+            orchestrator_config=OrchestratorConfig(default_strategy="plan-and-execute"),
+            context_config=ContextConfig(),
+            recovery_config=RecoveryConfig(
+                max_retries=7, circuit_breaker_threshold=9, circuit_breaker_cooldown=123.0,
+            ),
+        )
+        session = await factory.create_session(guardrails=guardrails, gateway=mock_gateway)
+        try:
+            coord = session.loop.coordinator
+            assert coord.retry_policy.max_retries == 7
+            assert coord.circuits.failure_threshold == 9
+            assert coord.circuits.cooldown_seconds == 123.0
+            assert session.loop.strategy.mode == StrategyMode.PLAN_AND_EXECUTE
+        finally:
+            await session.terminate()
+
     async def test_fallback_mappings_wired_from_config(
         self,
         factory: SessionFactory,

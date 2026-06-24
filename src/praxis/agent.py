@@ -22,6 +22,7 @@ from praxis.config.schemas import (
     ContextConfig,
     MemoryConfig,
     OrchestratorConfig,
+    RecoveryConfig,
     SessionConfig,
     SubagentConfig,
     ToolsConfig,
@@ -55,6 +56,7 @@ async def create_agent_session(
     orchestrator_config: OrchestratorConfig | None = None,
     context_config: ContextConfig | None = None,
     memory_config: MemoryConfig | None = None,
+    recovery_config: RecoveryConfig | None = None,
     subagent_config: SubagentConfig | None = None,
     tools_config: ToolsConfig | None = None,
     registry: ToolRegistry | None = None,
@@ -101,6 +103,7 @@ async def create_agent_session(
         orchestrator_config=orchestrator_config,
         context_config=context_config,
         memory_config=memory_config,
+        recovery_config=recovery_config,
     )
 
     session = await factory.create_session(
