@@ -4,7 +4,7 @@
 绊线触发时返回 block + tripwire 标记。
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from praxis.guardrails.permissions import PermissionManager
 from praxis.guardrails.rules import RuleEngine, RuleTarget
@@ -12,6 +12,9 @@ from praxis.models.guardrails import GuardrailVerdict, VerdictType
 from praxis.models.telemetry import AuditEvent
 from praxis.models.tools import ToolMetadata
 from praxis.telemetry.audit import record_audit
+
+if TYPE_CHECKING:
+    from praxis.config.schemas import GuardrailsConfig
 
 
 class GuardrailEngine:
@@ -24,12 +27,19 @@ class GuardrailEngine:
         self,
         rule_engine: RuleEngine,
         permission_manager: PermissionManager,
+        input_enabled: bool = True,
+        output_enabled: bool = True,
     ) -> None:
         self.rule_engine = rule_engine
         self.permission_manager = permission_manager
+        self.input_enabled = input_enabled
+        self.output_enabled = output_enabled
 
     async def check_input(self, user_message: str) -> GuardrailVerdict:
         """输入护栏：检测提示注入、恶意指令。
+
+        注意：内置检测为基础启发式（有限正则），可拦截朴素攻击但非完整防护；
+        生产环境应叠加更强的检测（如 LLM 判别或专用服务）。
 
         Args:
             user_message: 用户输入消息文本。
@@ -37,6 +47,8 @@ class GuardrailEngine:
         Returns:
             裁决结果（pass 或 block）。
         """
+        if not self.input_enabled:
+            return GuardrailVerdict(verdict=VerdictType.PASS, reason="输入护栏已禁用")
         verdict = self.rule_engine.evaluate(RuleTarget.INPUT, user_message)
         await self.audit_verdict("check_input", verdict)
         return verdict
@@ -93,6 +105,8 @@ class GuardrailEngine:
         Returns:
             裁决结果（pass 或 block）。
         """
+        if not self.output_enabled:
+            return GuardrailVerdict(verdict=VerdictType.PASS, reason="输出护栏已禁用")
         verdict = self.rule_engine.evaluate(RuleTarget.OUTPUT, assistant_response)
         await self.audit_verdict("check_output", verdict)
         return verdict
@@ -125,3 +139,38 @@ class GuardrailEngine:
             action=operation,
             details=details,
         ))
+
+
+def build_guardrail_engine(config: "GuardrailsConfig") -> GuardrailEngine:
+    """从 S8 配置装配护栏引擎（消费 default_permission / permissions_file / 启停开关）。
+
+    - 注册内置规则集（提示注入/敏感信息）。
+    - 权限：若配置了 permissions_file 则加载声明式权限（YAML），否则以
+      default_permission 作为默认裁决。
+    - 输入/输出护栏按 input_guardrails_enabled / output_guardrails_enabled 启停。
+
+    Args:
+        config: S8 护栏配置。
+
+    Returns:
+        装配完毕的 GuardrailEngine。
+    """
+    import yaml
+
+    rule_engine = RuleEngine()
+    rule_engine.register_builtin_rules()
+
+    perm_dict: dict[str, Any] = {"default_permission": config.default_permission}
+    if config.permissions_file:
+        with open(config.permissions_file, encoding="utf-8") as fh:
+            loaded = yaml.safe_load(fh) or {}
+        if isinstance(loaded, dict):
+            perm_dict = {"default_permission": config.default_permission, **loaded}
+    permission_manager = PermissionManager.from_config_dict(perm_dict)
+
+    return GuardrailEngine(
+        rule_engine=rule_engine,
+        permission_manager=permission_manager,
+        input_enabled=config.input_guardrails_enabled,
+        output_enabled=config.output_guardrails_enabled,
+    )

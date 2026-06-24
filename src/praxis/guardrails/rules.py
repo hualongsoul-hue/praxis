@@ -59,9 +59,15 @@ BUILTIN_OUTPUT_RULES: list[GuardrailRule] = [
         target=RuleTarget.OUTPUT,
         priority=10,
         patterns=[
+            # 键名上下文 + 取值，避免对任意长字符串误报
             r"(?i)(api[_-]?key|secret[_-]?key|access[_-]?token)\s*[:=]\s*['\"]?\w{16,}",
             r"(?i)(password|passwd)\s*[:=]\s*['\"]?\S{6,}",
-            r"\b[A-Za-z0-9+/]{40,}={0,2}\b",
+            # 具体的高置信度凭证格式（私钥块 / 主流云厂商密钥），而非泛 base64
+            r"-----BEGIN (?:RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----",
+            r"\bAKIA[0-9A-Z]{16}\b",                     # AWS Access Key ID
+            r"\bgh[pousr]_[A-Za-z0-9]{36,}\b",           # GitHub token
+            r"\bsk-[A-Za-z0-9]{20,}\b",                  # OpenAI 风格密钥
+            r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b",         # Slack token
         ],
         verdict=VerdictType.BLOCK,
         tripwire=False,
