@@ -74,10 +74,16 @@ class PermissionManager:
                     reason=f"类别规则匹配: {metadata.category}",
                 )
 
-        meta_permission = VerdictType(metadata.permission_level)
+        # 工具显式声明权限级别时优先；未声明（None）则回落到策略默认权限。
+        if metadata.permission_level is not None:
+            meta_permission = VerdictType(metadata.permission_level)
+            return GuardrailVerdict(
+                verdict=meta_permission,
+                reason=f"元数据权限级别: {meta_permission.value}",
+            )
         return GuardrailVerdict(
-            verdict=meta_permission,
-            reason=f"元数据权限级别: {meta_permission.value}",
+            verdict=self.policy.default_permission,
+            reason=f"默认策略: {self.policy.default_permission.value}",
         )
 
     def grant_temporary(self, tool_name: str, permission: VerdictType) -> None:

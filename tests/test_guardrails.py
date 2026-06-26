@@ -228,6 +228,25 @@ class TestRuleEngine:
         assert verdict.verdict == VerdictType.PASS
 
 
+class TestDefaultPermissionFallback:
+    """default_permission 应对"未声明权限级别"的工具生效（此前被元数据默认值遮蔽）。"""
+
+    def test_undeclared_tool_uses_policy_default(self) -> None:
+        policy = PermissionPolicy(default_permission=VerdictType.AUTO_APPROVE)
+        pm = PermissionManager(policy)
+        meta = ToolMetadata(category="mcp")  # permission_level 默认 None
+        verdict = pm.check_permission("mcp_x_tool", meta)
+        assert verdict.verdict == VerdictType.AUTO_APPROVE
+        assert "默认策略" in verdict.reason
+
+    def test_declared_tool_overrides_default(self) -> None:
+        policy = PermissionPolicy(default_permission=VerdictType.AUTO_APPROVE)
+        pm = PermissionManager(policy)
+        meta = ToolMetadata(category="shell", permission_level="deny")
+        verdict = pm.check_permission("rm", meta)
+        assert verdict.verdict == VerdictType.DENY  # 显式声明优先于默认
+
+
 class TestGuardrailConfigWiring:
     """S8 配置装配：启停开关、构建工厂、降误报。"""
 

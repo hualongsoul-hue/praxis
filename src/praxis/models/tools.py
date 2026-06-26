@@ -36,7 +36,9 @@ class ToolMetadata(BaseModel):
     """工具元数据，供 S8 护栏裁决使用。"""
 
     category: str = "general"
-    permission_level: Literal["auto_approve", "confirm", "deny"] = "confirm"
+    # None 表示"未声明"，由 S8 权限策略的 default_permission 兜底；
+    # 显式声明时该声明优先于全局默认。
+    permission_level: Literal["auto_approve", "confirm", "deny"] | None = None
     readonly: bool = False
     timeout_seconds: float = 30.0
     tags: list[str] = Field(default_factory=list)
