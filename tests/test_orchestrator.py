@@ -582,6 +582,15 @@ class TestOrchestrationLoop:
         assert not any(e.event_type == "gav_feedback" for e in loop.emitter.events)
 
     @patch("praxis.orchestrator.loop.chat")
+    async def test_session_model_reaches_llm_call(self, mock_chat: Any) -> None:
+        """会话选定的 model 必须传入 chat（此前恒用网关 default_model）。"""
+        mock_chat.return_value = make_model_response(content="ok")
+        loop = self.make_loop()
+        loop.model = "fast-model"
+        await loop.run("你好")
+        assert mock_chat.await_args.kwargs.get("model") == "fast-model"
+
+    @patch("praxis.orchestrator.loop.chat")
     async def test_natural_termination(self, mock_chat: Any) -> None:
         mock_chat.return_value = make_model_response(content="最终回答")
         loop = self.make_loop()

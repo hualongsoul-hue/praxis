@@ -49,3 +49,15 @@ class TestGatewayLiteLLMPath:
         gw = _gateway()
         await chat(gw, [{"role": "user", "content": "hi"}], mock_response="ok")
         assert gw.total_spend >= 0.0
+
+    async def test_stream_accumulates_spend(self) -> None:
+        """流式调用也须累计花费（此前 chat_stream 不计入预算 → max_budget 失效）。"""
+        gw = _gateway()
+        got_usage = False
+        async for chunk in chat_stream(
+            gw, [{"role": "user", "content": "hi"}], mock_response="流式",
+        ):
+            if chunk.usage is not None:
+                got_usage = True
+        assert got_usage  # 末块带 usage（stream_options include_usage）
+        assert gw.total_spend > 0.0  # gpt-4o-mini 有定价，应累计到 spend

@@ -359,6 +359,7 @@ class SessionFactory:
             masker=masker,
             compaction_min_history=self.context_config.compaction_min_history,
             jit_retriever=jit_retriever,
+            model=model,
         )
 
         metadata.status = SessionStatus.ACTIVE

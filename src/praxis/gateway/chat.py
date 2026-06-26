@@ -227,6 +227,8 @@ async def chat_stream(
         "model": model_name,
         "messages": messages,
         "stream": True,
+        # 请求在末块附带用量，供流式调用累计花费与发射用量指标
+        "stream_options": {"include_usage": True},
         **kwargs,
     }
     if tools:
@@ -237,8 +239,35 @@ async def chat_stream(
     except Exception as exc:
         raise map_litellm_exception(exc) from exc
 
+    final_usage: Usage | None = None
+    final_model = model_name
     try:
         async for raw_chunk in stream:
-            yield convert_stream_chunk(raw_chunk)
+            chunk = convert_stream_chunk(raw_chunk)
+            if chunk.usage is not None:
+                final_usage = chunk.usage
+            if chunk.model:
+                final_model = chunk.model
+            yield chunk
     except Exception as exc:
         raise map_litellm_exception(exc) from exc
+
+    # 流结束后：与 chat() 对齐，累计实际花费并发射用量指标（否则流式不计入预算）
+    if final_usage is not None:
+        try:
+            import litellm
+            prompt_cost, completion_cost_ = litellm.cost_per_token(
+                model=final_model,
+                prompt_tokens=final_usage.prompt_tokens,
+                completion_tokens=final_usage.completion_tokens,
+            )
+            cost = float(prompt_cost) + float(completion_cost_)
+        except Exception:
+            cost = 0.0
+        gateway.add_spend(cost)
+        record_usage(
+            final_model,
+            final_usage.prompt_tokens,
+            final_usage.completion_tokens,
+            cost,
+        )

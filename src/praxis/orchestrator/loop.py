@@ -82,9 +82,12 @@ class OrchestrationLoop:
         masker: ObservationMasker | None = None,
         compaction_min_history: int = 8,
         jit_retriever: JITRetriever | None = None,
+        model: str = "default",
     ) -> None:
         self.config = config
         self.gateway = gateway
+        # 本会话用于 LLM 推理的模型别名；传给 chat/chat_stream，否则恒用网关 default_model
+        self.model = model
         self.assembler = assembler
         self.coordinator = tool_coordinator
         self.guardrails = guardrails
@@ -213,7 +216,7 @@ class OrchestrationLoop:
             {"role": "user", "content": user_message},
         ]
         try:
-            response = await chat(self.gateway, messages)
+            response = await chat(self.gateway, messages, model=self.model)
         except Exception as exc:  # 规划失败不应中断主流程
             log.warning("计划生成失败，退化为 ReAct", error=str(exc))
             return
@@ -551,6 +554,7 @@ class OrchestrationLoop:
             response = await chat(
                 self.gateway,
                 prompt.messages,
+                model=self.model,
                 tools=prompt.tools if prompt.tools else None,
             )
 
@@ -644,6 +648,7 @@ class OrchestrationLoop:
             async for chunk in chat_stream(
                 self.gateway,
                 prompt.messages,
+                model=self.model,
                 tools=prompt.tools if prompt.tools else None,
             ):
                 delta = accumulator.feed(chunk)
