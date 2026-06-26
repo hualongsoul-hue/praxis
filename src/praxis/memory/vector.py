@@ -81,11 +81,13 @@ class VectorStore:
         api_base: str = DEFAULT_EMBEDDING_API_BASE,
         api_key: str = "",
         timeout: float = 30.0,
+        dimensions: int = 0,
     ) -> None:
         self.scoped_store = scoped_store
         self.api_base = api_base
         self.api_key = api_key
         self.timeout = timeout
+        self.dimensions = dimensions  # 期望嵌入维度；>0 时校验，0 表示不校验
         self.embed_func: EmbeddingFunc = embed_func or self.default_embed
         self.index: dict[str, tuple[MemoryEntry, list[float]]] = {}
         self._client: httpx.AsyncClient | None = None
@@ -118,6 +120,13 @@ class VectorStore:
         else:
             vector = await self.embed_func(entry.content)
             entry.embedding = vector
+        if self.dimensions > 0 and len(vector) != self.dimensions:
+            log.warning(
+                "嵌入维度与配置不符（可能配错嵌入模型）",
+                expected=self.dimensions,
+                actual=len(vector),
+                memory_id=entry.memory_id,
+            )
         self.index[entry.memory_id] = (entry, vector)
         await self.scoped_store.save(entry)
 

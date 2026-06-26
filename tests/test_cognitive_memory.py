@@ -394,6 +394,34 @@ class TestRetention:
         await scoped.save(entry)
         assert await rm.run_decay_sweep(scope) == 1
 
+    async def test_enforce_capacity_evicts_lowest_relevance(
+        self, store: PersistenceStore,
+    ) -> None:
+        scoped = ScopedMemoryStore(store)
+        rm = RetentionManager(scoped, store)
+        scope = MemoryScope(scope_type=ScopeType.GLOBAL)
+        now = datetime.now(timezone.utc)
+        # 高相关性（新、高置信、高访问）
+        keep = SemanticMemory(
+            scope=scope, content="高相关", confidence=0.95, access_count=20,
+            updated_at=now, last_accessed_at=now,
+        )
+        # 低相关性（旧、低置信、零访问）
+        evict = SemanticMemory(
+            scope=scope, content="低相关", confidence=0.05, access_count=0,
+            updated_at=now - timedelta(days=200),
+            last_accessed_at=now - timedelta(days=200),
+        )
+        await scoped.save(keep)
+        await scoped.save(evict)
+
+        n = await rm.enforce_capacity(scope, max_memories=1)
+        assert n == 1
+        assert (await scoped.load(scope, evict.memory_id)).status == MemoryStatus.INACTIVE
+        assert (await scoped.load(scope, keep.memory_id)).status == MemoryStatus.ACTIVE
+        # 未超容量时不淘汰
+        assert await rm.enforce_capacity(scope, max_memories=10) == 0
+
 
 # ── Scratchpad 白名单强校验 ────────────────────────────────────────────────
 

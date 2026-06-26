@@ -162,3 +162,35 @@ class RetentionManager:
             "gauge",
         )
         return count
+
+    async def enforce_capacity(self, scope: MemoryScope, max_memories: int) -> int:
+        """容量上限：活跃记忆超过 max_memories 时，淘汰相关性最低的多余条目。
+
+        Args:
+            scope: 作用域。
+            max_memories: 该作用域允许的最大活跃记忆数；<=0 表示不限制。
+
+        Returns:
+            被淘汰（标记 INACTIVE）的条目数。
+        """
+        if max_memories <= 0:
+            return 0
+        active = [
+            e for e in await self.scoped_store.list_scope(scope)
+            if e.status == MemoryStatus.ACTIVE
+        ]
+        if len(active) <= max_memories:
+            return 0
+        active.sort(key=self.compute_relevance)  # 升序：相关性最低在前
+        excess = active[: len(active) - max_memories]
+        for entry in excess:
+            await self.mark_inactive(
+                entry, f"容量上限 {max_memories}: 淘汰低相关性记忆"
+            )
+        emit_metric(
+            "memory_capacity_evict",
+            float(len(excess)),
+            {"scope": scope.to_string()},
+            "counter",
+        )
+        return len(excess)

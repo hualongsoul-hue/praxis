@@ -420,6 +420,47 @@ class TestSkillLifecycle:
         index = mgr.get_skill_index()
         assert len(index) == 2
 
+    async def test_max_skills_in_context_truncates_index(
+        self, store: PersistenceStore,
+    ) -> None:
+        reg = ToolRegistry()
+        mgr = SkillManager(reg, store, max_skills_in_context=1)
+        mgr.register_skill(make_skill_def("a"))
+        mgr.register_skill(make_skill_def("b"))
+        mgr.register_skill(make_skill_def("c"))
+        assert len(mgr.get_skill_index()) == 1
+
+    async def test_build_skill_manager_from_config(
+        self, tmp_path: Path, store: PersistenceStore,
+    ) -> None:
+        from praxis.config.schemas import SkillsConfig
+        from praxis.skills.manager import build_skill_manager
+
+        make_skill_dir(tmp_path / "skills", "alpha")
+        reg = ToolRegistry()
+        mgr = await build_skill_manager(
+            SkillsConfig(
+                skill_paths=[str(tmp_path / "skills")],
+                auto_discover=True,
+                max_skills_in_context=5,
+            ),
+            reg, store,
+        )
+        assert mgr.max_skills_in_context == 5
+        assert len(mgr.get_skill_index()) == 1
+
+    async def test_build_skill_manager_no_autodiscover(
+        self, store: PersistenceStore,
+    ) -> None:
+        from praxis.config.schemas import SkillsConfig
+        from praxis.skills.manager import build_skill_manager
+
+        reg = ToolRegistry()
+        mgr = await build_skill_manager(
+            SkillsConfig(auto_discover=False), reg, store,
+        )
+        assert mgr.get_skill_index() == []
+
     async def test_register_unregister(self, store: PersistenceStore) -> None:
         reg = ToolRegistry()
         mgr = SkillManager(reg, store)

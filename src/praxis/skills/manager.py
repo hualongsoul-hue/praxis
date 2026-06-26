@@ -8,6 +8,7 @@ register_skill/unregister_skill 运行时热加载，
 
 from typing import Any
 
+from praxis.config.schemas import SkillsConfig
 from praxis.models.skills import SkillDefinition, SkillIndexEntry
 from praxis.models.tools import ToolDefinition, ToolMetadata
 from praxis.persistence.store import PersistenceStore
@@ -35,12 +36,15 @@ class SkillManager:
         self,
         registry: ToolRegistry,
         store: PersistenceStore,
+        max_skills_in_context: int = 0,
     ) -> None:
         self.discovery = SkillDiscovery()
         self.disclosure = SkillDisclosure()
         self.activation = SkillActivation()
         self.bridge = SkillToolsBridge(registry)
         self.store = store
+        # 注入 Prompt 的技能索引上限；0 表示不限制
+        self.max_skills_in_context = max_skills_in_context
         self.skills: dict[str, SkillDefinition] = {}
         self.versions: dict[str, dict[str, SkillDefinition]] = {}
         self.usage_stats: dict[str, dict[str, int]] = {}
@@ -112,8 +116,11 @@ class SkillManager:
         return True
 
     def get_skill_index(self) -> list[SkillIndexEntry]:
-        """获取所有已注册技能的轻量索引。"""
-        return self.disclosure.get_skill_index()
+        """获取已注册技能的轻量索引（按 max_skills_in_context 截断）。"""
+        index = self.disclosure.get_skill_index()
+        if self.max_skills_in_context > 0:
+            return index[: self.max_skills_in_context]
+        return index
 
     def load_skill(self, skill_id: str) -> SkillDefinition | None:
         """加载完整技能内容。"""
@@ -383,3 +390,31 @@ class SkillManager:
         if data is None or not isinstance(data, list):
             return []
         return [SkillIndexEntry.model_validate(item) for item in data]
+
+
+async def build_skill_manager(
+    config: SkillsConfig,
+    registry: ToolRegistry,
+    store: PersistenceStore,
+) -> SkillManager:
+    """从 S14 配置装配技能管理器（消费 skill_paths/auto_discover/max_skills_in_context）。
+
+    auto_discover 为真时按 skill_paths 发现并注册技能；max_skills_in_context
+    限制注入 Prompt 的技能索引条数。
+
+    Args:
+        config: S14 技能配置。
+        registry: 工具注册表（技能脚本会注册为工具）。
+        store: 持久化存储。
+
+    Returns:
+        装配完毕的 SkillManager。
+    """
+    manager = SkillManager(
+        registry=registry,
+        store=store,
+        max_skills_in_context=config.max_skills_in_context,
+    )
+    if config.auto_discover:
+        await manager.initialize(config.skill_paths)
+    return manager

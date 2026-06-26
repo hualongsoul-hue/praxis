@@ -55,6 +55,7 @@ class DreamReport(BaseModel):
     stale_marked: int = 0
     merged_count: int = 0
     decayed_count: int = 0
+    evicted_count: int = 0
     summary: str = ""
 
 
@@ -71,6 +72,7 @@ class DreamConsolidator:
         min_hours_since_last: float = 24.0,
         min_sessions: int = 5,
         decay_enabled: bool = True,
+        max_memories: int = 0,
     ) -> None:
         self.gateway = gateway
         self.scoped_store = scoped_store
@@ -80,6 +82,7 @@ class DreamConsolidator:
         self.min_hours_since_last = min_hours_since_last
         self.min_sessions = min_sessions
         self.decay_enabled = decay_enabled
+        self.max_memories = max_memories
 
     async def should_run(self, session_count: int) -> bool:
         """检查是否满足触发条件（24h 且 ≥5 sessions）。"""
@@ -157,6 +160,12 @@ class DreamConsolidator:
         if self.decay_enabled:
             for scope in scopes:
                 report.decayed_count += await self.retention.run_decay_sweep(scope)
+        # 容量上限：超过 max_memories 时淘汰相关性最低的活跃记忆
+        if self.max_memories > 0:
+            for scope in scopes:
+                report.evicted_count += await self.retention.enforce_capacity(
+                    scope, self.max_memories
+                )
         report.summary = str(actions.get("summary", ""))
         report.completed_at = datetime.now(timezone.utc)
 
