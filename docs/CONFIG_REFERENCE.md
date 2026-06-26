@@ -72,11 +72,14 @@ skills:
 | `log_level` | `str` | `"INFO"` | 全局日志级别 |
 | `log_format` | `"json" \| "text"` | `"text"` | 日志格式 |
 | `log_levels` | `dict[str, str]` | `{}` | 按组件独立日志级别 |
+| `log_file` | `str \| null` | `null` | 日志输出文件路径；null=输出到 stderr |
 | `metrics_enabled` | `bool` | `true` | 是否启用指标收集 |
-| `metrics_export` | `"prometheus" \| "file"` | `"file"` | 指标导出方式 |
-| `metrics_file` | `str \| null` | `null` | 指标文件路径 |
+| `metrics_export` | `"prometheus" \| "file"` | `"file"` | 指标导出方式（prometheus=启动 /metrics 端点；file=周期落盘） |
+| `metrics_file` | `str \| null` | `null` | 指标文件路径（metrics_export=file 时周期写入） |
+| `metrics_port` | `int` | `9090` | metrics_export=prometheus 时 /metrics 端点监听端口 |
 | `tracing_enabled` | `bool` | `true` | 是否启用链路追踪 |
-| `tracing_export` | `"otlp" \| "console"` | `"console"` | 追踪导出方式 |
+| `tracing_export` | `"console" \| "otlp" \| "none"` | `"console"` | 追踪导出方式（otlp 需安装 praxis[otlp]，未装则降级 console） |
+| `otlp_endpoint` | `str \| null` | `null` | tracing_export=otlp 时的 Collector 端点；null 用 OTEL_EXPORTER_OTLP_ENDPOINT |
 | `audit_enabled` | `bool` | `true` | 是否启用审计日志 |
 
 ---
@@ -126,9 +129,10 @@ gateway:
 |---|---|---|---|
 | `allowed_paths` | `list[str]` | `[]` | 沙箱文件系统白名单（空=允许所有） |
 | `default_timeout` | `float` | `30.0` | 默认工具执行超时（秒） |
-| `max_concurrent_readonly` | `int` | `5` | 最大并发只读工具数 |
+| `max_concurrent_readonly` | `int` | `5` | 最大并发只读工具数（**预留**：当前工具串行执行，暂未生效） |
 | `shell_timeout` | `float` | `120.0` | Shell 命令超时（秒） |
 | `network_allowed` | `bool` | `true` | 是否允许网络出站 |
+| `fallback_mappings` | `dict[str,str]` | `{}` | 工具降级映射（首选→替代），S9 降级使用 |
 
 ---
 
@@ -136,13 +140,20 @@ gateway:
 
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
-| `vector_dimensions` | `int` | `1536` | 向量维度（匹配 embedding 模型） |
-| `background_batch_threshold` | `int` | `5` | 后台批量处理阈值 |
+| `embedding_api_base` | `str` | `"http://localhost:8080"` | TEI 嵌入服务地址 |
+| `embedding_api_key` | `str` | `""` | 嵌入服务 API Key |
+| `embedding_timeout` | `float` | `30.0` | 嵌入请求超时（秒） |
+| `embedding_dimensions` | `int` | `2560` | 期望嵌入维度（匹配嵌入模型；写入时校验，不符告警） |
+| `extraction_model` | `str \| null` | `null` | 记忆提取/整合所用模型，null=网关默认 |
+| `consolidation_similarity_threshold` | `float` | `0.75` | 整合时判定相似记忆的阈值 |
+| `background_batch_threshold` | `int` | `3` | 后台批量处理阈值 |
 | `background_interval_seconds` | `float` | `10.0` | 后台处理间隔（秒） |
 | `dream_min_hours` | `float` | `24.0` | 离线整合最小间隔（小时） |
 | `dream_min_sessions` | `int` | `5` | 离线整合最小会话数 |
-| `max_memories` | `int` | `10000` | 最大记忆条目数 |
-| `decay_enabled` | `bool` | `true` | 是否启用记忆衰减 |
+| `max_memories` | `int` | `10000` | 每作用域最大活跃记忆数（梦境周期按相关性淘汰超额） |
+| `decay_enabled` | `bool` | `true` | 是否启用记忆衰减遗忘 |
+| `decay_half_life_days` | `float` | `30.0` | 相关性衰减半衰期（天） |
+| `inactivity_threshold_days` | `float` | `90.0` | 不活跃淘汰阈值（天） |
 
 ---
 
@@ -151,6 +162,7 @@ gateway:
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `compaction_threshold` | `float` | `0.8` | Token 占比超过此值触发压缩 |
+| `compaction_min_history` | `int` | `8` | 对话历史达到此长度才检查遮蔽/压缩 |
 | `masking_turn_distance` | `int` | `10` | 注意力遮蔽的轮次距离 |
 | `masking_token_threshold` | `int` | `2000` | 注意力遮蔽的 Token 阈值 |
 | `recent_file_refs_keep` | `int` | `5` | 保留的近期文件引用数 |
@@ -197,8 +209,7 @@ gateway:
 | 字段 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
 | `max_turns` | `int` | `100` | 单轮对话最大轮次 |
-| `default_strategy` | `"react" \| "plan-and-execute"` | `"react"` | 默认编排策略 |
-| `stream_events` | `bool` | `true` | 是否流式推送编排事件 |
+| `default_strategy` | `"react" \| "plan-and-execute"` | `"react"` | 默认编排策略（plan-and-execute 会先 LLM 规划再执行） |
 
 ---
 
