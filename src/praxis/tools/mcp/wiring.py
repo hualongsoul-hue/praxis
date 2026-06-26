@@ -31,7 +31,7 @@ from praxis.tools.registry import ToolRegistry
 log = get_logger("tools.mcp.wiring")
 
 
-def _make_sampling_callback(server_name: str, manager: SamplingManager) -> Any:
+def make_sampling_callback(server_name: str, manager: SamplingManager) -> Any:
     """适配 MCP SDK sampling_callback → Praxis SamplingManager。"""
     from mcp.types import CreateMessageResult, ErrorData, TextContent
 
@@ -61,7 +61,7 @@ def _make_sampling_callback(server_name: str, manager: SamplingManager) -> Any:
     return callback
 
 
-def _make_elicitation_callback(server_name: str, manager: ElicitationManager) -> Any:
+def make_elicitation_callback(server_name: str, manager: ElicitationManager) -> Any:
     """适配 MCP SDK elicitation_callback → Praxis ElicitationManager。"""
     from mcp.types import ElicitResult, ErrorData
 
@@ -131,11 +131,11 @@ async def connect_mcp_servers(
                     )
 
             sampling_cb = (
-                _make_sampling_callback(config.name, sampling_manager)
+                make_sampling_callback(config.name, sampling_manager)
                 if sampling_manager is not None else None
             )
             elicitation_cb = (
-                _make_elicitation_callback(config.name, elicitation_manager)
+                make_elicitation_callback(config.name, elicitation_manager)
                 if elicitation_manager is not None else None
             )
             session = await exit_stack.enter_async_context(

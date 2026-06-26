@@ -16,7 +16,7 @@ import time
 from praxis import __version__
 
 
-def _load(config_path: str | None):
+def load_config_file(config_path: str | None):
     from praxis.config.loader import load_config
 
     return load_config(config_path)
@@ -29,7 +29,7 @@ def cmd_version(_: argparse.Namespace) -> int:
 
 def cmd_validate(args: argparse.Namespace) -> int:
     try:
-        _load(args.config)
+        load_config_file(args.config)
     except Exception as exc:  # 配置/校验错误 → 非零退出
         print(f"配置校验失败: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
@@ -39,7 +39,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 def cmd_show_config(args: argparse.Namespace) -> int:
     try:
-        config = _load(args.config)
+        config = load_config_file(args.config)
     except Exception as exc:
         print(f"配置加载失败: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
@@ -51,7 +51,7 @@ def cmd_serve_metrics(args: argparse.Namespace) -> int:
     from praxis.telemetry import configure_telemetry
 
     try:
-        config = _load(args.config)
+        config = load_config_file(args.config)
     except Exception as exc:
         print(f"配置加载失败: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1

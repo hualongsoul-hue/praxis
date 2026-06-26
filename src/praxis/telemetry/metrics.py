@@ -202,14 +202,14 @@ class MetricsCollector:
 
 
 collector: MetricsCollector | None = None
-_metrics_server: Any = None
-_file_exporter_started: bool = False
+metrics_server: Any = None
+file_exporter_started: bool = False
 
 
-def _start_file_exporter(path: str, interval: float = 15.0) -> None:
+def start_file_exporter(path: str, interval: float = 15.0) -> None:
     """后台线程：周期性把指标快照写入文件（metrics_export=file）。"""
-    global _file_exporter_started
-    if _file_exporter_started:
+    global file_exporter_started
+    if file_exporter_started:
         return
 
     def _loop() -> None:
@@ -222,13 +222,13 @@ def _start_file_exporter(path: str, interval: float = 15.0) -> None:
 
     thread = threading.Thread(target=_loop, name="praxis-metrics-file", daemon=True)
     thread.start()
-    _file_exporter_started = True
+    file_exporter_started = True
 
 
-def _start_metrics_server(port: int) -> None:
+def start_metrics_server(port: int) -> None:
     """在后台线程启动一个仅暴露 /metrics 的 Prometheus 抓取端点。"""
-    global _metrics_server
-    if _metrics_server is not None:
+    global metrics_server
+    if metrics_server is not None:
         return
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -251,7 +251,7 @@ def _start_metrics_server(port: int) -> None:
     server = ThreadingHTTPServer(("0.0.0.0", port), _Handler)
     thread = threading.Thread(target=server.serve_forever, name="praxis-metrics", daemon=True)
     thread.start()
-    _metrics_server = server
+    metrics_server = server
 
 
 def configure_metrics(config: TelemetryConfig) -> None:
@@ -268,12 +268,12 @@ def configure_metrics(config: TelemetryConfig) -> None:
         collector = MetricsCollector()
     if config.metrics_export == "prometheus":
         try:
-            _start_metrics_server(config.metrics_port)
+            start_metrics_server(config.metrics_port)
         except Exception:  # 端口占用等不应阻断主流程
             pass
     elif config.metrics_export == "file" and config.metrics_file:
         try:
-            _start_file_exporter(config.metrics_file)
+            start_file_exporter(config.metrics_file)
         except Exception:
             pass
 

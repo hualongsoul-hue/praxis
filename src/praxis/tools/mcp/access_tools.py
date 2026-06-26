@@ -17,14 +17,14 @@ from praxis.tools.registry import ToolHandler, ToolRegistry
 log = get_logger("tools.mcp.access_tools")
 
 
-def _server_enum(servers: list[str]) -> dict[str, Any]:
+def server_enum(servers: list[str]) -> dict[str, Any]:
     schema: dict[str, Any] = {"type": "string", "description": "MCP 服务器名称"}
     if servers:
         schema["enum"] = servers
     return schema
 
 
-def _mcp_metadata(readonly: bool, tag: str) -> ToolMetadata:
+def mcp_metadata(readonly: bool, tag: str) -> ToolMetadata:
     return ToolMetadata(
         category="mcp",
         permission_level="auto_approve",
@@ -33,7 +33,7 @@ def _mcp_metadata(readonly: bool, tag: str) -> ToolMetadata:
     )
 
 
-def _make_list_resources(bridge: Any) -> ToolHandler:
+def make_list_resources(bridge: Any) -> ToolHandler:
     async def handle(args: dict[str, Any]) -> str:
         resources = await bridge.list_resources(args["server_name"])
         return json.dumps([r.model_dump() for r in resources], ensure_ascii=False)
@@ -41,7 +41,7 @@ def _make_list_resources(bridge: Any) -> ToolHandler:
     return handle
 
 
-def _make_read_resource(bridge: Any) -> ToolHandler:
+def make_read_resource(bridge: Any) -> ToolHandler:
     async def handle(args: dict[str, Any]) -> str:
         content = await bridge.read_resource(args["server_name"], args["uri"])
         return json.dumps(content.model_dump(), ensure_ascii=False, default=str)
@@ -49,7 +49,7 @@ def _make_read_resource(bridge: Any) -> ToolHandler:
     return handle
 
 
-def _make_list_prompts(bridge: Any) -> ToolHandler:
+def make_list_prompts(bridge: Any) -> ToolHandler:
     async def handle(args: dict[str, Any]) -> str:
         prompts = await bridge.list_prompts(args["server_name"])
         return json.dumps([p.model_dump() for p in prompts], ensure_ascii=False)
@@ -57,7 +57,7 @@ def _make_list_prompts(bridge: Any) -> ToolHandler:
     return handle
 
 
-def _make_get_prompt(bridge: Any) -> ToolHandler:
+def make_get_prompt(bridge: Any) -> ToolHandler:
     async def handle(args: dict[str, Any]) -> str:
         messages = await bridge.get_prompt(
             args["server_name"],
@@ -101,12 +101,12 @@ def register_mcp_access_tools(
                 description=f"列出指定 MCP 服务器提供的资源。可用服务器: {resource_servers}",
                 parameters={
                     "type": "object",
-                    "properties": {"server_name": _server_enum(resource_servers)},
+                    "properties": {"server_name": server_enum(resource_servers)},
                     "required": ["server_name"],
                 },
-                metadata=_mcp_metadata(readonly=True, tag="resources"),
+                metadata=mcp_metadata(readonly=True, tag="resources"),
             ),
-            _make_list_resources(manager.resources_bridge),
+            make_list_resources(manager.resources_bridge),
         )
         registry.register(
             ToolDefinition(
@@ -115,14 +115,14 @@ def register_mcp_access_tools(
                 parameters={
                     "type": "object",
                     "properties": {
-                        "server_name": _server_enum(resource_servers),
+                        "server_name": server_enum(resource_servers),
                         "uri": {"type": "string", "description": "资源 URI"},
                     },
                     "required": ["server_name", "uri"],
                 },
-                metadata=_mcp_metadata(readonly=True, tag="resources"),
+                metadata=mcp_metadata(readonly=True, tag="resources"),
             ),
-            _make_read_resource(manager.resources_bridge),
+            make_read_resource(manager.resources_bridge),
         )
         registered += ["mcp_list_resources", "mcp_read_resource"]
 
@@ -133,12 +133,12 @@ def register_mcp_access_tools(
                 description=f"列出指定 MCP 服务器的提示模板。可用服务器: {prompt_servers}",
                 parameters={
                     "type": "object",
-                    "properties": {"server_name": _server_enum(prompt_servers)},
+                    "properties": {"server_name": server_enum(prompt_servers)},
                     "required": ["server_name"],
                 },
-                metadata=_mcp_metadata(readonly=True, tag="prompts"),
+                metadata=mcp_metadata(readonly=True, tag="prompts"),
             ),
-            _make_list_prompts(manager.prompts_bridge),
+            make_list_prompts(manager.prompts_bridge),
         )
         registry.register(
             ToolDefinition(
@@ -147,7 +147,7 @@ def register_mcp_access_tools(
                 parameters={
                     "type": "object",
                     "properties": {
-                        "server_name": _server_enum(prompt_servers),
+                        "server_name": server_enum(prompt_servers),
                         "prompt_name": {"type": "string", "description": "提示模板名称"},
                         "arguments": {
                             "type": "object",
@@ -157,9 +157,9 @@ def register_mcp_access_tools(
                     },
                     "required": ["server_name", "prompt_name"],
                 },
-                metadata=_mcp_metadata(readonly=True, tag="prompts"),
+                metadata=mcp_metadata(readonly=True, tag="prompts"),
             ),
-            _make_get_prompt(manager.prompts_bridge),
+            make_get_prompt(manager.prompts_bridge),
         )
         registered += ["mcp_list_prompts", "mcp_get_prompt"]
 

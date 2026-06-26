@@ -571,7 +571,7 @@ class TestMCPSamplingElicitationWiring:
         )
 
         from praxis.tools.mcp.sampling import SamplingManager
-        from praxis.tools.mcp.wiring import _make_sampling_callback
+        from praxis.tools.mcp.wiring import make_sampling_callback
 
         gw = MagicMock()
         gw.config = MagicMock()
@@ -582,7 +582,7 @@ class TestMCPSamplingElicitationWiring:
             "role": "assistant", "content": "代理回复", "model": "test-model",
         })
 
-        cb = _make_sampling_callback("srv1", manager)
+        cb = make_sampling_callback("srv1", manager)
         params = CreateMessageRequestParams(
             messages=[SamplingMessage(
                 role="user", content=TextContent(type="text", text="你好"),
@@ -602,7 +602,7 @@ class TestMCPSamplingElicitationWiring:
 
         from praxis.models.mcp import MCPElicitationRequest, MCPElicitationResponse
         from praxis.tools.mcp.elicitation import ElicitationManager
-        from praxis.tools.mcp.wiring import _make_elicitation_callback
+        from praxis.tools.mcp.wiring import make_elicitation_callback
 
         manager = ElicitationManager()
 
@@ -611,7 +611,7 @@ class TestMCPSamplingElicitationWiring:
             return MCPElicitationResponse(accepted=True, data={"name": "Alice"})
 
         manager.set_handler(handler)
-        cb = _make_elicitation_callback("srv1", manager)
+        cb = make_elicitation_callback("srv1", manager)
         params = ElicitRequestFormParams(
             message="请输入姓名",
             requestedSchema={"type": "object", "properties": {"name": {"type": "string"}}},
@@ -626,10 +626,10 @@ class TestMCPSamplingElicitationWiring:
         from mcp.types import ElicitRequestFormParams, ElicitResult
 
         from praxis.tools.mcp.elicitation import ElicitationManager
-        from praxis.tools.mcp.wiring import _make_elicitation_callback
+        from praxis.tools.mcp.wiring import make_elicitation_callback
 
         manager = ElicitationManager()
-        cb = _make_elicitation_callback("srv1", manager)
+        cb = make_elicitation_callback("srv1", manager)
         params = ElicitRequestFormParams(message="确认？", requestedSchema={"type": "object"})
         result = await cb(None, params)
         assert isinstance(result, ElicitResult)

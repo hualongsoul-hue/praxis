@@ -14,8 +14,8 @@ from praxis.models.memory import MemoryType
 from praxis.models.tools import ToolDefinition, ToolMetadata
 from praxis.tools.registry import ToolHandler, ToolRegistry
 
-_MEMORY_TYPE_VALUES = [t.value for t in MemoryType]
-_SCRATCHPAD_KEYS = sorted(Scratchpad.KNOWN_KEYS)
+MEMORY_TYPE_VALUES = [t.value for t in MemoryType]
+SCRATCHPAD_KEYS = sorted(Scratchpad.KNOWN_KEYS)
 
 
 SAVE_MEMORY = ToolDefinition(
@@ -31,7 +31,7 @@ SAVE_MEMORY = ToolDefinition(
             "content": {"type": "string", "description": "记忆内容"},
             "memory_type": {
                 "type": "string",
-                "enum": _MEMORY_TYPE_VALUES,
+                "enum": MEMORY_TYPE_VALUES,
                 "description": "记忆类型：semantic（事实）/episodic（事件）/procedural（步骤）/working（临时）",
             },
             "tags": {
@@ -126,7 +126,7 @@ WRITE_SCRATCHPAD = ToolDefinition(
         "properties": {
             "key": {
                 "type": "string",
-                "enum": _SCRATCHPAD_KEYS,
+                "enum": SCRATCHPAD_KEYS,
                 "description": "条目键（仅限白名单）",
             },
             "content": {"type": "string", "description": "条目内容（建议 JSON 文本）"},
@@ -149,7 +149,7 @@ READ_SCRATCHPAD = ToolDefinition(
         "properties": {
             "key": {
                 "type": "string",
-                "enum": _SCRATCHPAD_KEYS,
+                "enum": SCRATCHPAD_KEYS,
                 "description": "条目键（仅限白名单）",
             },
         },
@@ -217,7 +217,7 @@ def create_write_scratchpad_handler(memory: CognitiveMemory) -> ToolHandler:
     async def handle(args: dict[str, Any]) -> str:
         key = args["key"]
         if key not in Scratchpad.KNOWN_KEYS:
-            return f"不支持的 Scratchpad 键: {key}，允许值为 {_SCRATCHPAD_KEYS}"
+            return f"不支持的 Scratchpad 键: {key}，允许值为 {SCRATCHPAD_KEYS}"
         await memory.write_scratchpad(key, args["content"])
         return f"已写入 Scratchpad: {key}"
 
@@ -228,7 +228,7 @@ def create_read_scratchpad_handler(memory: CognitiveMemory) -> ToolHandler:
     async def handle(args: dict[str, Any]) -> str:
         key = args["key"]
         if key not in Scratchpad.KNOWN_KEYS:
-            return f"不支持的 Scratchpad 键: {key}，允许值为 {_SCRATCHPAD_KEYS}"
+            return f"不支持的 Scratchpad 键: {key}，允许值为 {SCRATCHPAD_KEYS}"
         value = await memory.read_scratchpad(key)
         if value is None:
             return f"Scratchpad 中无条目: {key}"

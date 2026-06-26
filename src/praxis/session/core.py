@@ -55,7 +55,7 @@ from praxis.verification.registry import VerifierRegistry
 log = get_logger("session.core")
 
 
-def _strategy_mode(name: str) -> StrategyMode:
+def strategy_mode(name: str) -> StrategyMode:
     """将 OrchestratorConfig.default_strategy 字符串映射为 StrategyMode。"""
     try:
         return StrategyMode(name)
@@ -317,7 +317,7 @@ class SessionFactory:
         emitter = EventEmitter()
         parser = OutputParser()
         termination = TerminationManager(self.orchestrator_config)
-        strategy = LoopStrategy(mode=_strategy_mode(self.orchestrator_config.default_strategy))
+        strategy = LoopStrategy(mode=strategy_mode(self.orchestrator_config.default_strategy))
 
         coordinator = ToolCoordinator(
             executor=executor,

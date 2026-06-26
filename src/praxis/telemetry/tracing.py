@@ -23,7 +23,7 @@ log = get_logger("telemetry.tracing")
 tracer: trace.Tracer | None = None
 
 
-def _otlp_processor(endpoint: str | None) -> Any:
+def otlp_processor(endpoint: str | None) -> Any:
     """构造 OTLP BatchSpanProcessor；导出器未安装时返回 None 并降级。"""
     try:
         from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
@@ -51,7 +51,7 @@ def configure_tracing(config: TelemetryConfig) -> None:
     if config.tracing_enabled and config.tracing_export != "none":
         processor = None
         if config.tracing_export == "otlp":
-            processor = _otlp_processor(config.otlp_endpoint)
+            processor = otlp_processor(config.otlp_endpoint)
         if processor is None:  # console 或 otlp 降级
             processor = SimpleSpanProcessor(ConsoleSpanExporter())
         provider.add_span_processor(processor)
