@@ -8,6 +8,7 @@ from praxis.exceptions import (
     InputPathError,
     InputSizeLimitError,
     InvalidInputSourceError,
+    ModelValidationError,
     UnsupportedInputModalityError,
 )
 from praxis.input_resolver import InputResolver
@@ -67,6 +68,7 @@ __all__ = [
     "InputValue",
     "InvalidInputSourceError",
     "ModelCapabilities",
+    "ModelValidationError",
     "PraxisConfig",
     "PraxisRuntime",
     "ResolvedUserInput",

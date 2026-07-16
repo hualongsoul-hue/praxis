@@ -3,12 +3,14 @@
 import asyncio
 import ipaddress
 import socket
+from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 import httpx
 
 HTTP_REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
+TransportFactory = Callable[[], httpx.AsyncBaseTransport]
 
 
 @dataclass(frozen=True)
@@ -87,29 +89,114 @@ def build_pinned_http_request(
 ) -> httpx.Request:
     """Build a request whose TCP host is pinned while HTTP Host and TLS SNI stay original."""
 
-    pinned_url = httpx.URL(target.original_url).copy_with(host=address)
+    original_url = httpx.URL(target.original_url)
+    pinned_url = original_url.copy_with(host=address, raw_path=b"/redacted")
     return client.build_request(
         "GET",
         pinned_url,
         headers={"Host": target.host_header},
-        extensions={"sni_hostname": target.hostname},
+        extensions={
+            "sni_hostname": target.hostname,
+            "target": original_url.raw_path,
+        },
     )
 
 
-async def send_pinned_http_request(
-    client: httpx.AsyncClient,
-    target: ValidatedHttpTarget,
-) -> httpx.Response:
-    """Try only validated addresses and never let HTTPX follow redirects."""
+class TargetOverrideTransport(httpx.AsyncBaseTransport):
+    """Use a private wire target while keeping the client-visible URL redacted."""
 
+    def __init__(self, transport: httpx.AsyncBaseTransport) -> None:
+        self.transport = transport
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        """Forward a copied request with the validated path and query restored."""
+
+        wire_target = request.extensions.get("target")
+        if not isinstance(wire_target, bytes):
+            raise httpx.TransportError("安全 HTTP 请求缺少有效目标")
+        wire_request = httpx.Request(
+            request.method,
+            request.url.copy_with(raw_path=wire_target),
+            headers=request.headers,
+            stream=request.stream,
+            extensions=dict(request.extensions),
+        )
+        return await self.transport.handle_async_request(wire_request)
+
+    async def aclose(self) -> None:
+        """Close the isolated inner connection pool."""
+
+        await self.transport.aclose()
+
+
+def create_http_transport() -> httpx.AsyncBaseTransport:
+    """Create one environment-independent HTTP/1.1 connection pool."""
+
+    return httpx.AsyncHTTPTransport(
+        trust_env=False,
+        http1=True,
+        http2=False,
+    )
+
+
+async def close_http_client(client: httpx.AsyncClient) -> bool:
+    """Close a client and report failures without retaining their exceptions."""
+
+    close_failed = False
+    try:
+        await client.aclose()
+    except Exception:
+        close_failed = True
+    return close_failed
+
+
+async def close_http_resources(
+    response: httpx.Response,
+    client: httpx.AsyncClient,
+) -> bool:
+    """Attempt both response and client cleanup without leaking close failures."""
+
+    close_failed = False
+    try:
+        await response.aclose()
+    except Exception:
+        close_failed = True
+    if await close_http_client(client):
+        close_failed = True
+    return close_failed
+
+
+async def send_pinned_http_request(
+    target: ValidatedHttpTarget,
+    transport_factory: TransportFactory | None = None,
+    *,
+    timeout: float = 30.0,
+) -> tuple[httpx.Response, httpx.AsyncClient]:
+    """Try validated addresses in separate pools and return the live response/client."""
+
+    create_transport = transport_factory or create_http_transport
     for address in target.addresses:
+        transport = TargetOverrideTransport(create_transport())
+        client = httpx.AsyncClient(
+            timeout=timeout,
+            follow_redirects=False,
+            trust_env=False,
+            http1=True,
+            http2=False,
+            transport=transport,
+        )
         request = build_pinned_http_request(client, target, address)
+        response: httpx.Response | None = None
         try:
-            return await client.send(
+            response = await client.send(
                 request,
                 stream=True,
                 follow_redirects=False,
             )
         except (httpx.HTTPError, OSError):
+            pass
+        if response is None:
+            await close_http_client(client)
             continue
+        return response, client
     raise ValueError("安全 HTTP 连接失败") from None

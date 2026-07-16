@@ -29,6 +29,7 @@
     └── SkillError                      # S14 技能系统
 """
 
+import json as json_library
 from typing import Any
 
 # ── 基础异常 ─────────────────────────────────────────────────────────────────
@@ -48,6 +49,22 @@ class PraxisError(Exception):
         self.message = message
         self.details = details or {}
         super().__init__(message)
+
+
+class ModelValidationError(PraxisError, ValueError):
+    """Input-free replacement for Pydantic validation errors at SDK boundaries."""
+
+    component = "validation"
+
+    def errors(self, *args: Any, **options: Any) -> list[dict[str, str]]:
+        """Return stable structured details without echoing rejected values."""
+
+        return [{"type": "model_validation", "msg": "模型输入验证失败"}]
+
+    def json(self, *args: Any, **options: Any) -> str:
+        """Serialize only the stable input-free error representation."""
+
+        return json_library.dumps(self.errors(), ensure_ascii=False)
 
 
 # ── S1 配置系统 ──────────────────────────────────────────────────────────────

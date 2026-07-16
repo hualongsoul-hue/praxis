@@ -4,7 +4,9 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
+
+from praxis.models.base import SafeBaseModel
 
 
 class InputKind(StrEnum):
@@ -24,7 +26,7 @@ class InputSourceKind(StrEnum):
     URL = "url"
 
 
-class AttachmentInput(BaseModel):
+class AttachmentInput(SafeBaseModel):
     """Immutable attachment source envelope."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -103,7 +105,7 @@ InputAttachment = Annotated[
 ]
 
 
-class UserInput(BaseModel):
+class UserInput(SafeBaseModel):
     """A user turn containing text, attachments, or both."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)

@@ -4,7 +4,6 @@ import textwrap
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 from praxis.config import (
     PraxisConfig,
@@ -12,7 +11,7 @@ from praxis.config import (
     load_config,
 )
 from praxis.config.schemas import GatewayConfig, TelemetryConfig, ToolsConfig
-from praxis.exceptions import ConfigError
+from praxis.exceptions import ConfigError, ModelValidationError
 
 
 class TestPraxisConfig:
@@ -53,7 +52,7 @@ class TestPraxisConfig:
         config_type: type,
         values: dict[str, object],
     ) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(ModelValidationError):
             config_type(**values)
 
     @pytest.mark.parametrize(
@@ -69,15 +68,15 @@ class TestPraxisConfig:
         config_type: type,
         values: dict[str, object],
     ) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(ModelValidationError):
             config_type(**values)
 
     def test_log_level_must_be_known(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(ModelValidationError):
             TelemetryConfig(log_level="NOT_A_LEVEL")
 
     def test_root_config_rejects_unknown_sections(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(ModelValidationError):
             PraxisConfig(unknown_section={})
 
 
@@ -158,5 +157,5 @@ class TestValidation:
     def test_invalid_config_rejected(self, tmp_path: Path) -> None:
         yaml_file = tmp_path / "test.yaml"
         yaml_file.write_text("persistence:\n  backend: invalid_backend\n")
-        with pytest.raises(ValidationError):
+        with pytest.raises(ModelValidationError):
             load_config(yaml_file)

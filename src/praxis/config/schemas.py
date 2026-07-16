@@ -6,12 +6,14 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, model_validator
+
+from praxis.models.base import SafeBaseModel
 
 LogLevel = Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"]
 
 
-class StrictConfigModel(BaseModel):
+class StrictConfigModel(SafeBaseModel):
     """拒绝未知字段的配置基类，避免拼写错误被静默忽略。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)

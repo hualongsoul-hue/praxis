@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from pydantic import ValidationError
 from pydantic.warnings import PydanticDeprecatedSince211
 
 from praxis.config.schemas import GatewayConfig, ModelDeployment
@@ -16,6 +15,7 @@ from praxis.exceptions import (
     BudgetExceededError,
     GatewayError,
     GatewayTimeoutError,
+    ModelValidationError,
     RateLimitError,
 )
 from praxis.gateway.callbacks import TelemetryCallback
@@ -132,7 +132,7 @@ class TestGatewayRouter:
         assert gw.config is config
 
     def test_empty_deployments_rejected(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(ModelValidationError):
             GatewayConfig(deployments=[])
 
     def test_get_model_names(self) -> None:

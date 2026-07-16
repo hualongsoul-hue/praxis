@@ -3,8 +3,9 @@
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
+from praxis.models.base import SafeBaseModel
 from praxis.models.inputs import InputKind
 from praxis.models.tools import ToolCall
 
@@ -18,7 +19,7 @@ class Role(StrEnum):
     TOOL = "tool"
 
 
-class StrictContentModel(BaseModel):
+class StrictContentModel(SafeBaseModel):
     """Provider content model that rejects misspelled or unexpected fields."""
 
     model_config = ConfigDict(extra="forbid")
@@ -92,7 +93,7 @@ ContentPart = Annotated[
 ]
 
 
-class AttachmentMetadata(BaseModel):
+class AttachmentMetadata(SafeBaseModel):
     """Non-sensitive facts retained after attachment resolution."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -103,7 +104,7 @@ class AttachmentMetadata(BaseModel):
     size_bytes: int = Field(ge=0)
 
 
-class ResolvedUserInput(BaseModel):
+class ResolvedUserInput(SafeBaseModel):
     """Provider content plus a safe text-only projection."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -114,7 +115,7 @@ class ResolvedUserInput(BaseModel):
     attachments: tuple[AttachmentMetadata, ...] = ()
 
 
-class Message(BaseModel):
+class Message(SafeBaseModel):
     """统一消息模型，兼容 OpenAI 消息格式。"""
 
     role: Role

@@ -11,10 +11,11 @@ import httpx
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from pydantic import TypeAdapter, ValidationError
+from pydantic import TypeAdapter
 
 import praxis
 from praxis import (
+    AttachmentMetadata,
     AudioContent,
     AudioInput,
     FileContent,
@@ -28,6 +29,8 @@ from praxis import (
     InputSizeLimitError,
     InputSourceKind,
     InvalidInputSourceError,
+    PraxisConfig,
+    ResolvedUserInput,
     UnsupportedInputModalityError,
     UserInput,
     VideoContent,
@@ -91,6 +94,40 @@ class FailingResponseStream(httpx.AsyncByteStream):
 
     async def aclose(self) -> None:
         return None
+
+
+class FailingCloseStream(httpx.AsyncByteStream):
+    """Stream whose close failure must never leak its marker."""
+
+    async def __aiter__(self):
+        yield b"safe"
+
+    async def aclose(self) -> None:
+        raise httpx.ReadError("close_failure_secret_marker")
+
+
+def assert_safe_validation_error(error: ValueError, markers: tuple[str, ...]) -> None:
+    """Assert every public exception rendering is input-free."""
+
+    errors_method = getattr(error, "errors", None)
+    json_method = getattr(error, "json", None)
+    rendered = [
+        str(error),
+        repr(error),
+        repr(error.__cause__),
+        repr(error.__context__),
+        "".join(traceback.format_exception(type(error), error, error.__traceback__)),
+    ]
+    if callable(errors_method):
+        rendered.append(repr(errors_method()))
+    if callable(json_method):
+        rendered.append(str(json_method()))
+    combined = "\n".join(rendered)
+    assert error.__class__.__name__ == "ModelValidationError"
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    for marker in markers:
+        assert marker not in combined
 
 
 def test_user_input_requires_text_or_attachment() -> None:
@@ -180,7 +217,7 @@ def test_url_credentials_are_rejected_without_leaking_secrets() -> None:
 
     resolver = InputResolver(
         InputConfig(remote_enabled=True),
-        transport=httpx.MockTransport(handle),
+        transport_factory=lambda: httpx.MockTransport(handle),
     )
     with pytest.raises(InputNetworkError) as captured:
         asyncio.run(
@@ -219,7 +256,7 @@ def test_public_redirect_to_loopback_is_rejected_and_responses_are_closed() -> N
 
     resolver = InputResolver(
         InputConfig(remote_enabled=True),
-        transport=httpx.MockTransport(handle),
+        transport_factory=lambda: httpx.MockTransport(handle),
     )
     with pytest.raises(InputNetworkError):
         asyncio.run(
@@ -250,7 +287,7 @@ def test_remote_response_media_type_parameters_are_stripped() -> None:
 
     resolver = InputResolver(
         InputConfig(remote_enabled=True, allow_private_networks=True),
-        transport=httpx.MockTransport(handle),
+        transport_factory=lambda: httpx.MockTransport(handle),
     )
     resolved = asyncio.run(
         resolver.resolve(
@@ -324,7 +361,7 @@ def test_unsupported_modality_is_rejected_before_http_request() -> None:
 
     resolver = InputResolver(
         InputConfig(remote_enabled=True),
-        transport=httpx.MockTransport(handle),
+        transport_factory=lambda: httpx.MockTransport(handle),
     )
     with pytest.raises(UnsupportedInputModalityError):
         asyncio.run(
@@ -513,7 +550,7 @@ def test_dns_target_is_pinned_and_preserves_host_and_sni(monkeypatch) -> None:
     monkeypatch.setattr(socket, "getaddrinfo", resolve_host)
     resolver = InputResolver(
         InputConfig(remote_enabled=True),
-        transport=httpx.MockTransport(handle),
+        transport_factory=lambda: httpx.MockTransport(handle),
     )
 
     resolved = asyncio.run(
@@ -546,7 +583,7 @@ def test_redirect_never_auto_follows_to_private_target(monkeypatch) -> None:
     monkeypatch.setattr(socket, "getaddrinfo", resolve_host)
     resolver = InputResolver(
         InputConfig(remote_enabled=True),
-        transport=httpx.MockTransport(handle),
+        transport_factory=lambda: httpx.MockTransport(handle),
     )
 
     with pytest.raises(InputNetworkError):
@@ -613,7 +650,7 @@ def test_network_error_traceback_does_not_retain_url_query(monkeypatch) -> None:
     monkeypatch.setattr(socket, "getaddrinfo", resolve_host)
     resolver = InputResolver(
         InputConfig(remote_enabled=True),
-        transport=httpx.MockTransport(fail),
+        transport_factory=lambda: httpx.MockTransport(fail),
     )
     with pytest.raises(InputNetworkError) as captured:
         asyncio.run(
@@ -652,7 +689,7 @@ def test_stream_read_error_is_typed_and_does_not_leak_traceback(monkeypatch) -> 
     monkeypatch.setattr(socket, "getaddrinfo", resolve_host)
     resolver = InputResolver(
         InputConfig(remote_enabled=True),
-        transport=httpx.MockTransport(stream_failure),
+        transport_factory=lambda: httpx.MockTransport(stream_failure),
     )
     with pytest.raises(InputNetworkError) as captured:
         asyncio.run(
@@ -707,7 +744,7 @@ def test_all_capabilities_are_preflighted_before_any_source_access(tmp_path: Pat
 
     resolver = InputResolver(
         InputConfig(allowed_paths=[str(tmp_path)], remote_enabled=True),
-        transport=httpx.MockTransport(handle),
+        transport_factory=lambda: httpx.MockTransport(handle),
     )
     parts = (
         FileInput.from_path(missing, media_type="text/plain"),
@@ -824,7 +861,245 @@ def test_content_part_is_top_level_strict_discriminated_public_type() -> None:
     assert isinstance(parsed, FileContent)
     assert parsed.model_dump() == data
 
-    with pytest.raises(ValidationError):
-        adapter.validate_python({**data, "unexpected": True})
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValueError):
+        ResolvedUserInput.model_validate(
+            {
+                "content": [{**data, "unexpected": True}],
+                "text_projection": "safe",
+            }
+        )
+    with pytest.raises(ValueError):
         UserInput(text="hello", unexpected=True)
+
+
+def test_httpx_logs_redacted_url_but_transport_receives_wire_target(
+    monkeypatch,
+    caplog,
+) -> None:
+    secret_marker = "query_log_secret_marker"
+    wire_targets: list[bytes] = []
+    wire_paths: list[bytes] = []
+
+    def resolve_host(host: str, port: int, **options):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        wire_targets.append(request.extensions["target"])
+        wire_paths.append(request.url.raw_path)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/plain"},
+            content=b"safe",
+        )
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve_host)
+    caplog.set_level("INFO", logger="httpx")
+    resolver = InputResolver(
+        InputConfig(remote_enabled=True),
+        transport_factory=lambda: httpx.MockTransport(handle),
+    )
+    asyncio.run(
+        resolver.resolve(
+            UserInput(
+                parts=(
+                    FileInput.from_url(
+                        f"https://example.com/file?api_key={secret_marker}",
+                        media_type="text/plain",
+                    ),
+                )
+            ),
+            ModelCapabilities(file=True),
+        )
+    )
+
+    assert wire_targets == [f"/file?api_key={secret_marker}".encode()]
+    assert wire_paths == wire_targets
+    assert secret_marker not in caplog.text
+
+
+def test_validation_boundaries_never_expose_inputs() -> None:
+    secret_marker = "validation-secret-marker"
+    secret_text = f"data:text/plain;base64,{secret_marker}c2VjcmV0"
+    secret_bytes = f"{secret_marker}c2VjcmV0".encode()
+    markers = (secret_marker, "data:text/plain;base64", repr(secret_bytes))
+    producers = (
+        lambda: UserInput(text="ok", unexpected=secret_text),
+        lambda: ImageInput(
+            source_kind="bytes",
+            source=secret_bytes,
+            media_type=123,
+        ),
+        lambda: FileContent(
+            file={"filename": "file.txt", "file_data": secret_text},
+            unexpected=secret_text,
+        ),
+        lambda: AttachmentMetadata(
+            kind="file",
+            filename=secret_text,
+            media_type="text/plain",
+            size_bytes=-1,
+        ),
+        lambda: ResolvedUserInput.model_validate(
+            {
+                "content": [
+                    {
+                        "type": "file",
+                        "file": {"filename": "file.txt", "file_data": secret_text},
+                        "unexpected": secret_text,
+                    }
+                ],
+                "text_projection": "safe",
+            }
+        ),
+        lambda: InputConfig(max_attachment_bytes=secret_text),
+        lambda: PraxisConfig.model_validate(
+            {"inputs": {"max_attachment_bytes": secret_text}}
+        ),
+        lambda: UserInput.model_validate_json(
+            '{"text":"ok","unexpected":"validation-secret-marker"}'
+        ),
+        lambda: InputConfig.model_validate_strings(
+            {"max_attachment_bytes": secret_marker}
+        ),
+    )
+
+    for produce_error in producers:
+        with pytest.raises(ValueError) as captured:
+            produce_error()
+        assert_safe_validation_error(captured.value, markers)
+
+
+def test_success_response_close_failure_is_safe(monkeypatch, caplog) -> None:
+    def resolve_host(host: str, port: int, **options):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/plain"},
+            stream=FailingCloseStream(),
+        )
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve_host)
+    caplog.set_level("DEBUG")
+    resolver = InputResolver(
+        InputConfig(remote_enabled=True),
+        transport_factory=lambda: httpx.MockTransport(handle),
+    )
+    with pytest.raises(InputNetworkError) as captured:
+        asyncio.run(
+            resolver.resolve(
+                UserInput(
+                    parts=(
+                        FileInput.from_url(
+                            "http://example.com/file",
+                            media_type="text/plain",
+                        ),
+                    )
+                ),
+                ModelCapabilities(file=True),
+            )
+        )
+    rendered = "".join(
+        traceback.format_exception(captured.type, captured.value, captured.tb)
+    )
+    assert "close_failure_secret_marker" not in rendered
+    assert "close_failure_secret_marker" not in caplog.text
+
+
+def test_redirect_error_is_not_masked_by_close_failure(monkeypatch, caplog) -> None:
+    def resolve_host(host: str, port: int, **options):
+        address = "93.184.216.34" if host == "example.com" else "127.0.0.1"
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port))]
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            302,
+            headers={"location": "http://127.0.0.1/private"},
+            stream=FailingCloseStream(),
+        )
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve_host)
+    caplog.set_level("DEBUG")
+    resolver = InputResolver(
+        InputConfig(remote_enabled=True),
+        transport_factory=lambda: httpx.MockTransport(handle),
+    )
+    with pytest.raises(InputNetworkError, match="私网") as captured:
+        asyncio.run(
+            resolver.resolve(
+                UserInput(
+                    parts=(
+                        FileInput.from_url(
+                            "http://example.com/file",
+                            media_type="text/plain",
+                        ),
+                    )
+                ),
+                ModelCapabilities(file=True),
+            )
+        )
+    rendered = "".join(
+        traceback.format_exception(captured.type, captured.value, captured.tb)
+    )
+    assert "close_failure_secret_marker" not in rendered
+    assert "close_failure_secret_marker" not in caplog.text
+
+
+def test_cross_host_redirect_uses_separate_connection_pools(monkeypatch) -> None:
+    pool_identities: list[object] = []
+    requests: list[tuple[object, str, str]] = []
+
+    def resolve_host(host: str, port: int, **options):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+
+    def create_transport() -> httpx.AsyncBaseTransport:
+        pool_identity = object()
+        pool_identities.append(pool_identity)
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            requests.append(
+                (
+                    pool_identity,
+                    request.headers["host"],
+                    request.extensions["sni_hostname"],
+                )
+            )
+            if request.headers["host"] == "host-a.example":
+                return httpx.Response(
+                    302,
+                    headers={"location": "https://host-b.example/file"},
+                )
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/plain"},
+                content=b"safe",
+            )
+
+        return httpx.MockTransport(handle)
+
+    monkeypatch.setattr(socket, "getaddrinfo", resolve_host)
+    resolver = InputResolver(
+        InputConfig(remote_enabled=True),
+        transport_factory=create_transport,
+    )
+    resolved = asyncio.run(
+        resolver.resolve(
+            UserInput(
+                parts=(
+                    FileInput.from_url(
+                        "https://host-a.example/file",
+                        media_type="text/plain",
+                    ),
+                )
+            ),
+            ModelCapabilities(file=True),
+        )
+    )
+
+    assert resolved.attachments[0].size_bytes == 4
+    assert len(pool_identities) == 2
+    assert requests == [
+        (pool_identities[0], "host-a.example", "host-a.example"),
+        (pool_identities[1], "host-b.example", "host-b.example"),
+    ]

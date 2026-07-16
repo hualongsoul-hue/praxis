@@ -6,6 +6,7 @@ import mimetypes
 import os
 import re
 import stat
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -46,6 +47,8 @@ from praxis.models.messages import (
 )
 from praxis.network import (
     HTTP_REDIRECT_STATUS_CODES,
+    TransportFactory,
+    close_http_resources,
     send_pinned_http_request,
     validate_http_url,
 )
@@ -106,11 +109,11 @@ class InputResolver:
         self,
         config: InputConfig,
         *,
-        transport: httpx.AsyncBaseTransport | None = None,
+        transport_factory: TransportFactory | None = None,
         path_opener: PathOpener | None = None,
     ) -> None:
         self.config = config
-        self.transport = transport
+        self.transport_factory = transport_factory
         self.path_opener = path_opener or self.open_path_handle
         self.allowed_paths = tuple(
             Path(item).expanduser().resolve() for item in config.allowed_paths
@@ -461,49 +464,50 @@ class InputResolver:
 
         limit = self.config.max_attachment_bytes if byte_limit is None else byte_limit
         redirect_count = 0
-        async with httpx.AsyncClient(
-            timeout=self.config.remote_timeout,
-            follow_redirects=False,
-            trust_env=False,
-            transport=self.transport,
-        ) as active_client:
-            while True:
-                try:
-                    response = await send_pinned_http_request(active_client, target)
-                except ValueError as exc:
-                    raise InputNetworkError(str(exc)) from None
-                try:
-                    if response.status_code in HTTP_REDIRECT_STATUS_CODES:
-                        location = response.headers.get("location")
-                        if not location:
-                            raise InputNetworkError("重定向响应缺少 Location")
-                        candidate = urljoin(target.original_url, location)
-                        try:
-                            validated_candidate = await validate_http_url(
-                                candidate,
-                                self.config.allow_private_networks,
-                            )
-                        except ValueError as exc:
-                            raise InputNetworkError(str(exc)) from None
-                        if redirect_count >= self.config.max_redirects:
-                            raise InputNetworkError("重定向次数超过配置上限")
-                        redirect_count += 1
-                        target = validated_candidate
-                        continue
+        while True:
+            try:
+                response, client = await send_pinned_http_request(
+                    target,
+                    self.transport_factory,
+                    timeout=self.config.remote_timeout,
+                )
+            except ValueError as exc:
+                raise InputNetworkError(str(exc)) from None
+            try:
+                if response.status_code in HTTP_REDIRECT_STATUS_CODES:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise InputNetworkError("重定向响应缺少 Location")
+                    candidate = urljoin(target.original_url, location)
+                    try:
+                        validated_candidate = await validate_http_url(
+                            candidate,
+                            self.config.allow_private_networks,
+                        )
+                    except ValueError as exc:
+                        raise InputNetworkError(str(exc)) from None
+                    if redirect_count >= self.config.max_redirects:
+                        raise InputNetworkError("重定向次数超过配置上限")
+                    redirect_count += 1
+                    target = validated_candidate
+                    continue
 
-                    try:
-                        response.raise_for_status()
-                    except httpx.HTTPStatusError:
-                        raise InputNetworkError("远程附件返回错误状态") from None
-                    body = bytearray()
-                    try:
-                        async for chunk in response.aiter_bytes():
-                            self.append_bounded(body, chunk, limit)
-                    except (httpx.HTTPError, OSError):
-                        raise InputNetworkError("远程附件响应读取失败") from None
-                    return bytes(body), response.headers.get("content-type")
-                finally:
-                    await response.aclose()
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError:
+                    raise InputNetworkError("远程附件返回错误状态") from None
+                body = bytearray()
+                try:
+                    async for chunk in response.aiter_bytes():
+                        self.append_bounded(body, chunk, limit)
+                except (httpx.HTTPError, OSError):
+                    raise InputNetworkError("远程附件响应读取失败") from None
+                return bytes(body), response.headers.get("content-type")
+            finally:
+                active_error = sys.exc_info()[0] is not None
+                close_failed = await close_http_resources(response, client)
+                if close_failed and not active_error:
+                    raise InputNetworkError("远程附件响应关闭失败") from None
 
     def validate_media_type(self, kind: InputKind, media_type: str | None) -> str:
         """Normalize MIME parameters and enforce a snapshotted modality allowlist."""

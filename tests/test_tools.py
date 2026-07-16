@@ -2,10 +2,13 @@
 
 import asyncio
 import os
+import socket
 import sys
+import traceback
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 from praxis.config.schemas import ToolsConfig
@@ -457,10 +460,18 @@ class TestProcessRunner:
             await asyncio.wait_for(task, timeout=5)
 
 
+class FailingWebFetchCloseStream(httpx.AsyncByteStream):
+    """Stream whose close failure must be safely contained by Web Fetch."""
+
+    async def __aiter__(self):
+        yield b"safe"
+
+    async def aclose(self) -> None:
+        raise httpx.ReadError("web_fetch_close_secret_marker")
+
+
 class TestWebFetchSecurity:
     async def test_validates_every_redirect_and_blocks_private_target(self) -> None:
-        import httpx
-
         policy = ToolPolicy(ToolsConfig(
             network_allowed=True,
             allow_private_networks=False,
@@ -474,19 +485,15 @@ class TestWebFetchSecurity:
                 headers={"location": "http://127.0.0.1/x"},
             )
 
-        transport = httpx.MockTransport(
-            redirect,
+        handler = web_fetch.create_handler(
+            policy,
+            lambda: httpx.MockTransport(redirect),
         )
-        handler = web_fetch.create_handler(policy, transport)
         with pytest.raises(ToolPolicyViolationError, match="私网"):
             await handler({"url": "http://93.184.216.34/start"})
         assert requested_hosts == ["93.184.216.34"]
 
     async def test_pins_dns_target_and_preserves_host_and_sni(self, monkeypatch) -> None:
-        import socket
-
-        import httpx
-
         policy = ToolPolicy(ToolsConfig(network_allowed=True))
         requests: list[httpx.Request] = []
 
@@ -500,7 +507,7 @@ class TestWebFetchSecurity:
         monkeypatch.setattr(socket, "getaddrinfo", resolve_host)
         result = await web_fetch.create_handler(
             policy,
-            httpx.MockTransport(handle),
+            lambda: httpx.MockTransport(handle),
         )({"url": "https://example.com/data"})
 
         assert "safe" in result
@@ -509,26 +516,131 @@ class TestWebFetchSecurity:
         assert requests[0].extensions["sni_hostname"] == "example.com"
 
     async def test_enforces_streamed_byte_limit(self) -> None:
-        import httpx
-
         policy = ToolPolicy(ToolsConfig(
             network_allowed=True,
             allow_private_networks=True,
             network_max_response_bytes=5,
         ))
-        transport = httpx.MockTransport(
-            lambda request: httpx.Response(
-                200,
-                content=b"0123456789",
-            )
-        )
-        result = await web_fetch.create_handler(policy, transport)({
+        result = await web_fetch.create_handler(
+            policy,
+            lambda: httpx.MockTransport(
+                lambda request: httpx.Response(
+                    200,
+                    content=b"0123456789",
+                )
+            ),
+        )({
             "url": "http://127.0.0.1/data",
             "max_bytes": 999,
         })
         assert "01234" in result
         assert "012345" not in result
         assert "已截断" in result
+
+    async def test_close_failure_after_success_is_safe(self, caplog) -> None:
+        policy = ToolPolicy(ToolsConfig(
+            network_allowed=True,
+            allow_private_networks=True,
+        ))
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, stream=FailingWebFetchCloseStream())
+
+        caplog.set_level("DEBUG")
+        handler = web_fetch.create_handler(
+            policy,
+            lambda: httpx.MockTransport(handle),
+        )
+        with pytest.raises(ToolPolicyViolationError) as captured:
+            await handler({"url": "http://127.0.0.1/data"})
+
+        rendered = "".join(
+            traceback.format_exception(captured.type, captured.value, captured.tb)
+        )
+        assert "web_fetch_close_secret_marker" not in rendered
+        assert "web_fetch_close_secret_marker" not in caplog.text
+
+    async def test_close_failure_does_not_mask_redirect_policy_error(
+        self,
+        monkeypatch,
+        caplog,
+    ) -> None:
+        policy = ToolPolicy(ToolsConfig(
+            network_allowed=True,
+            allow_private_networks=False,
+        ))
+
+        def resolve_host(host: str, port: int, **options):
+            address = "93.184.216.34" if host == "example.com" else "127.0.0.1"
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port))]
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                302,
+                headers={"location": "http://127.0.0.1/private"},
+                stream=FailingWebFetchCloseStream(),
+            )
+
+        monkeypatch.setattr(socket, "getaddrinfo", resolve_host)
+        caplog.set_level("DEBUG")
+        handler = web_fetch.create_handler(
+            policy,
+            lambda: httpx.MockTransport(handle),
+        )
+        with pytest.raises(ToolPolicyViolationError, match="私网") as captured:
+            await handler({"url": "http://example.com/start"})
+
+        rendered = "".join(
+            traceback.format_exception(captured.type, captured.value, captured.tb)
+        )
+        assert "web_fetch_close_secret_marker" not in rendered
+        assert "web_fetch_close_secret_marker" not in caplog.text
+
+    async def test_cross_host_redirect_uses_separate_connection_pools(
+        self,
+        monkeypatch,
+    ) -> None:
+        policy = ToolPolicy(ToolsConfig(network_allowed=True))
+        pool_identities: list[object] = []
+        requests: list[tuple[object, str, str]] = []
+
+        def resolve_host(host: str, port: int, **options):
+            return [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))
+            ]
+
+        def create_transport() -> httpx.AsyncBaseTransport:
+            pool_identity = object()
+            pool_identities.append(pool_identity)
+
+            def handle(request: httpx.Request) -> httpx.Response:
+                requests.append(
+                    (
+                        pool_identity,
+                        request.headers["host"],
+                        request.extensions["sni_hostname"],
+                    )
+                )
+                if request.headers["host"] == "host-a.example":
+                    return httpx.Response(
+                        302,
+                        headers={"location": "https://host-b.example/file"},
+                    )
+                return httpx.Response(200, content=b"safe")
+
+            return httpx.MockTransport(handle)
+
+        monkeypatch.setattr(socket, "getaddrinfo", resolve_host)
+        result = await web_fetch.create_handler(policy, create_transport)(
+            {"url": "https://host-a.example/file"}
+        )
+
+        assert "safe" in result
+        assert len(pool_identities) == 2
+        assert requests == [
+            (pool_identities[0], "host-a.example", "host-a.example"),
+            (pool_identities[1], "host-b.example", "host-b.example"),
+        ]
 
 
 class TestOverride:
