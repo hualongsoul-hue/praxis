@@ -1,37 +1,55 @@
 """Token 计量、成本估算与预算管控。"""
 
 import json
-from typing import Any
+from typing import Any, cast
 
 import litellm
 
+from praxis.exceptions import ModelValidationError
 from praxis.gateway.router import GatewayRouter
+from praxis.models.messages import validate_content_part
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
 
 log = get_logger("gateway.metering")
 DEFAULT_MAX_TOKENS = 128_000
+EXTENDED_MULTIMODAL_TYPES = {"input_audio", "video_url", "file"}
+
+
+def has_valid_extended_multimodal_content(messages: list[dict[str, Any]]) -> bool:
+    """Return whether every list content part is valid and one is extended."""
+    found_extended = False
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in cast(list[object], content):
+            try:
+                validated = validate_content_part(part)
+            except ModelValidationError:
+                return False
+            if validated.type in EXTENDED_MULTIMODAL_TYPES:
+                found_extended = True
+    return found_extended
 
 
 def get_token_count(messages: list[dict[str, Any]], model: str = "default") -> int:
     """使用 LiteLLM 的模型 tokenizer 估算消息 Token 数。"""
-    try:
-        return litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]
-            model=model,
-            messages=messages,
-        )
-    except ValueError as exc:
+    if has_valid_extended_multimodal_content(messages):
         encoded = json.dumps(
             messages,
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode("utf-8")
         log.debug(
-            "LiteLLM tokenizer does not support a content block; using a conservative byte bound",
+            "Using a conservative byte bound for valid extended multimodal content",
             model=model,
-            error=str(exc),
         )
         return len(encoded)
+    return litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]
+        model=model,
+        messages=messages,
+    )
 
 
 def get_max_tokens(model: str = "default") -> int:

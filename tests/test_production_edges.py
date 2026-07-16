@@ -2,6 +2,7 @@
 
 import json
 from datetime import UTC, datetime, timedelta
+from fnmatch import fnmatchcase
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -131,15 +132,20 @@ class FakeRedis:
 
     async def delete(self, *keys: bytes | str) -> int:
         self.deleted_batches.append(keys)
+        deleted = 0
         for key in keys:
             decoded = key.decode("utf-8") if isinstance(key, bytes) else key
-            self.values.pop(decoded, None)
-        return len(keys)
+            if decoded in self.values:
+                del self.values[decoded]
+                deleted += 1
+        return deleted
 
     async def scan_iter(self, match: str):
         self.scan_patterns.append(match)
         for key in self.scan_keys:
-            yield key
+            decoded = key.decode("utf-8") if isinstance(key, bytes) else key
+            if fnmatchcase(decoded, match):
+                yield key
 
     async def aclose(self) -> None:
         self.closed = True
@@ -169,15 +175,21 @@ class TestRedisBackendEdges:
         assert await backend.load("ns", "missing") is None
         await backend.delete("ns", "one")
         assert "praxis:ns:one" not in client.values
+        assert await client.delete("praxis:ns:missing") == 0
 
         client.scan_keys = [b"praxis:ns:b", "praxis:ns:a"]
         assert await backend.list_keys("ns") == ["a", "b"]
-        assert await backend.list_keys("ns", prefix="a") == ["a", "b"]
+        assert await backend.list_keys("ns", prefix="a") == ["a"]
         assert client.scan_patterns == ["praxis:ns:*", "praxis:ns:a*"]
 
         client.scan_keys = [f"praxis:ns:{index}".encode() for index in range(501)]
+        client.values.clear()
+        client.values.update(
+            {f"praxis:ns:{index}": str(index).encode() for index in range(501)}
+        )
         assert await backend.clear_namespace("ns") == 501
         assert [len(batch) for batch in client.deleted_batches[-2:]] == [500, 1]
+        assert not any(key.startswith("praxis:ns:") for key in client.values)
 
 
 class TestVisualVerifierEdges:

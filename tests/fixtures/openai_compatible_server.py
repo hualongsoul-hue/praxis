@@ -93,6 +93,7 @@ class OpenAIContractHandler(BaseHTTPRequestHandler):
 
     def send_stream(self, *, block_after_first: bool = False) -> None:
         contract = cast(ContractHttpServer, self.server).contract
+        contract.stream_completed.clear()
         frames = [
             {
                 "id": "chatcmpl-contract-stream",
@@ -139,6 +140,7 @@ class OpenAIContractHandler(BaseHTTPRequestHandler):
         if not block_after_first:
             body = b"".join(encoded_frames) + b"data: [DONE]\n\n"
             self.send_payload(200, body, content_type="text/event-stream")
+            contract.stream_completed.set()
             return
 
         self.send_response(200)
@@ -152,6 +154,7 @@ class OpenAIContractHandler(BaseHTTPRequestHandler):
         contract.response_release.wait()
         self.wfile.write(b"".join(encoded_frames[1:]) + b"data: [DONE]\n\n")
         self.wfile.flush()
+        contract.stream_completed.set()
 
     def send_payload(
         self,
@@ -182,6 +185,7 @@ class OpenAICompatibleServer:
         self.response_kind = "regular"
         self.request_received = threading.Event()
         self.stream_frame_sent = threading.Event()
+        self.stream_completed = threading.Event()
         self.response_release = threading.Event()
         self.response_release.set()
         self.client_disconnected = threading.Event()

@@ -137,17 +137,23 @@ async def test_runtime_streams_sse_over_real_http(
     openai_compatible_server: OpenAICompatibleServer,
 ) -> None:
     config = make_contract_config(tmp_path, openai_compatible_server.base_url)
-    async with PraxisRuntime(config, gateway=make_gateway(config)) as runtime:
+    gateway = make_gateway(config)
+    async with PraxisRuntime(config, gateway=gateway) as runtime:
         async with runtime.session() as session:
             events = [event async for event in session.run_stream("stream contract")]
 
+    llm_response = next(event for event in events if event.event_type == "llm_response")
     content = "".join(
         str(event.data["text"])
         for event in events
         if event.event_type == "content_delta"
     )
     assert content == "contract-ok"
+    assert llm_response.data["prompt_tokens"] == 5
+    assert llm_response.data["completion_tokens"] == 2
+    assert gateway.total_tokens == 7
     assert openai_compatible_server.requests[0]["stream"] is True
+    assert openai_compatible_server.stream_completed.wait(timeout=1) is True
     assert events[-1].event_type == "termination"
 
 

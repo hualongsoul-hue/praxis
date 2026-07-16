@@ -72,21 +72,38 @@ def has_observable_oracle(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
 
 
 def collect_test_functions(source: str) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
-    """Return non-fixture test functions and methods from source."""
+    """Return tests that pytest can collect from module and top-level classes."""
     tree = ast.parse(source)
-    return [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name.startswith("test_")
-        and not has_fixture_decorator(node)
-    ]
+    functions: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name.startswith("test_") and not has_fixture_decorator(node):
+                functions.append(node)
+            continue
+        if not isinstance(node, ast.ClassDef) or not node.name.startswith("Test"):
+            continue
+        has_constructor = any(
+            isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and member.name in {"__init__", "__new__"}
+            for member in node.body
+        )
+        if has_constructor:
+            continue
+        functions.extend(
+            member
+            for member in node.body
+            if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and member.name.startswith("test_")
+            and not has_fixture_decorator(member)
+        )
+    return functions
 
 
 def missing_test_oracles(root: Path) -> list[str]:
     """Report repository tests that lack the minimum explicit oracle."""
     missing: list[str] = []
-    for path in sorted(root.rglob("test_*.py")):
+    paths = set(root.rglob("test_*.py")) | set(root.rglob("*_test.py"))
+    for path in sorted(paths):
         source = path.read_text(encoding="utf-8")
         for node in collect_test_functions(source):
             if not has_observable_oracle(node):
@@ -146,6 +163,51 @@ def test_data():
 """
     )
     assert nodes == []
+
+
+def test_oracle_detector_collects_only_pytest_module_and_test_class_nodes() -> None:
+    nodes = collect_test_functions(
+        """
+def test_module_level():
+    def test_nested():
+        assert operation()
+    assert operation()
+
+class HelperClass:
+    def test_not_collectable(self):
+        assert operation()
+
+class TestCollectable:
+    def test_direct_method(self):
+        assert operation()
+
+    def helper(self):
+        def test_nested_method():
+            assert operation()
+"""
+    )
+    assert [node.name for node in nodes] == [
+        "test_module_level",
+        "test_direct_method",
+    ]
+
+
+def test_missing_oracles_scans_both_pytest_filename_patterns_once(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "quality_test.py").write_text(
+        "def test_suffix_only():\n    action()\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "test_overlap_test.py").write_text(
+        "def test_both_patterns():\n    action()\n",
+        encoding="utf-8",
+    )
+
+    assert missing_test_oracles(tmp_path) == [
+        "quality_test.py::test_suffix_only",
+        "test_overlap_test.py::test_both_patterns",
+    ]
 
 
 def test_repository_tests_have_an_explicit_observable_oracle() -> None:

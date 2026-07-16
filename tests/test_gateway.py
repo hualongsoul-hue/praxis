@@ -603,7 +603,10 @@ class TestMetering:
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "hello"},
-                    {"type": "input_audio", "input_audio": {"data": "UklGRg=="}},
+                    {
+                        "type": "input_audio",
+                        "input_audio": {"data": "UklGRg==", "format": "wav"},
+                    },
                 ],
             }
         ]
@@ -616,11 +619,66 @@ class TestMetering:
         )
         with patch(
             "praxis.gateway.metering.litellm.token_counter",
-            side_effect=ValueError("unsupported content block"),
-        ):
+            side_effect=AssertionError("valid extended content must bypass LiteLLM"),
+        ) as token_counter:
             count = get_token_count(messages, model="contract")
 
         assert count == expected
+        token_counter.assert_not_called()
+
+    def test_get_token_count_propagates_unrelated_litellm_value_error(self) -> None:
+        messages = [{"role": "user", "content": "plain text"}]
+        with (
+            patch(
+                "praxis.gateway.metering.litellm.token_counter",
+                side_effect=ValueError("unknown tokenizer configuration"),
+            ),
+            pytest.raises(ValueError, match="unknown tokenizer configuration"),
+        ):
+            get_token_count(messages, model="broken-model")
+
+    def test_multimodal_byte_bound_rejects_a_near_budget_request(self) -> None:
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "budget contract"},
+                    {
+                        "type": "file",
+                        "file": {
+                            "filename": "contract.pdf",
+                            "file_data": "data:application/pdf;base64,JVBERg==",
+                        },
+                    },
+                ],
+            }
+        ]
+        byte_bound = len(
+            json.dumps(
+                messages,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        gateway = GatewayRouter(make_config(max_total_tokens=byte_bound - 1))
+
+        with patch(
+            "praxis.gateway.metering.litellm.token_counter",
+            side_effect=AssertionError("valid extended content must bypass LiteLLM"),
+        ):
+            estimated_tokens = get_token_count(messages, model="contract")
+        with pytest.raises(BudgetExceededError) as error:
+            gateway.reserve_usage(
+                estimated_tokens=estimated_tokens,
+                estimated_cost=None,
+            )
+
+        assert error.value.details == {
+            "projected_tokens": byte_bound,
+            "max_total_tokens": byte_bound - 1,
+        }
+        assert gateway.total_tokens == 0
+        assert gateway.reserved_tokens == 0
 
     @patch("litellm.get_max_tokens", return_value=128000)
     def test_get_max_tokens(self, mock_mt: MagicMock) -> None:
