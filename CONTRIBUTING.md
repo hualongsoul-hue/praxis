@@ -24,5 +24,15 @@ uv build
 uv run python scripts/verify_wheel.py
 ```
 
+真实模型验收默认因缺少凭据而跳过。需要验证指定 OpenAI 兼容端点时，先在当前进程设置
+`PRAXIS_MODEL_API_KEY`，再执行：
+
+```powershell
+uv run pytest -m live_model tests/integration/test_gateway_live.py
+```
+
+该套件覆盖普通响应、流式响应、强制工具调用、取消、超时和错误映射；不要把密钥写进命令、
+配置文件、测试数据或终端输出。
+
 不要创建或提交包含真实凭据的配置、日志、测试数据或文档。模型密钥只通过
 `PRAXIS_MODEL_API_KEY` 注入。
