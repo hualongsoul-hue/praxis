@@ -17,6 +17,44 @@ class StrictConfigModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class ModelCapabilities(StrictConfigModel):
+    """Attachment modalities accepted by a model deployment."""
+
+    image: bool = False
+    audio: bool = False
+    video: bool = False
+    file: bool = False
+
+
+class InputConfig(StrictConfigModel):
+    """Fail-closed attachment resolution policy."""
+
+    allowed_paths: list[str] = Field(default_factory=list)
+    remote_enabled: bool = False
+    allow_private_networks: bool = False
+    max_attachment_bytes: int = Field(default=20_000_000, ge=1, le=100_000_000)
+    max_total_bytes: int = Field(default=50_000_000, ge=1, le=500_000_000)
+    max_redirects: int = Field(default=5, ge=0, le=20)
+    remote_timeout: float = Field(default=30.0, gt=0, le=300.0)
+    image_media_types: list[str] = Field(
+        default_factory=lambda: ["image/jpeg", "image/png", "image/gif", "image/webp"]
+    )
+    audio_media_types: list[str] = Field(default_factory=lambda: ["audio/mpeg", "audio/wav"])
+    video_media_types: list[str] = Field(
+        default_factory=lambda: ["video/mp4", "video/webm", "video/quicktime"]
+    )
+    file_media_types: list[str] = Field(
+        default_factory=lambda: [
+            "application/pdf",
+            "application/json",
+            "application/yaml",
+            "text/csv",
+            "text/markdown",
+            "text/plain",
+        ]
+    )
+
+
 class TelemetryConfig(StrictConfigModel):
     """S2 遥测系统配置。"""
 
@@ -67,6 +105,7 @@ class ModelDeployment(StrictConfigModel):
     input_cost_per_token: float | None = Field(default=None, ge=0)
     output_cost_per_token: float | None = Field(default=None, ge=0)
     default_max_output_tokens: int = Field(default=4096, ge=1)
+    capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
     supports_vision: bool = False
 
 

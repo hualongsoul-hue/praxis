@@ -59,6 +59,36 @@ class ConfigError(PraxisError):
     component = "config"
 
 
+class InputError(PraxisError):
+    """Typed input validation or resolution error."""
+
+    component = "input"
+
+
+class InvalidInputSourceError(InputError):
+    """Attachment source does not match its declared source kind."""
+
+
+class InputPathError(InputError):
+    """Attachment path is unavailable or outside configured roots."""
+
+
+class InputMediaTypeError(InputError):
+    """Attachment media type is absent, invalid, or disallowed."""
+
+
+class InputSizeLimitError(InputError):
+    """Attachment bytes exceed a configured size limit."""
+
+
+class InputNetworkError(InputError):
+    """Remote attachment retrieval failed its security policy."""
+
+
+class UnsupportedInputModalityError(InputError):
+    """The selected deployment cannot accept an attachment modality."""
+
+
 # ── S2 遥测系统 ──────────────────────────────────────────────────────────────
 
 

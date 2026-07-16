@@ -7,6 +7,7 @@ import httpx
 
 from praxis.exceptions import ToolPolicyViolationError
 from praxis.models.tools import ToolDefinition, ToolMetadata
+from praxis.network import HTTP_REDIRECT_STATUS_CODES
 from praxis.tools.policy import ToolPolicy
 
 DEFINITION = ToolDefinition(
@@ -29,9 +30,6 @@ DEFINITION = ToolDefinition(
     ),
 )
 
-REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
-
-
 def create_handler(policy: ToolPolicy, client: httpx.AsyncClient | None = None):
     async def handle(args: dict[str, Any]) -> str:
         current_url = str(args["url"])
@@ -47,7 +45,7 @@ def create_handler(policy: ToolPolicy, client: httpx.AsyncClient | None = None):
                 request = active_client.build_request("GET", current_url)
                 response = await active_client.send(request, stream=True)
                 try:
-                    if response.status_code in REDIRECT_STATUS_CODES:
+                    if response.status_code in HTTP_REDIRECT_STATUS_CODES:
                         location = response.headers.get("location")
                         if not location:
                             raise ToolPolicyViolationError("重定向响应缺少 Location")

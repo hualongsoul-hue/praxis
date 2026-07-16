@@ -1,15 +1,12 @@
 """文件、网络和 Shell 工具的显式授权策略。"""
 
-import asyncio
-import ipaddress
 import os
-import socket
 from collections.abc import Mapping
 from pathlib import Path
-from urllib.parse import urlsplit
 
 from praxis.config.schemas import ToolsConfig
 from praxis.exceptions import ToolPolicyViolationError
+from praxis.network import validate_http_url
 
 SAFE_ENVIRONMENT = frozenset({
     "COMSPEC",
@@ -98,32 +95,7 @@ class ToolPolicy:
 
     async def check_url(self, url: str) -> str:
         self.check_network()
-        parsed = urlsplit(url)
-        if parsed.scheme not in {"http", "https"}:
-            raise ToolPolicyViolationError("Web Fetch 仅允许 HTTP/HTTPS URL")
-        if parsed.username is not None or parsed.password is not None:
-            raise ToolPolicyViolationError("URL 不允许包含凭据")
-        if not parsed.hostname:
-            raise ToolPolicyViolationError("URL 缺少主机名")
         try:
-            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            return await validate_http_url(url, self.allow_private_networks)
         except ValueError as exc:
-            raise ToolPolicyViolationError("URL 端口无效") from exc
-        try:
-            addresses = await asyncio.to_thread(
-                socket.getaddrinfo,
-                parsed.hostname,
-                port,
-                type=socket.SOCK_STREAM,
-            )
-        except OSError as exc:
-            raise ToolPolicyViolationError("URL 主机名无法解析") from exc
-        if not self.allow_private_networks:
-            for address in addresses:
-                ip = ipaddress.ip_address(address[4][0])
-                if not ip.is_global:
-                    raise ToolPolicyViolationError(
-                        "Web Fetch 默认禁止私网、回环、链路本地或保留地址",
-                        details={"hostname": parsed.hostname},
-                    )
-        return url
+            raise ToolPolicyViolationError(str(exc)) from exc

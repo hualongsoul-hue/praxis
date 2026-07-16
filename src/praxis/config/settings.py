@@ -6,6 +6,7 @@ from praxis.config.schemas import (
     ContextConfig,
     GatewayConfig,
     GuardrailsConfig,
+    InputConfig,
     MCPConfig,
     MemoryConfig,
     OrchestratorConfig,
@@ -29,6 +30,7 @@ class PraxisConfig(StrictConfigModel):
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
+    inputs: InputConfig = Field(default_factory=InputConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     context: ContextConfig = Field(default_factory=ContextConfig)
