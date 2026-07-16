@@ -339,8 +339,7 @@ class UserInput(BaseModel):
 InputValue = str | UserInput
 ```
 
-Add these strict configuration models and replace `ModelDeployment.supports_vision` with
-`ModelDeployment.capabilities`:
+Add these strict configuration models and add `ModelDeployment.capabilities`:
 
 ```python
 class ModelCapabilities(StrictConfigModel):
@@ -365,10 +364,11 @@ class InputConfig(StrictConfigModel):
 ```
 
 Add `inputs: InputConfig = Field(default_factory=InputConfig)` to `PraxisConfig` and export both
-configuration models. In the existing `ModelDeployment`, delete
-`supports_vision: bool = False` and add exactly
-`capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)` at the same location;
-all other deployment fields stay unchanged.
+configuration models. In the existing `ModelDeployment`, add exactly
+`capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)` next to the current
+capability field; all other deployment fields stay unchanged. Keep `supports_vision` only until
+Task 3 updates the Gateway Protocol, visual verification, and all callers in the same testable
+change. Task 3 removes it completely; this ordering is not a final compatibility layer.
 
 - [ ] **Step 3: Add typed content blocks and exceptions**
 
@@ -536,6 +536,8 @@ def capabilities(self, model_name: str | None = None) -> ModelCapabilities:
 ```
 
 Update visual verification to read `.image`. Update all test gateways to implement `capabilities()`. Do not preserve `supports_vision()`.
+Delete `ModelDeployment.supports_vision` in this same step and update existing deployment fixtures
+to use `capabilities=ModelCapabilities(image=True)`.
 
 - [ ] **Step 3: Separate model content from safe text in run context**
 
