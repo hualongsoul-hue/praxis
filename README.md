@@ -1,111 +1,108 @@
-# Praxis — AI Agent Harness
+# Praxis
 
-生产级 AI Agent 框架，采用五层十四组件架构，支持 100+ LLM Provider 统一接入、MCP 工具集成、认知记忆系统和多 Agent 协调。
+Praxis 是可嵌入的异步 Python Agent SDK/CLI，可作为 Windows 或 Linux 长期运行 Agent
+服务的核心运行时。它提供严格配置、模型网关、并发安全会话、工具审批、检查点、审计、
+MCP、记忆、技能、子代理和健康检查，但不绑定任何 Web 框架。
 
-## 特性
+支持 Python `>=3.12,<3.15`。
 
-- **统一模型网关**: 通过 LiteLLM 接入 100+ LLM Provider（OpenAI、Anthropic、Google 等），内置路由、负载均衡和成本预算
-- **MCP 工具集成**: 支持 Model Context Protocol 工具发现/执行、Elicitation 用户确认、Sampling LLM 采样代理
-- **三层护栏**: 输入护栏（提示注入检测）、工具护栏（权限管理）、输出护栏（敏感信息防护），支持绊线机制
-- **认知记忆**: 四型记忆模型（语义/情景/程序/工作），向量检索，后台自动提取与整合
-- **编排引擎**: 支持 ReAct 和 Plan-and-Execute 策略，自动终止、事件流和错误恢复
-- **子代理委托**: 隔离上下文、独立工具子集和轮次限制
-- **技能系统**: 三层渐进式披露，技能发现/注册/激活/版本管理
-- **检查点恢复**: 自动检查点保存，跨窗口会话恢复
-- **沙箱安全**: 文件系统白名单、网络出站控制、Shell 超时限制
-- **全面可观测**: 结构化日志、OpenTelemetry 指标/追踪、100% 审计覆盖
+## 安装
 
-## 架构
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│ Layer 4 · 编排层    S11 编排循环 │ S12 会话管理 │ S13 子代理协调 │
-├──────────────────────────────────────────────────────────────┤
-│ Layer 3 · 控制层    S8 护栏系统  │ S9 错误恢复  │ S10 验证引擎  │
-├──────────────────────────────────────────────────────────────┤
-│ Layer 2 · 核心能力  S5 工具系统 │ S6 记忆系统 │ S7 上下文 │ S14 技能 │
-├──────────────────────────────────────────────────────────────┤
-│ Layer 1 · 模型接入              S4 模型网关                   │
-├──────────────────────────────────────────────────────────────┤
-│ Layer 0 · 基础设施  S1 配置系统  │ S2 遥测系统  │ S3 持久化引擎 │
-└──────────────────────────────────────────────────────────────┘
+```shell
+pip install praxis
 ```
 
-每层仅允许依赖同层或更低层的组件，禁止向上依赖。
+按需安装可选能力：
 
-## 技术栈
-
-- **Python** 3.12+
-- **包管理** uv
-- **数据模型** Pydantic v2
-- **LLM 接入** LiteLLM
-- **工具协议** MCP (Model Context Protocol)
-- **持久化** SQLAlchemy（SQLite/Redis/文件系统）
-- **可观测** OpenTelemetry + structlog
+```shell
+pip install "praxis[mcp]"
+pip install "praxis[redis]"
+pip install "praxis[visual]"
+pip install "praxis[otlp]"
+```
 
 ## 快速开始
 
+复制 [config.example.yaml](config.example.yaml) 为 `config.yaml`。模型密钥只能通过环境变量注入：
+
+```powershell
+$env:PRAXIS_MODEL_API_KEY = "<your-key>"
+```
+
 ```bash
-# 安装依赖
-uv sync
-
-# 创建配置（可选，所有字段均有默认值）
-cp config.example.yaml config.yaml
-# 编辑 config.yaml，填入 API Key
-
-# 运行测试
-uv run pytest
+export PRAXIS_MODEL_API_KEY='<your-key>'
 ```
 
 ```python
 import asyncio
-from praxis.config.schemas import (
-    ContextConfig, OrchestratorConfig, PersistenceConfig, SessionConfig,
-)
-from praxis.guardrails.engine import GuardrailEngine
-from praxis.guardrails.permissions import PermissionManager
-from praxis.guardrails.rules import RuleEngine
-from praxis.persistence.store import create_store
-from praxis.session.core import SessionFactory
 
-async def main():
-    store = await create_store(PersistenceConfig())
-    rule_engine = RuleEngine()
-    rule_engine.register_builtin_rules()
-    guardrails = GuardrailEngine(rule_engine, PermissionManager())
+from praxis import PraxisRuntime, load_config
 
-    factory = SessionFactory(
-        store=store,
-        session_config=SessionConfig(),
-        orchestrator_config=OrchestratorConfig(),
-        context_config=ContextConfig(),
-    )
 
-    session = factory.create_session(guardrails=guardrails)
-    response = await session.run_turn("你好，请帮我分析这段代码")
-    print(response.content)
-    await store.close()
+async def main() -> None:
+    config = load_config("config.yaml")
+    async with PraxisRuntime(config) as runtime:
+        async with runtime.session() as session:
+            response = await session.run("请说明当前可用能力")
+            print(response.content)
+
 
 asyncio.run(main())
 ```
 
-## 测试
+Runtime 可以被多个会话安全共享；同一个 `AgentSession` 会拒绝并发执行两个轮次。流式事件、
+健康检查和关闭流程均为异步接口，便于嵌入 ASGI、任务队列或自定义守护进程。
 
-```bash
-uv run pytest tests/e2e/          # 8 个端到端场景（38 测试）
-uv run pytest tests/integration/  # 跨组件集成（25 测试）
-uv run pytest tests/benchmarks/   # 性能基准（9 测试）
-uv run pytest tests/nfr/          # 非功能需求（41 测试）
+```python
+async with PraxisRuntime(load_config("config.yaml")) as runtime:
+    health = await runtime.health()
+    async with runtime.session() as session:
+        async for event in session.run_stream("分析这个问题"):
+            print(event.event_type, event.data)
 ```
+
+## CLI
+
+```shell
+praxis version
+praxis config validate config.yaml
+praxis config show config.yaml
+praxis doctor config.yaml
+praxis chat config.yaml
+```
+
+`config show` 默认脱敏。`doctor` 不输出密钥，也不会发起计费模型请求。
+
+## 安全默认值
+
+- 模型固定通过配置中的默认别名调用；示例部署为 `openai/glm-5.1-openai`。
+- `PRAXIS_MODEL_API_KEY` 不进入配置树、日志、审计、检查点或 CLI 输出。
+- 文件工具在授权根目录为空时拒绝访问；Shell 和自主网络默认禁用。
+- 网络工具默认阻止 URL 凭据、回环、私网、链路本地地址和越界重定向。
+- 未配置审批处理器、审批超时或处理器异常时，写操作一律拒绝。
+- 不可信 Shell 必须运行在容器或操作系统沙箱中；`ToolPolicy` 不是安全沙箱。
 
 ## 文档
 
-- [API 参考](docs/API.md)
-- [使用指南](docs/GUIDE.md)
-- [配置参考](docs/CONFIG_REFERENCE.md)
-- [产品需求](docs/PRD.md)
-- [开发路线图](docs/ROADMAP.md)
+- [架构与生命周期](docs/ARCHITECTURE.md)
+- [配置参考](docs/CONFIGURATION.md)
+- [生产部署](docs/DEPLOYMENT.md)
+- [扩展 SDK](docs/EXTENDING.md)
+- [安全模型](docs/SECURITY.md)
+- [故障排查](docs/TROUBLESHOOTING.md)
+- [贡献指南](CONTRIBUTING.md)
+- [安全报告](SECURITY.md)
 
-## 许可证
+## 开发与发布门禁
 
-MIT
+```shell
+uv lock
+uv sync --all-extras --frozen
+uv run ruff check .
+uv run pyright
+uv run pytest -W error --strict-config --strict-markers --cov=praxis --cov-branch --cov-fail-under=90
+uv run pip-audit
+uv build
+```
+
+MIT License。

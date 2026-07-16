@@ -23,36 +23,38 @@ persistence:
 
 # ── S4 模型网关 ────────────────────────────────────────────
 gateway:
-  model_list:
+  deployments:
     - model_name: "default"
-      litellm_params:
-        model: "openai/gpt-4o"
-        api_key: "${OPENAI_API_KEY}"   # 使用环境变量
-    # - model_name: "fast"
-    #   litellm_params:
-    #     model: "anthropic/claude-3-5-haiku-20241022"
-    #     api_key: "${ANTHROPIC_API_KEY}"
+      model: "openai/glm-5.1-openai"
+      api_base: "http://172.24.23.192:3000/v1"
+      api_key_env: "PRAXIS_MODEL_API_KEY"   # 配置中只保存环境变量名
+      default_max_output_tokens: 4096
+      supports_vision: false
   default_model: "default"
   routing_strategy: "simple-shuffle"
   num_retries: 3
   timeout: 60.0
+  max_concurrent_requests: 8
+  # max_total_tokens: 1000000
   # max_budget: 10.0  # USD 成本上限
 
 # ── S5 工具系统 ────────────────────────────────────────────
 tools:
-  allowed_paths: []        # 空 = 允许所有路径
+  allowed_paths: []        # 空 = 拒绝所有文件访问
   default_timeout: 30.0
   max_concurrent_readonly: 5
   shell_timeout: 120.0
-  network_allowed: true
+  shell_enabled: false
+  network_allowed: false
+  allow_private_networks: false
   # S9 工具降级映射：首选工具不可用/熔断时切换到替代工具
   # fallback_mappings:
   #   web_search: "web_fetch"
 
 # ── S6 记忆系统 ────────────────────────────────────────────
 memory:
-  embedding_api_base: "http://localhost:8080"  # TEI 嵌入服务地址
-  # embedding_api_key: "${TEI_API_KEY}"
+  embedding_api_base: null  # 未配置时使用确定性本地词法检索
+  # embedding_api_key_env: "PRAXIS_EMBEDDING_API_KEY"
   max_memories: 10000
   decay_enabled: true       # 梦境周期执行相关性衰减遗忘
   background_batch_threshold: 5
@@ -81,6 +83,12 @@ recovery:
   circuit_breaker_threshold: 5
   circuit_breaker_cooldown: 60.0
 
+# ── S10 验证引擎 ───────────────────────────────────────────
+verification:
+  computational_enabled: true
+  inferential_enabled: true
+  visual_enabled: false
+
 # ── S11 编排循环 ───────────────────────────────────────────
 orchestrator:
   max_turns: 100
@@ -104,3 +112,9 @@ skills:
     - "~/.praxis/skills"
   auto_discover: true
   max_skills_in_context: 10
+
+# ── MCP 可选能力 ───────────────────────────────────────────
+mcp:
+  enabled: false
+  connect_timeout: 30.0
+  sampling_enabled: true
