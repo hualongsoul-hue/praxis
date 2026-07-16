@@ -21,11 +21,22 @@ jobs:
         with:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
-      - run: uv sync --all-extras --frozen
-      - run: uv run ruff check .
-      - run: uv run pyright
-      - run: uv run pytest -W error --strict-config --strict-markers --cov=praxis --cov-branch --cov-fail-under=90
-      - run: uv build
+      - name: Sync locked dependencies
+        run: uv sync --all-extras --frozen
+      - name: Ruff
+        run: uv run ruff check .
+      - name: Pyright
+        run: uv run pyright
+      - name: Dependency vulnerability audit
+        run: uv run pip-audit
+      - name: Public API policy and security baseline
+        run: uv run pytest -W error --strict-config --strict-markers -q tests/test_public_api_policy.py tests/test_security_baseline.py
+      - name: Scenarios, integration, E2E, and documentation examples
+        run: uv run pytest -W error --strict-config --strict-markers -m "not live_model" tests/scenarios tests/integration tests/e2e tests/test_documentation.py
+      - name: Full test suite with branch coverage
+        run: uv run pytest -W error --strict-config --strict-markers -m "not live_model" --cov=praxis --cov-branch --cov-fail-under=90
+      - name: Build wheel and sdist
+        run: uv build
 
   wheel-smoke:
     needs: test

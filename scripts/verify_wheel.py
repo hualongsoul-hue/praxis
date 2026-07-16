@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -11,8 +12,56 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 
 
-def run(*command: str) -> None:
-    subprocess.run(command, cwd=ROOT, check=True)
+def run(
+    *command: str,
+    working_directory: Path,
+    environment: dict[str, str] | None = None,
+    expected_return_code: int = 0,
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        command,
+        cwd=working_directory,
+        env=environment,
+        check=False,
+        capture_output=True,
+        encoding="utf-8",
+        text=True,
+    )
+    if result.stdout:
+        print(result.stdout, end="")
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr)
+    if result.returncode != expected_return_code:
+        raise RuntimeError(
+            f"command {command!r} returned {result.returncode}, "
+            f"expected {expected_return_code}"
+        )
+    return result
+
+
+def clean_environment() -> dict[str, str]:
+    allowed_names = (
+        "APPDATA",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LOCALAPPDATA",
+        "PATH",
+        "SYSTEMROOT",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "USERPROFILE",
+        "WINDIR",
+    )
+    environment = {
+        name: os.environ[name]
+        for name in allowed_names
+        if name in os.environ
+    }
+    environment["PYTHONNOUSERSITE"] = "1"
+    environment["PYTHONUTF8"] = "1"
+    return environment
 
 
 def main() -> int:
@@ -23,26 +72,89 @@ def main() -> int:
     if uv is None:
         raise RuntimeError("uv executable not found")
 
-    with tempfile.TemporaryDirectory(prefix="praxis-wheel-") as directory:
+    with tempfile.TemporaryDirectory(prefix="praxis-wheel-", dir=ROOT.parent) as directory:
+        working_directory = Path(directory).resolve()
+        if working_directory.is_relative_to(ROOT):
+            raise RuntimeError("wheel smoke environment must be outside the repository")
         environment = Path(directory) / "venv"
-        run(uv, "venv", str(environment), "--python", sys.executable)
+        run(
+            uv,
+            "venv",
+            str(environment),
+            "--python",
+            sys.executable,
+            working_directory=working_directory,
+        )
         python = environment / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
-        run(uv, "pip", "install", "--python", str(python), str(wheels[0]))
-        run(str(python), "-m", "praxis", "version")
-        run(str(python), "-m", "praxis", "config", "validate", "config.example.yaml")
+        cli = environment / ("Scripts/praxis.exe" if sys.platform == "win32" else "bin/praxis")
+        run(
+            uv,
+            "pip",
+            "install",
+            "--python",
+            str(python),
+            str(wheels[0]),
+            working_directory=working_directory,
+        )
+        smoke_config = working_directory / "wheel-smoke.yaml"
+        smoke_config.write_text(
+            "persistence:\n"
+            "  backend: filesystem\n"
+            "  filesystem_path: ./store\n",
+            encoding="utf-8",
+        )
+        isolated_environment = clean_environment()
+        version = run(
+            str(cli),
+            "version",
+            working_directory=working_directory,
+            environment=isolated_environment,
+        )
+        if version.stdout.strip() != "praxis 1.0.0":
+            raise RuntimeError(f"unexpected version output: {version.stdout!r}")
+        run(
+            str(cli),
+            "config",
+            "validate",
+            str(smoke_config),
+            working_directory=working_directory,
+            environment=isolated_environment,
+        )
+        doctor = run(
+            str(cli),
+            "doctor",
+            str(smoke_config),
+            working_directory=working_directory,
+            environment=isolated_environment,
+            expected_return_code=1,
+        )
+        expected_doctor_output = (
+            "[READY] config",
+            "[FAILED] model_credentials",
+            "[READY] storage",
+            "[DEGRADED] embedding",
+        )
+        if not all(marker in doctor.stdout for marker in expected_doctor_output):
+            raise RuntimeError(f"unexpected doctor output: {doctor.stdout!r}")
         run(
             str(python),
             "-c",
             (
                 "from importlib.resources import files; "
                 "import praxis; "
+                "from praxis import AudioInput, FileInput, ImageInput, UserInput, VideoInput; "
                 "assert praxis.__version__ == '1.0.0'; "
+                "assert UserInput(text='ok').text == 'ok'; "
+                "assert all(value is not None for value in "
+                "(AudioInput, FileInput, ImageInput, VideoInput)); "
                 "assert files('praxis').joinpath('py.typed').is_file(); "
                 "assert files('praxis.skills.builtins').joinpath("
                 "'task-planning', 'SKILL.md').is_file(); "
                 "from praxis.verification import VerifierRegistry; "
                 "assert VerifierRegistry is not None"
             ),
+            working_directory=working_directory,
+            environment=isolated_environment,
         )
         run(
             str(python),
@@ -78,6 +190,8 @@ def main() -> int:
                 "else:\n"
                 "    raise AssertionError('MCP extra unexpectedly installed')"
             ),
+            working_directory=working_directory,
+            environment=isolated_environment,
         )
     return 0
 
