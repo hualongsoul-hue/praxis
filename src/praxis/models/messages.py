@@ -1,10 +1,16 @@
-"""消息类型定义——跨 S4、S6、S7、S11 共享。"""
+"""消息类型与安全内容解析入口。
+
+`ContentPart` 仅是类型/Schema 别名。未受信任的数据必须通过
+`validate_content_part` 或 `validate_content_part_json` 解析；第三方直接创建的
+Pydantic `TypeAdapter` 不属于 Praxis SDK 的安全验证边界。
+"""
 
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
-from pydantic import ConfigDict, Field
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
 
+from praxis.exceptions import ModelValidationError
 from praxis.models.base import SafeBaseModel
 from praxis.models.inputs import InputKind
 from praxis.models.tools import ToolCall
@@ -91,6 +97,40 @@ ContentPart = Annotated[
     TextContent | ImageContent | AudioContent | VideoContent | FileContent,
     Field(discriminator="type"),
 ]
+
+
+def validate_content_part(value: object) -> ContentPart:
+    """Parse one content value through the input-free SDK validation boundary."""
+
+    validated: ContentPart | None = None
+    validation_failed = False
+    try:
+        validated = cast(
+            ContentPart,
+            TypeAdapter(ContentPart).validate_python(value),
+        )
+    except ValidationError:
+        validation_failed = True
+    if validation_failed or validated is None:
+        raise ModelValidationError("内容块输入验证失败")
+    return validated
+
+
+def validate_content_part_json(data: str | bytes | bytearray) -> ContentPart:
+    """Parse one JSON content value through the input-free SDK validation boundary."""
+
+    validated: ContentPart | None = None
+    validation_failed = False
+    try:
+        validated = cast(
+            ContentPart,
+            TypeAdapter(ContentPart).validate_json(data),
+        )
+    except ValidationError:
+        validation_failed = True
+    if validation_failed or validated is None:
+        raise ModelValidationError("内容块输入验证失败")
+    return validated
 
 
 class AttachmentMetadata(SafeBaseModel):

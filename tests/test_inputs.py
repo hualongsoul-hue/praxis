@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import io
+import json
 import socket
 import traceback
 from pathlib import Path
@@ -11,9 +12,9 @@ import httpx
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from pydantic import TypeAdapter
 
 import praxis
+import praxis.models as praxis_models
 from praxis import (
     AttachmentMetadata,
     AudioContent,
@@ -35,6 +36,8 @@ from praxis import (
     UserInput,
     VideoContent,
     VideoInput,
+    validate_content_part,
+    validate_content_part_json,
 )
 from praxis.config import InputConfig, ModelCapabilities
 from praxis.models import ContentPart, TextContent
@@ -847,9 +850,12 @@ def test_mime_allowlists_are_immutable() -> None:
         config.image_media_types.append("image/bmp")  # type: ignore[attr-defined]
 
 
-def test_content_part_is_top_level_strict_discriminated_public_type() -> None:
+def test_content_part_safe_parsers_are_public_and_round_trip() -> None:
     assert praxis.ContentPart is ContentPart
-    adapter = TypeAdapter(ContentPart)
+    assert praxis.validate_content_part is validate_content_part
+    assert validate_content_part is praxis_models.validate_content_part
+    assert praxis.validate_content_part_json is validate_content_part_json
+    assert validate_content_part_json is praxis_models.validate_content_part_json
     data = {
         "type": "file",
         "file": {
@@ -857,9 +863,11 @@ def test_content_part_is_top_level_strict_discriminated_public_type() -> None:
             "file_data": "data:text/plain;base64,ZmlsZQ==",
         },
     }
-    parsed = adapter.validate_python(data)
+    parsed = validate_content_part(data)
+    parsed_json = validate_content_part_json(json.dumps(data).encode("utf-8"))
     assert isinstance(parsed, FileContent)
     assert parsed.model_dump() == data
+    assert parsed_json == parsed
 
     with pytest.raises(ValueError):
         ResolvedUserInput.model_validate(
@@ -870,6 +878,51 @@ def test_content_part_is_top_level_strict_discriminated_public_type() -> None:
         )
     with pytest.raises(ValueError):
         UserInput(text="hello", unexpected=True)
+
+
+def test_official_content_and_user_input_parsers_never_expose_inputs() -> None:
+    secret_marker = "content-parser-secret-marker"
+    base64_marker = base64.b64encode(b"private-content-marker").decode("ascii")
+    secret_text = f"data:text/plain;base64,{base64_marker}-{secret_marker}"
+    secret_bytes = f"{secret_marker}-raw-bytes".encode()
+    markers = (
+        secret_marker,
+        base64_marker,
+        "data:text/plain;base64",
+        repr(secret_bytes),
+    )
+    invalid_content = {
+        "type": "file",
+        "file": {"filename": secret_marker, "file_data": secret_text},
+        "unexpected": secret_bytes,
+    }
+    invalid_json = json.dumps(
+        {
+            "type": "file",
+            "file": {"filename": secret_marker, "file_data": secret_text},
+            "unexpected": secret_marker,
+        }
+    ).encode("utf-8")
+    invalid_user = {
+        "text": secret_text,
+        "unexpected": secret_bytes,
+    }
+    invalid_user_json = json.dumps(
+        {"text": secret_text, "unexpected": secret_marker}
+    ).encode("utf-8")
+    producers = (
+        lambda: validate_content_part(invalid_content),
+        lambda: validate_content_part_json(invalid_json),
+        lambda: UserInput(text=secret_text, unexpected=secret_bytes),
+        lambda: UserInput.model_validate(invalid_user),
+        lambda: UserInput.model_validate_json(invalid_user_json),
+        lambda: UserInput.model_validate_strings(invalid_user),
+    )
+
+    for produce_error in producers:
+        with pytest.raises(ValueError) as captured:
+            produce_error()
+        assert_safe_validation_error(captured.value, markers)
 
 
 def test_httpx_logs_redacted_url_but_transport_receives_wire_target(

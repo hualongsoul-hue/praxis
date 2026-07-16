@@ -69,6 +69,8 @@ from praxis.models.messages import (
     TextContent,
     VideoContent,
     VideoUrl,
+    validate_content_part,
+    validate_content_part_json,
 )
 from praxis.models.orchestrator import (
     AgentEvent,
@@ -233,4 +235,6 @@ __all__ = [
     "VideoUrl",
     "WorkingMemory",
     "WorkingMemoryMessage",
+    "validate_content_part",
+    "validate_content_part_json",
 ]

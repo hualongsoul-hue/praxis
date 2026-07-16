@@ -9,7 +9,10 @@ from praxis.exceptions import ModelValidationError
 
 
 class SafeBaseModel(BaseModel):
-    """Convert Pydantic failures into input-free public exceptions."""
+    """Convert public constructor/model_validate failures into input-free exceptions.
+
+    Third-party raw Pydantic `TypeAdapter` calls are outside the Praxis SDK validation boundary.
+    """
 
     model_config = ConfigDict(hide_input_in_errors=True)
 
