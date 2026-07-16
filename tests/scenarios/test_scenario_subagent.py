@@ -22,7 +22,7 @@ from praxis.models.subagent import SubagentMode, SubagentSpec, SubagentStatus
 from praxis.persistence.store import PersistenceStore, create_store
 from praxis.subagent.isolation import IsolatedContext
 from praxis.tools.registry import ToolRegistry
-from tests.e2e.conftest import register_tool
+from tests.scenarios.conftest import register_tool
 
 
 @pytest.fixture

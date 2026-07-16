@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 from praxis.config.schemas import ContextConfig, OrchestratorConfig
 from praxis.models.orchestrator import TerminationReason
-from tests.e2e.conftest import build_loop, resolved_text_input
+from tests.scenarios.conftest import build_loop, resolved_text_input
 
 
 def make_raw_response(content: str = "") -> SimpleNamespace:
@@ -112,7 +112,7 @@ class TestContextOverflow:
         async def noop_handler(args: dict[str, Any]) -> str:
             return "ok"
 
-        from tests.e2e.conftest import register_tool
+        from tests.scenarios.conftest import register_tool
         register_tool(registry, "noop", noop_handler)
 
         mock_gateway.router.acompletion = AsyncMock(

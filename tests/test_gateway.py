@@ -32,6 +32,7 @@ from praxis.gateway.router import GatewayRouter
 from praxis.gateway.tasks import judge, summarize
 from praxis.models.gateway import JudgeResult
 from praxis.models.responses import ModelResponse, ModelResponseChunk
+from praxis.telemetry.metrics import MetricsCollector, use_metrics
 
 SAMPLE_DEPLOYMENTS = [
     ModelDeployment(model_name="default", model="openai/gpt-4o"),
@@ -197,15 +198,26 @@ class TestGatewayRouter:
 
         with pytest.raises(ValueError, match="estimated_tokens"):
             gw.reserve_usage(estimated_tokens=-1, estimated_cost=0.0)
-        with pytest.raises(BudgetExceededError, match="成本"):
+        with pytest.raises(BudgetExceededError, match="成本") as cost_error:
             gw.reserve_usage(estimated_tokens=1, estimated_cost=2.0)
+        assert type(cost_error.value) is BudgetExceededError
+        assert cost_error.value.details == {
+            "projected_cost": 2.0,
+            "max_budget": 1.0,
+        }
+        assert gw.reserved_tokens == 0
+        assert gw.reserved_spend_usd == 0.0
 
         reservation = gw.reserve_usage(estimated_tokens=3, estimated_cost=0.25)
+        assert gw.reserved_tokens == 3
+        assert gw.reserved_spend_usd == 0.25
         assert gw.settle_usage(
             reservation,
             actual_tokens=None,
             actual_cost=None,
         ) == (3, 0.25)
+        assert gw.reserved_tokens == 0
+        assert gw.reserved_spend_usd == 0.0
         assert gw.settle_usage(
             reservation,
             actual_tokens=10,
@@ -405,16 +417,23 @@ class TestChat:
                 max_tokens=4,
             ))
             await started.wait()
-            with pytest.raises(BudgetExceededError, match="Token"):
+            with pytest.raises(BudgetExceededError, match="Token") as budget_error:
                 await chat(
                     gw,
                     [{"role": "user", "content": "two"}],
                     max_tokens=4,
                 )
+            assert type(budget_error.value) is BudgetExceededError
+            assert budget_error.value.details == {
+                "projected_tokens": 10,
+                "max_total_tokens": 5,
+            }
+            assert gw.reserved_tokens == 5
             release.set()
             await first
 
         assert gw.total_tokens == 5
+        assert gw.reserved_tokens == 0
         assert gw.router.acompletion.await_count == 1
 
     async def test_chat_maps_exception(self) -> None:
@@ -578,6 +597,31 @@ class TestMetering:
         assert count == 42
         mock_tc.assert_called_once()
 
+    def test_get_token_count_falls_back_to_conservative_multimodal_bound(self) -> None:
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hello"},
+                    {"type": "input_audio", "input_audio": {"data": "UklGRg=="}},
+                ],
+            }
+        ]
+        expected = len(
+            json.dumps(
+                messages,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        with patch(
+            "praxis.gateway.metering.litellm.token_counter",
+            side_effect=ValueError("unsupported content block"),
+        ):
+            count = get_token_count(messages, model="contract")
+
+        assert count == expected
+
     @patch("litellm.get_max_tokens", return_value=128000)
     def test_get_max_tokens(self, mock_mt: MagicMock) -> None:
         max_t = get_max_tokens("gpt-4o")
@@ -644,9 +688,31 @@ class TestCallbacks:
         usage = SimpleNamespace(prompt_tokens=100, completion_tokens=50)
         response_obj = SimpleNamespace(usage=usage)
 
-        cb.log_success_event(kwargs, response_obj, start, end)
+        collector = MetricsCollector()
+        with (
+            use_metrics(collector),
+            patch("praxis.gateway.callbacks.litellm.completion_cost", return_value=0.25),
+        ):
+            cb.log_success_event(kwargs, response_obj, start, end)
+
+        metrics = collector.export_prometheus()
+        assert 'llm_tokens_input{model="gpt-4o"} 100.0' in metrics
+        assert 'llm_tokens_output{model="gpt-4o"} 50.0' in metrics
+        assert 'llm_cost{model="gpt-4o"} 0.25' in metrics
+        assert 'llm_requests_total{model="gpt-4o",status="success"} 1.0' in metrics
+        assert 'llm_latency_count{model="gpt-4o"} 1' in metrics
+        assert 'llm_latency_sum{model="gpt-4o"} 150.0' in metrics
 
     def test_log_failure_event(self) -> None:
         cb = TelemetryCallback()
         kwargs = {"model": "gpt-4o", "exception": ValueError("test")}
-        cb.log_failure_event(kwargs, None, None, None)
+        collector = MetricsCollector()
+        with use_metrics(collector):
+            cb.log_failure_event(kwargs, None, None, None)
+
+        metrics = collector.export_prometheus()
+        assert (
+            'llm_requests_total{error_type="ValueError",model="gpt-4o",status="error"} 1.0'
+            in metrics
+        )
+        assert 'llm_errors_total{error_type="ValueError",model="gpt-4o"} 1.0' in metrics

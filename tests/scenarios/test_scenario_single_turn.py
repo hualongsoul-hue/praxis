@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
-from tests.e2e.conftest import (
+from tests.scenarios.conftest import (
     build_loop,
     register_tool,
     resolved_text_input,

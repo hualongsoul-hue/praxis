@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock
 from praxis.guardrails.rules import GuardrailRule, RuleTarget
 from praxis.models.guardrails import VerdictType
 from praxis.models.orchestrator import TerminationReason
-from tests.e2e.conftest import build_loop, register_tool, resolved_text_input
+from tests.scenarios.conftest import build_loop, register_tool, resolved_text_input
 
 
 def make_raw_response(

@@ -1,5 +1,6 @@
 """Token 计量、成本估算与预算管控。"""
 
+import json
 from typing import Any
 
 import litellm
@@ -14,10 +15,23 @@ DEFAULT_MAX_TOKENS = 128_000
 
 def get_token_count(messages: list[dict[str, Any]], model: str = "default") -> int:
     """使用 LiteLLM 的模型 tokenizer 估算消息 Token 数。"""
-    return litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]
-        model=model,
-        messages=messages,
-    )
+    try:
+        return litellm.token_counter(  # pyright: ignore[reportUnknownMemberType]
+            model=model,
+            messages=messages,
+        )
+    except ValueError as exc:
+        encoded = json.dumps(
+            messages,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        log.debug(
+            "LiteLLM tokenizer does not support a content block; using a conservative byte bound",
+            model=model,
+            error=str(exc),
+        )
+        return len(encoded)
 
 
 def get_max_tokens(model: str = "default") -> int:

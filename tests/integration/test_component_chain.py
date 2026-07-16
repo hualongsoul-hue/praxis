@@ -44,7 +44,7 @@ from praxis.recovery.retry import RetryPolicy
 from praxis.session.checkpoint import CheckpointManager
 from praxis.session.core import SessionFactory
 from praxis.telemetry.logger import get_logger
-from praxis.telemetry.metrics import emit_metric
+from praxis.telemetry.metrics import MetricsCollector, emit_metric, use_metrics
 from praxis.tools.executor import ToolExecutor
 from praxis.tools.policy import ToolPolicy
 from praxis.tools.registry import ToolRegistry
@@ -129,8 +129,15 @@ class TestS2TelemetryChain:
 
     def test_metric_emission(self) -> None:
         """验证：指标发射不抛异常。"""
-        emit_metric("test_metric", 1.0, {"label": "integration"}, "counter")
-        emit_metric("test_histogram", 42.0, {}, "histogram")
+        collector = MetricsCollector()
+        with use_metrics(collector):
+            emit_metric("test_metric", 1.0, {"label": "integration"}, "counter")
+            emit_metric("test_histogram", 42.0, {}, "histogram")
+
+        metrics = collector.export_prometheus()
+        assert 'test_metric{label="integration"} 1.0' in metrics
+        assert "test_histogram_count 1" in metrics
+        assert "test_histogram_sum 42.0" in metrics
 
 
 # ── S4 + S7: Gateway → Context 链路验证 ──────────────────────────────────

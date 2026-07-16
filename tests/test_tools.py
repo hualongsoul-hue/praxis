@@ -7,6 +7,7 @@ import sys
 import traceback
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import httpx
 import pytest
@@ -418,9 +419,29 @@ class TestToolPolicy:
         with pytest.raises(ToolPolicyViolationError, match="未配置授权根目录"):
             policy.check_path("/any/path")
 
-    def test_network_allowed(self) -> None:
+    async def test_network_allowed(self) -> None:
         sandbox = ToolPolicy(ToolsConfig(network_allowed=True))
-        sandbox.check_network()
+        public_address = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+        with patch("praxis.network.socket.getaddrinfo", return_value=public_address):
+            target = await sandbox.check_url("https://EXAMPLE.com:443/contract?q=1")
+
+        assert target.original_url == "https://EXAMPLE.com:443/contract?q=1"
+        assert target.hostname == "example.com"
+        assert target.port == 443
+        assert target.host_header == "example.com:443"
+        assert target.addresses == ("93.184.216.34",)
+
+        changed_host_address = [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))
+        ]
+        with (
+            patch(
+                "praxis.network.socket.getaddrinfo",
+                return_value=changed_host_address,
+            ),
+            pytest.raises(ToolPolicyViolationError, match="私网"),
+        ):
+            await sandbox.check_url("https://changed.example/contract?q=1")
 
     def test_network_blocked_raises(self) -> None:
         sandbox = ToolPolicy(ToolsConfig(network_allowed=False))

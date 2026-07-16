@@ -307,10 +307,17 @@ class TestRootsManager:
 
     async def test_notify_roots_changed(self) -> None:
         mgr = RootsManager()
-        session = make_mock_session()
+        snapshots: list[list[str]] = []
+
+        class RecordingRootsSession:
+            async def send_roots_list_changed(self) -> None:
+                snapshots.append(mgr.get_roots())
+
+        session = RecordingRootsSession()
         mgr.register_session("srv", session)
+        mgr.set_roots(["/workspace/alpha", "/workspace/beta"])
         await mgr.notify_roots_changed()
-        session.send_roots_list_changed.assert_called_once()
+        assert snapshots == [["/workspace/alpha", "/workspace/beta"]]
 
 
 # ── Task 15.6: Lifecycle ────────────────────────────────────────────────

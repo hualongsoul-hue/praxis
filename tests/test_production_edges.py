@@ -109,29 +109,40 @@ class TestStreamAccumulatorEdges:
 class FakeRedis:
     def __init__(self) -> None:
         self.values: dict[str, bytes] = {}
-        self.keys: list[bytes | str] = []
-        self.ping = AsyncMock(return_value=True)
-        self.set = AsyncMock(side_effect=self.set_value)
-        self.get = AsyncMock(side_effect=self.get_value)
-        self.delete = AsyncMock(side_effect=self.delete_value)
-        self.aclose = AsyncMock()
+        self.scan_keys: list[bytes | str] = []
+        self.scan_patterns: list[str] = []
+        self.deleted_batches: list[tuple[bytes | str, ...]] = []
+        self.health_checks = 0
+        self.healthy = True
+        self.closed = False
 
-    async def set_value(self, key: str, value: bytes, nx: bool = False) -> bool:
+    async def ping(self) -> bool:
+        self.health_checks += 1
+        return self.healthy
+
+    async def set(self, key: str, value: bytes, nx: bool = False) -> bool:
         if nx and key in self.values:
             return False
         self.values[key] = value
         return True
 
-    async def get_value(self, key: str) -> bytes | None:
+    async def get(self, key: str) -> bytes | None:
         return self.values.get(key)
 
-    async def delete_value(self, *keys: bytes | str) -> int:
+    async def delete(self, *keys: bytes | str) -> int:
+        self.deleted_batches.append(keys)
+        for key in keys:
+            decoded = key.decode("utf-8") if isinstance(key, bytes) else key
+            self.values.pop(decoded, None)
         return len(keys)
 
     async def scan_iter(self, match: str):
-        del match
-        for key in self.keys:
+        self.scan_patterns.append(match)
+        for key in self.scan_keys:
             yield key
+
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 class TestRedisBackendEdges:
@@ -142,27 +153,31 @@ class TestRedisBackendEdges:
         client = FakeRedis()
         with patch("praxis.persistence.backends.redis.aioredis.from_url", return_value=client):
             backend = await RedisBackend.create("redis://example")
-        client.ping.assert_awaited_once()
+        assert client.health_checks == 1
+        assert client.healthy is True
         await backend.close()
-        client.aclose.assert_awaited_once()
+        assert client.closed is True
 
     async def test_crud_listing_and_batched_namespace_clear(self) -> None:
         client = FakeRedis()
         backend = RedisBackend(client)  # type: ignore[arg-type]
         await backend.save("ns", "one", b"1")
+        assert client.values == {"praxis:ns:one": b"1"}
         assert await backend.load("ns", "one") == b"1"
         assert await backend.save_if_absent("ns", "one", b"2") is False
         assert await backend.save_if_absent("ns", "two", b"2") is True
         assert await backend.load("ns", "missing") is None
         await backend.delete("ns", "one")
+        assert "praxis:ns:one" not in client.values
 
-        client.keys = [b"praxis:ns:b", "praxis:ns:a"]
+        client.scan_keys = [b"praxis:ns:b", "praxis:ns:a"]
         assert await backend.list_keys("ns") == ["a", "b"]
         assert await backend.list_keys("ns", prefix="a") == ["a", "b"]
+        assert client.scan_patterns == ["praxis:ns:*", "praxis:ns:a*"]
 
-        client.keys = [f"praxis:ns:{index}".encode() for index in range(501)]
+        client.scan_keys = [f"praxis:ns:{index}".encode() for index in range(501)]
         assert await backend.clear_namespace("ns") == 501
-        assert client.delete.await_count >= 3
+        assert [len(batch) for batch in client.deleted_batches[-2:]] == [500, 1]
 
 
 class TestVisualVerifierEdges:

@@ -69,6 +69,7 @@ strict_config = true
 strict_markers = true
 filterwarnings = ["error"]
 markers = [
+    "e2e: crosses a real process or TCP socket boundary",
     "live_model: requires PRAXIS_MODEL_API_KEY and access to the configured model endpoint",
     "redis: requires a reachable Redis test service",
 ]
