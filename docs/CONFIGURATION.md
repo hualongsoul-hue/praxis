@@ -26,8 +26,34 @@ gateway:
 `api_key_env` 只能是 `PRAXIS_MODEL_API_KEY`。密钥本身不能出现在 YAML 中。所有聊天、总结、判断、
 记忆处理、验证和 MCP Sampling 都使用 `default_model`；MCP Server 的模型 hint 不能覆盖它。
 
+`capabilities` 描述当前端点已验证的能力，不是 SDK 支持列表。Praxis 的输入传输层支持图片、音频、
+视频和文件；但只有在真实健康窗口中稳定成功的端点模态才能配置为 `true`。`false` 会在任何文件或
+网络 I/O 之前返回 `UnsupportedInputModalityError`，避免把未验证能力交给远端碰运气。
+
 启用 `max_budget` 时，每个部署必须提供可信的显式价格，或由 LiteLLM 返回可识别价格；价格未知时
 调用失败关闭。`max_total_tokens` 独立生效，不能通过零价格绕过。
+
+## 用户输入
+
+```yaml
+inputs:
+  allowed_paths:
+    - ./attachments
+  remote_enabled: false
+  allow_private_networks: false
+  max_attachment_bytes: 20000000
+  max_total_bytes: 50000000
+  max_redirects: 5
+  remote_timeout: 30.0
+```
+
+`allowed_paths` 为空时拒绝所有本地附件路径。Windows 可填写例如
+`D:\\AgentData\\attachments`，Linux 可填写 `/srv/praxis/attachments`。每个路径都按打开后的
+文件句柄再次校验，符号链接或重解析点不能逃逸授权根目录。
+
+URL 来源必须显式设置 `remote_enabled: true`。默认仍拒绝 URL 凭据、回环、私网、链路本地和
+非全局地址，并逐跳校验重定向。`max_attachment_bytes` 限制单附件；`max_total_bytes` 在读取或编码
+下一附件前限制整轮累计大小。
 
 ## 存储
 

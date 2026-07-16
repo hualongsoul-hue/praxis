@@ -52,27 +52,42 @@ async def live_gateway() -> AsyncIterator[GatewayRouter]:
 
 
 async def test_live_regular_response(live_gateway: GatewayRouter) -> None:
-    response = await chat(
-        live_gateway,
-        [{"role": "user", "content": "只回复单词 pong"}],
-        max_tokens=256,
-    )
+    response = None
+    error_category: str | None = None
+    try:
+        response = await chat(
+            live_gateway,
+            [{"role": "user", "content": "只回复单词 pong"}],
+            max_tokens=256,
+        )
+    except GatewayError as exc:
+        error_category = type(exc).__name__
 
+    if error_category is not None:
+        pytest.fail(f"regular response returned {error_category}")
+    assert response is not None
     assert response.content
     assert "pong" in response.content.lower()
     assert response.usage.total_tokens > 0
 
 
 async def test_live_streaming_response(live_gateway: GatewayRouter) -> None:
-    chunks = [
-        chunk
-        async for chunk in chat_stream(
-            live_gateway,
-            [{"role": "user", "content": "用一句简短中文问候"}],
-            max_tokens=256,
-        )
-    ]
+    chunks = []
+    error_category: str | None = None
+    try:
+        chunks = [
+            chunk
+            async for chunk in chat_stream(
+                live_gateway,
+                [{"role": "user", "content": "用一句简短中文问候"}],
+                max_tokens=256,
+            )
+        ]
+    except GatewayError as exc:
+        error_category = type(exc).__name__
 
+    if error_category is not None:
+        pytest.fail(f"streaming response returned {error_category}")
     assert chunks
     assert any(
         chunk.delta_content or chunk.delta_reasoning_content
@@ -98,14 +113,22 @@ async def test_live_forced_tool_call(live_gateway: GatewayRouter) -> None:
             },
         },
     ]
-    response = await chat(
-        live_gateway,
-        [{"role": "user", "content": "调用 echo，text 参数使用 hello"}],
-        tools=tools,
-        tool_choice={"type": "function", "function": {"name": "echo"}},
-        max_tokens=256,
-    )
+    response = None
+    error_category: str | None = None
+    try:
+        response = await chat(
+            live_gateway,
+            [{"role": "user", "content": "调用 echo，text 参数使用 hello"}],
+            tools=tools,
+            tool_choice={"type": "function", "function": {"name": "echo"}},
+            max_tokens=256,
+        )
+    except GatewayError as exc:
+        error_category = type(exc).__name__
 
+    if error_category is not None:
+        pytest.fail(f"forced tool call returned {error_category}")
+    assert response is not None
     assert response.tool_calls
     call = response.tool_calls[0]
     assert call.function.name == "echo"
@@ -117,12 +140,12 @@ async def test_live_stream_can_be_cancelled(live_gateway: GatewayRouter) -> None
 
     async def consume() -> None:
         started.set()
-        async for chunk in chat_stream(  # noqa: B007 - public discard name
+        async for chunk in chat_stream(
             live_gateway,
             [{"role": "user", "content": "写一篇较长的分布式系统说明"}],
             max_tokens=512,
         ):
-            pass
+            assert chunk is not None
 
     task = asyncio.create_task(consume())
     await started.wait()

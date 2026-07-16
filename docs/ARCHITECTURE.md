@@ -27,6 +27,12 @@ input guardrail -> prompt -> model -> parse -> approve/execute tools
                 -> verify -> checkpoint -> output guardrail -> response
 ```
 
+文本直接进入状态机；`UserInput` 会先经过会话拥有的 `InputResolver`。解析器在任何 I/O 前检查
+部署的 `ModelCapabilities`，随后对本地授权根目录或显式开启的远程来源执行安全读取，生成短生命周期
+Provider 内容块与不含 Base64/数据 URL 的文本投影。模型只在当前轮次看到二进制内容；护栏、记忆、
+技能检索和规划只消费安全文本投影。成功、异常、取消和流生成器关闭都会在检查点前清除历史中的
+附件负载。
+
 会话状态为 `INITIALIZING`、`ACTIVE`、`WAITING_APPROVAL` 或 `TERMINATED`。同一个
 `AgentSession` 只能执行一个轮次，不同 Session 可以并行。取消会沿模型流、工具进程、子代理和
 后台任务传播；关闭会先阻止新工作，再终止会话与子任务，最后冲刷审计并关闭外部资源。
@@ -35,6 +41,7 @@ input guardrail -> prompt -> model -> parse -> approve/execute tools
 
 - Runtime：网关、存储、审计、指标、任务监督器和注入的 Provider。
 - AgentSession：编排器、上下文、记忆 Worker、检查点和会话级 MCP 退出栈。
+- InputResolver：会话级输入策略、授权路径和临时 Provider 内容；不持久化附件字节。
 - 子代理：由 Runtime 创建和登记，只继承冻结配置与显式工具子集；不能递归获得子代理工具。
 - 宿主：根日志配置、全局 OpenTelemetry Provider、Web 服务器和进程信号策略。
 

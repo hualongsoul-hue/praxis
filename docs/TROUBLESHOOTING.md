@@ -26,6 +26,19 @@ praxis config validate config.yaml
 空 `tools.allowed_paths` 会拒绝文件访问，`shell_enabled` 默认是 `false`。确认绝对路径位于授权根目录，
 并提供异步审批处理器。不要为了排错全局开放文件系统或私网访问。
 
+## 多模态输入在本地被拒绝
+
+`UnsupportedInputModalityError` 表示所选部署的 `capabilities` 未声明该模态；这与 SDK 是否能构造
+内容块无关。只有在“文本控制成功 → 模态调用成功 → 文本控制成功”的真实端点健康窗口中重复验证
+后，才把对应字段设为 `true`。
+
+`InputPathError` 通常表示本地附件不在 `inputs.allowed_paths` 内，或打开后发现符号链接/重解析点
+逃逸。`InputSizeLimitError` 由单附件或整轮总字节上限触发。URL 输入还要求
+`inputs.remote_enabled: true`；不要为绕过 SSRF 防护而开启私网访问。
+
+若文本控制也返回 `ProviderUnavailableError`，当前窗口只能说明端点整体不可用，不能据此判断某种
+模态不受支持。等待端点恢复并重新执行 live-model 套件，不要将测试改成“成功或任意错误都通过”。
+
 ## 视觉验证不可用
 
 需要同时满足：安装 `praxis[visual]`、执行 `playwright install chromium`、配置

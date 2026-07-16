@@ -42,6 +42,18 @@ gateway:
   # max_total_tokens: 1000000
   # max_budget: 10.0  # USD 成本上限
 
+# ── 用户输入解析 ──────────────────────────────────────────
+inputs:
+  # 本地附件必须位于至少一个授权根目录内；空列表拒绝所有本地路径。
+  allowed_paths:
+    - "./attachments"
+  remote_enabled: false       # URL 附件必须显式启用
+  allow_private_networks: false
+  max_attachment_bytes: 20000000
+  max_total_bytes: 50000000
+  max_redirects: 5
+  remote_timeout: 30.0
+
 # ── S5 工具系统 ────────────────────────────────────────────
 tools:
   allowed_paths: []        # 空 = 拒绝所有文件访问
