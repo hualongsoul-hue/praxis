@@ -53,9 +53,9 @@ class SqliteBackend:
         engine: AsyncEngine,
         session_factory: async_sessionmaker[AsyncSession],
     ) -> None:
-        self._engine = engine
-        self._session_factory = session_factory
-        self._closed = False
+        self.engine = engine
+        self.session_factory = session_factory
+        self.closed = False
 
     @classmethod
     async def create(cls, path: str) -> "SqliteBackend":
@@ -69,7 +69,7 @@ class SqliteBackend:
 
         # 生产并发加固：WAL 提升读写并发，busy_timeout 缓解 "database is locked"，
         # NORMAL 同步级别在 WAL 下兼顾持久性与吞吐。
-        def _set_sqlite_pragmas(dbapi_conn: Any, _record: Any) -> None:
+        def set_sqlite_pragmas(dbapi_conn: Any, _record: Any) -> None:
             cur = dbapi_conn.cursor()
             cur.execute("PRAGMA journal_mode=WAL")
             cur.execute("PRAGMA busy_timeout=5000")
@@ -77,7 +77,7 @@ class SqliteBackend:
             cur.execute("PRAGMA foreign_keys=ON")
             cur.close()
 
-        event.listen(engine.sync_engine, "connect", _set_sqlite_pragmas)
+        event.listen(engine.sync_engine, "connect", set_sqlite_pragmas)
 
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
@@ -85,7 +85,7 @@ class SqliteBackend:
         return cls(engine, session_factory)
 
     async def save(self, namespace: str, key: str, data: bytes) -> None:
-        async with self._session_factory() as session:
+        async with self.session_factory() as session:
             existing = await session.get(KVEntry, (namespace, key))
             if existing:
                 existing.value = data
@@ -95,7 +95,7 @@ class SqliteBackend:
             await session.commit()
 
     async def save_if_absent(self, namespace: str, key: str, data: bytes) -> bool:
-        async with self._session_factory() as session:
+        async with self.session_factory() as session:
             session.add(KVEntry(namespace=namespace, key=key, value=data))
             try:
                 await session.commit()
@@ -105,12 +105,12 @@ class SqliteBackend:
             return True
 
     async def load(self, namespace: str, key: str) -> bytes | None:
-        async with self._session_factory() as session:
+        async with self.session_factory() as session:
             entry = await session.get(KVEntry, (namespace, key))
             return bytes(entry.value) if entry else None
 
     async def delete(self, namespace: str, key: str) -> None:
-        async with self._session_factory() as session:
+        async with self.session_factory() as session:
             stmt = delete(KVEntry).where(
                 KVEntry.namespace == namespace,
                 KVEntry.key == key,
@@ -121,7 +121,7 @@ class SqliteBackend:
     async def list_keys(
         self, namespace: str, prefix: str | None = None
     ) -> list[str]:
-        async with self._session_factory() as session:
+        async with self.session_factory() as session:
             stmt = select(KVEntry.key).where(KVEntry.namespace == namespace)
             if prefix:
                 stmt = stmt.where(KVEntry.key.startswith(prefix))
@@ -129,14 +129,14 @@ class SqliteBackend:
             return [row[0] for row in result.all()]
 
     async def clear_namespace(self, namespace: str) -> int:
-        async with self._session_factory() as session:
+        async with self.session_factory() as session:
             stmt = delete(KVEntry).where(KVEntry.namespace == namespace)
             result = await session.execute(stmt)
             await session.commit()
             return result.rowcount  # type: ignore[return-value]
 
     async def close(self) -> None:
-        if self._closed:
+        if self.closed:
             return
-        await self._engine.dispose()
-        self._closed = True
+        await self.engine.dispose()
+        self.closed = True

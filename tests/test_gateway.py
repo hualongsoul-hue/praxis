@@ -299,26 +299,26 @@ class TestChat:
     async def test_chat_success(self) -> None:
         gw = GatewayRouter(make_config())
         raw = make_raw_response(content="answer")
-        gw._router.acompletion = AsyncMock(return_value=raw)
+        gw.router.acompletion = AsyncMock(return_value=raw)
 
         resp = await chat(gw, [{"role": "user", "content": "hi"}])
         assert resp.content == "answer"
-        gw._router.acompletion.assert_called_once()
+        gw.router.acompletion.assert_called_once()
 
     async def test_tool_calls_bypass_litellm_mcp_proxy_bridge(self) -> None:
         gw = GatewayRouter(make_config())
-        gw._router.acompletion = AsyncMock(return_value=make_raw_response())
+        gw.router.acompletion = AsyncMock(return_value=make_raw_response())
         tools = [{"type": "function", "function": {"name": "echo"}}]
 
         await chat(gw, [{"role": "user", "content": "hi"}], tools=tools)
 
-        kwargs = gw._router.acompletion.await_args.kwargs
+        kwargs = gw.router.acompletion.await_args.kwargs
         assert kwargs["tools"] == tools
         assert kwargs["_skip_mcp_handler"] is True
 
     async def test_chat_records_actual_tokens(self) -> None:
         gw = GatewayRouter(make_config())
-        gw._router.acompletion = AsyncMock(return_value=make_raw_response(
+        gw.router.acompletion = AsyncMock(return_value=make_raw_response(
             prompt_tokens=11,
             completion_tokens=7,
         ))
@@ -329,24 +329,24 @@ class TestChat:
 
     async def test_token_limit_is_independent_from_cost_budget(self) -> None:
         gw = GatewayRouter(make_config(max_total_tokens=10, max_budget=None))
-        gw._router.acompletion = AsyncMock(return_value=make_raw_response())
+        gw.router.acompletion = AsyncMock(return_value=make_raw_response())
         with (
             patch("praxis.gateway.chat.get_token_count", return_value=11),
             pytest.raises(BudgetExceededError, match="Token"),
         ):
             await chat(gw, [{"role": "user", "content": "too large"}])
-        gw._router.acompletion.assert_not_called()
+        gw.router.acompletion.assert_not_called()
 
     async def test_unknown_model_price_fails_closed_when_budget_enabled(self) -> None:
         gw = GatewayRouter(make_config(max_budget=1.0))
-        gw._router.acompletion = AsyncMock(return_value=make_raw_response())
+        gw.router.acompletion = AsyncMock(return_value=make_raw_response())
         with (
             patch("praxis.gateway.chat.get_token_count", return_value=2),
             patch("praxis.gateway.chat.estimate_input_cost", return_value=None),
             pytest.raises(BudgetExceededError, match="价格"),
         ):
             await chat(gw, [{"role": "user", "content": "hi"}])
-        gw._router.acompletion.assert_not_called()
+        gw.router.acompletion.assert_not_called()
 
     async def test_gateway_enforces_shared_concurrency_limit(self) -> None:
         gw = GatewayRouter(make_config(max_concurrent_requests=1))
@@ -361,7 +361,7 @@ class TestChat:
             active -= 1
             return make_raw_response()
 
-        gw._router.acompletion = AsyncMock(side_effect=completion)
+        gw.router.acompletion = AsyncMock(side_effect=completion)
         await asyncio.gather(
             chat(gw, [{"role": "user", "content": "one"}]),
             chat(gw, [{"role": "user", "content": "two"}]),
@@ -387,7 +387,7 @@ class TestChat:
             await release.wait()
             return make_raw_response(prompt_tokens=1, completion_tokens=4)
 
-        gw._router.acompletion = AsyncMock(side_effect=completion)
+        gw.router.acompletion = AsyncMock(side_effect=completion)
         with patch("praxis.gateway.chat.get_token_count", return_value=1):
             first = asyncio.create_task(chat(
                 gw,
@@ -405,13 +405,13 @@ class TestChat:
             await first
 
         assert gw.total_tokens == 5
-        assert gw._router.acompletion.await_count == 1
+        assert gw.router.acompletion.await_count == 1
 
     async def test_chat_maps_exception(self) -> None:
         import litellm
 
         gw = GatewayRouter(make_config())
-        gw._router.acompletion = AsyncMock(
+        gw.router.acompletion = AsyncMock(
             side_effect=litellm.AuthenticationError(
                 message="Invalid key", llm_provider="openai", model="gpt-4o"
             )
@@ -427,7 +427,7 @@ class TestChat:
             yield make_raw_stream_chunk(content=" world")
             yield make_raw_stream_chunk(content=None, finish_reason="stop")
 
-        gw._router.acompletion = AsyncMock(return_value=mock_stream())
+        gw.router.acompletion = AsyncMock(return_value=mock_stream())
 
         chunks: list[ModelResponseChunk] = []
         async for chunk in chat_stream(gw, [{"role": "user", "content": "hi"}]):
@@ -451,7 +451,7 @@ class TestChat:
                 )
             yield make_raw_stream_chunk(content="ok")
 
-        gw._router.acompletion = AsyncMock(return_value=warning_stream())
+        gw.router.acompletion = AsyncMock(return_value=warning_stream())
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
@@ -472,13 +472,13 @@ class TestChat:
             yield make_raw_stream_chunk(content="partial")
             raise RuntimeError("connection lost")
 
-        gw._router.acompletion = AsyncMock(return_value=broken_stream())
+        gw.router.acompletion = AsyncMock(return_value=broken_stream())
         chunks: list[ModelResponseChunk] = []
         with pytest.raises(GatewayError):
             async for chunk in chat_stream(gw, [{"role": "user", "content": "hi"}]):
                 chunks.append(chunk)
         assert [chunk.delta_content for chunk in chunks] == ["partial"]
-        gw._router.acompletion.assert_awaited_once()
+        gw.router.acompletion.assert_awaited_once()
 
     async def test_stream_cancellation_settles_budget_and_releases_slot(self) -> None:
         deployment = ModelDeployment(
@@ -498,7 +498,7 @@ class TestChat:
             yield make_raw_stream_chunk(content="partial")
             await asyncio.Event().wait()
 
-        gw._router.acompletion = AsyncMock(return_value=pending_stream())
+        gw.router.acompletion = AsyncMock(return_value=pending_stream())
 
         async def consume() -> None:
             async for _chunk in chat_stream(
@@ -527,7 +527,7 @@ class TestTasks:
     async def test_summarize(self) -> None:
         gw = GatewayRouter(make_config())
         raw = make_raw_response(content="这是摘要内容")
-        gw._router.acompletion = AsyncMock(return_value=raw)
+        gw.router.acompletion = AsyncMock(return_value=raw)
 
         result = await summarize(gw, "一段很长的文本...", instruction="请摘要")
         assert result == "这是摘要内容"
@@ -540,7 +540,7 @@ class TestTasks:
             "reasoning": "内容符合标准",
         })
         raw = make_raw_response(content=judge_json)
-        gw._router.acompletion = AsyncMock(return_value=raw)
+        gw.router.acompletion = AsyncMock(return_value=raw)
 
         result = await judge(gw, "是否正确", "待评估内容")
         assert isinstance(result, JudgeResult)
@@ -551,7 +551,7 @@ class TestTasks:
     async def test_judge_invalid_json_fallback(self) -> None:
         gw = GatewayRouter(make_config())
         raw = make_raw_response(content="这不是 JSON")
-        gw._router.acompletion = AsyncMock(return_value=raw)
+        gw.router.acompletion = AsyncMock(return_value=raw)
 
         result = await judge(gw, "是否正确", "待评估内容")
         assert result.verdict is False

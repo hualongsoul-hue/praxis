@@ -87,7 +87,7 @@ class FakeChatSession:
 
 
 class FakeChatRuntime:
-    def __init__(self, _config: object) -> None:
+    def __init__(self, gateway_config: object) -> None:
         self.chat_session = FakeChatSession()
 
     async def __aenter__(self):
@@ -111,6 +111,6 @@ def test_chat_handles_messages_empty_input_and_exit(capsys) -> None:
 
 
 def test_chat_reports_runtime_failure(capsys) -> None:
-    with patch("praxis.__main__._chat", side_effect=RuntimeError("startup")):
+    with patch("praxis.__main__.chat_command", side_effect=RuntimeError("startup")):
         assert main(["chat"]) == 1
     assert "RuntimeError" in capsys.readouterr().err

@@ -78,36 +78,36 @@ class StructuredLogger:
     """
 
     def __init__(self, name: str, logger: logging.Logger) -> None:
-        self._name = name
-        self._logger = logger
-        self._context: dict[str, Any] = {"component": name}
+        self.logger_name = name
+        self.logger = logger
+        self.log_context: dict[str, Any] = {"component": name}
 
     def bind(self, **kwargs: Any) -> "StructuredLogger":
         """创建绑定额外上下文字段的新 Logger 实例。"""
-        new = StructuredLogger(self._name, self._logger)
-        new._context = {**self._context, **kwargs}
+        new = StructuredLogger(self.logger_name, self.logger)
+        new.log_context = {**self.log_context, **kwargs}
         return new
 
     def debug(self, msg: str, **kwargs: Any) -> None:
-        self._log(logging.DEBUG, msg, **kwargs)
+        self.write_log(logging.DEBUG, msg, **kwargs)
 
     def info(self, msg: str, **kwargs: Any) -> None:
-        self._log(logging.INFO, msg, **kwargs)
+        self.write_log(logging.INFO, msg, **kwargs)
 
     def warning(self, msg: str, **kwargs: Any) -> None:
-        self._log(logging.WARNING, msg, **kwargs)
+        self.write_log(logging.WARNING, msg, **kwargs)
 
     def error(self, msg: str, **kwargs: Any) -> None:
-        self._log(logging.ERROR, msg, **kwargs)
+        self.write_log(logging.ERROR, msg, **kwargs)
 
     def critical(self, msg: str, **kwargs: Any) -> None:
-        self._log(logging.CRITICAL, msg, **kwargs)
+        self.write_log(logging.CRITICAL, msg, **kwargs)
 
-    def _log(self, level: int, msg: str, **kwargs: Any) -> None:
-        if not self._logger.isEnabledFor(level):
+    def write_log(self, level: int, msg: str, **kwargs: Any) -> None:
+        if not self.logger.isEnabledFor(level):
             return
-        extra = {**self._context, **kwargs}
-        self._logger.log(level, msg, extra=extra)
+        extra = {**self.log_context, **kwargs}
+        self.logger.log(level, msg, extra=extra)
 
 
 def configure_logging(config: TelemetryConfig) -> None:

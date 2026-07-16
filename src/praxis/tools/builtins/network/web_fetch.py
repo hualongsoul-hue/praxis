@@ -29,7 +29,7 @@ DEFINITION = ToolDefinition(
     ),
 )
 
-_REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
+REDIRECT_STATUS_CODES = frozenset({301, 302, 303, 307, 308})
 
 
 def create_handler(policy: ToolPolicy, client: httpx.AsyncClient | None = None):
@@ -47,7 +47,7 @@ def create_handler(policy: ToolPolicy, client: httpx.AsyncClient | None = None):
                 request = active_client.build_request("GET", current_url)
                 response = await active_client.send(request, stream=True)
                 try:
-                    if response.status_code in _REDIRECT_CODES:
+                    if response.status_code in REDIRECT_STATUS_CODES:
                         location = response.headers.get("location")
                         if not location:
                             raise ToolPolicyViolationError("重定向响应缺少 Location")

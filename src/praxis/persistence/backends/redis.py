@@ -18,7 +18,7 @@ class RedisBackend:
     """Redis 异步存储后端。"""
 
     def __init__(self, client: aioredis.Redis) -> None:
-        self._client = client
+        self.client = client
 
     @classmethod
     async def create(cls, url: str | None) -> "RedisBackend":
@@ -32,22 +32,22 @@ class RedisBackend:
         )
         return cls(client)
 
-    def _full_key(self, namespace: str, key: str) -> str:
+    def full_key(self, namespace: str, key: str) -> str:
         return f"{KEY_PREFIX}:{namespace}:{key}"
 
     async def save(self, namespace: str, key: str, data: bytes) -> None:
-        await self._client.set(self._full_key(namespace, key), data)
+        await self.client.set(self.full_key(namespace, key), data)
 
     async def save_if_absent(self, namespace: str, key: str, data: bytes) -> bool:
-        created = await self._client.set(self._full_key(namespace, key), data, nx=True)
+        created = await self.client.set(self.full_key(namespace, key), data, nx=True)
         return bool(created)
 
     async def load(self, namespace: str, key: str) -> bytes | None:
-        result = await self._client.get(self._full_key(namespace, key))
+        result = await self.client.get(self.full_key(namespace, key))
         return bytes(result) if result else None
 
     async def delete(self, namespace: str, key: str) -> None:
-        await self._client.delete(self._full_key(namespace, key))
+        await self.client.delete(self.full_key(namespace, key))
 
     async def list_keys(
         self, namespace: str, prefix: str | None = None
@@ -60,7 +60,7 @@ class RedisBackend:
         keys: list[str] = []
         iterator = cast(
             AsyncIterator[bytes | str],
-            self._client.scan_iter(match=pattern),  # pyright: ignore[reportUnknownMemberType]
+            self.client.scan_iter(match=pattern),  # pyright: ignore[reportUnknownMemberType]
         )
         async for raw_key in iterator:
             decoded = raw_key.decode("utf-8") if isinstance(raw_key, bytes) else raw_key
@@ -73,16 +73,16 @@ class RedisBackend:
         batch: list[bytes | str] = []
         iterator = cast(
             AsyncIterator[bytes | str],
-            self._client.scan_iter(match=pattern),  # pyright: ignore[reportUnknownMemberType]
+            self.client.scan_iter(match=pattern),  # pyright: ignore[reportUnknownMemberType]
         )
         async for raw_key in iterator:
             batch.append(raw_key)
             if len(batch) >= 500:
-                count += int(await self._client.delete(*batch))
+                count += int(await self.client.delete(*batch))
                 batch.clear()
         if batch:
-            count += int(await self._client.delete(*batch))
+            count += int(await self.client.delete(*batch))
         return count
 
     async def close(self) -> None:
-        await self._client.aclose()
+        await self.client.aclose()

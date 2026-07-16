@@ -24,9 +24,9 @@ class ToolExecutor:
     """工具执行管线。"""
 
     def __init__(self, registry: ToolRegistry, sandbox: ToolPolicy) -> None:
-        self._registry = registry
-        self._sandbox = sandbox
-        self._write_lock = asyncio.Lock()
+        self.registry = registry
+        self.sandbox = sandbox
+        self.write_lock = asyncio.Lock()
 
     async def execute(
         self,
@@ -49,7 +49,7 @@ class ToolExecutor:
         """
         start = time.perf_counter()
 
-        entry = self._registry.get_entry(name)
+        entry = self.registry.get_entry(name)
         defn = entry.definition
         meta = defn.metadata
 
@@ -63,7 +63,7 @@ class ToolExecutor:
                 execution_time_ms=(time.perf_counter() - start) * 1000,
             )
 
-        timeout = meta.timeout_seconds or self._sandbox.default_timeout
+        timeout = meta.timeout_seconds or self.sandbox.default_timeout
 
         try:
             if meta.readonly:
@@ -72,7 +72,7 @@ class ToolExecutor:
                     timeout=timeout,
                 )
             else:
-                async with self._write_lock:
+                async with self.write_lock:
                     content = await asyncio.wait_for(
                         entry.handler(arguments),
                         timeout=timeout,

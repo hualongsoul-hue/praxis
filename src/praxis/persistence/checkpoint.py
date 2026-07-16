@@ -16,7 +16,7 @@ class CheckpointManager:
     """检查点管理器。"""
 
     def __init__(self, store: PersistenceStore) -> None:
-        self._store = store
+        self.store = store
 
     async def save_checkpoint(
         self,
@@ -40,7 +40,7 @@ class CheckpointManager:
             description=description,
         )
         key = f"{session_id}:{cp.checkpoint_id}"
-        await self._store.save(
+        await self.store.save(
             CHECKPOINT_NAMESPACE,
             key,
             cp.model_dump(mode="json"),
@@ -56,7 +56,7 @@ class CheckpointManager:
         Returns:
             状态快照字典，不存在时返回 None。
         """
-        data = await self._store.load(CHECKPOINT_NAMESPACE, checkpoint_id)
+        data = await self.store.load(CHECKPOINT_NAMESPACE, checkpoint_id)
         if data is None:
             return None
         cp = Checkpoint.from_storage(data)
@@ -71,12 +71,12 @@ class CheckpointManager:
         Returns:
             检查点列表，按 created_at 升序排列。
         """
-        keys = await self._store.list_keys(
+        keys = await self.store.list_keys(
             CHECKPOINT_NAMESPACE, prefix=f"{session_id}:"
         )
         checkpoints: list[Checkpoint] = []
         for key in keys:
-            data = await self._store.load(CHECKPOINT_NAMESPACE, key)
+            data = await self.store.load(CHECKPOINT_NAMESPACE, key)
             if data is not None:
                 checkpoints.append(Checkpoint.from_storage(data))
         return sorted(checkpoints, key=lambda c: c.created_at)

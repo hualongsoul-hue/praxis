@@ -14,7 +14,7 @@ from praxis.gateway.router import GatewayRouter
 pytestmark = pytest.mark.asyncio(loop_scope="module")
 
 
-def _gateway() -> GatewayRouter:
+def gateway() -> GatewayRouter:
     cfg = GatewayConfig(
         deployments=[ModelDeployment(model="gpt-4o-mini")],
         default_model="default",
@@ -24,7 +24,7 @@ def _gateway() -> GatewayRouter:
 
 class TestGatewayLiteLLMPath:
     async def test_chat_real_mapping(self) -> None:
-        gw = _gateway()
+        gw = gateway()
         resp = await chat(
             gw, [{"role": "user", "content": "hi"}], mock_response="你好世界",
         )
@@ -34,7 +34,7 @@ class TestGatewayLiteLLMPath:
         assert resp.usage is not None
 
     async def test_chat_stream_real_mapping(self) -> None:
-        gw = _gateway()
+        gw = gateway()
         parts: list[str] = []
         async for chunk in chat_stream(
             gw, [{"role": "user", "content": "hi"}], mock_response="流式回复",
@@ -45,13 +45,13 @@ class TestGatewayLiteLLMPath:
 
     async def test_budget_accumulates_on_real_path(self) -> None:
         """走真实 chat 路径后，累计花费应被记录（≥0，mock 成本可能为 0）。"""
-        gw = _gateway()
+        gw = gateway()
         await chat(gw, [{"role": "user", "content": "hi"}], mock_response="ok")
         assert gw.total_spend >= 0.0
 
     async def test_stream_accumulates_spend(self) -> None:
         """流式调用也须累计花费（此前 chat_stream 不计入预算 → max_budget 失效）。"""
-        gw = _gateway()
+        gw = gateway()
         got_usage = False
         async for chunk in chat_stream(
             gw, [{"role": "user", "content": "hi"}], mock_response="流式",

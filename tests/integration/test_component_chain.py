@@ -340,11 +340,11 @@ class TestS11S12OrchestrationSessionChain:
         mock_gw.router = MagicMock()
         session = await factory.create_session(guardrails=guardrails, gateway=mock_gw)
         try:
-            self._assert_session_complete(session, store, guardrails)
+            self.assert_session_complete(session, store, guardrails)
         finally:
             await session.terminate()
 
-    def _assert_session_complete(self, session, store, guardrails) -> None:
+    def assert_session_complete(self, session, store, guardrails) -> None:
 
         # 验证所有组件链接完整
         assert session.session_id

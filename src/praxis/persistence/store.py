@@ -71,80 +71,80 @@ class PersistenceStore:
     """
 
     def __init__(self, backend: StorageBackend) -> None:
-        self._backend = backend
-        self._closed = False
-        self._closing = False
-        self._active_operations = 0
-        self._condition = asyncio.Condition()
+        self.backend = backend
+        self.closed = False
+        self.closing = False
+        self.active_operations = 0
+        self.operation_condition = asyncio.Condition()
 
     @asynccontextmanager
-    async def _operation(self) -> AsyncGenerator[None]:
-        async with self._condition:
-            if self._closed or self._closing:
+    async def run_storage_operation(self) -> AsyncGenerator[None]:
+        async with self.operation_condition:
+            if self.closed or self.closing:
                 raise PersistenceError("持久化存储已关闭")
-            self._active_operations += 1
+            self.active_operations += 1
         try:
             yield
         finally:
-            async with self._condition:
-                self._active_operations -= 1
-                if self._active_operations == 0:
-                    self._condition.notify_all()
+            async with self.operation_condition:
+                self.active_operations -= 1
+                if self.active_operations == 0:
+                    self.operation_condition.notify_all()
 
     async def save(self, namespace: str, key: str, data: Any) -> None:
         """保存数据到指定命名空间。"""
         raw = serialize(data)
-        async with self._operation():
-            await self._backend.save(namespace, key, raw)
+        async with self.run_storage_operation():
+            await self.backend.save(namespace, key, raw)
 
     async def save_if_absent(self, namespace: str, key: str, data: Any) -> bool:
         """仅当键不存在时原子写入；成功创建返回 ``True``。"""
         raw = serialize(data)
-        async with self._operation():
-            return await self._backend.save_if_absent(namespace, key, raw)
+        async with self.run_storage_operation():
+            return await self.backend.save_if_absent(namespace, key, raw)
 
     async def load(self, namespace: str, key: str) -> Any | None:
         """从指定命名空间加载数据，不存在时返回 None。"""
-        async with self._operation():
-            raw = await self._backend.load(namespace, key)
+        async with self.run_storage_operation():
+            raw = await self.backend.load(namespace, key)
         if raw is None:
             return None
         return deserialize(raw)
 
     async def delete(self, namespace: str, key: str) -> None:
         """删除指定命名空间中的数据。"""
-        async with self._operation():
-            await self._backend.delete(namespace, key)
+        async with self.run_storage_operation():
+            await self.backend.delete(namespace, key)
 
     async def list_keys(
         self, namespace: str, prefix: str | None = None
     ) -> list[str]:
         """列出指定命名空间中的所有键，可按前缀过滤。"""
-        async with self._operation():
-            return await self._backend.list_keys(namespace, prefix)
+        async with self.run_storage_operation():
+            return await self.backend.list_keys(namespace, prefix)
 
     async def clear_namespace(self, namespace: str) -> int:
         """清理指定命名空间的所有数据。返回清理的条目数。"""
-        async with self._operation():
-            return await self._backend.clear_namespace(namespace)
+        async with self.run_storage_operation():
+            return await self.backend.clear_namespace(namespace)
 
     async def close(self) -> None:
         """关闭存储后端连接。"""
-        async with self._condition:
-            if self._closed:
+        async with self.operation_condition:
+            if self.closed:
                 return
-            if self._closing:
-                await self._condition.wait_for(lambda: self._closed)
+            if self.closing:
+                await self.operation_condition.wait_for(lambda: self.closed)
                 return
-            self._closing = True
-            await self._condition.wait_for(lambda: self._active_operations == 0)
+            self.closing = True
+            await self.operation_condition.wait_for(lambda: self.active_operations == 0)
         try:
-            await self._backend.close()
+            await self.backend.close()
         finally:
-            async with self._condition:
-                self._closed = True
-                self._closing = False
-                self._condition.notify_all()
+            async with self.operation_condition:
+                self.closed = True
+                self.closing = False
+                self.operation_condition.notify_all()
 
 
 async def create_store(config: PersistenceConfig) -> PersistenceStore:

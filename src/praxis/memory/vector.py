@@ -112,13 +112,13 @@ class VectorStore:
             self.default_embed if api_base else self.local_embed
         )
         self.index: dict[str, tuple[MemoryEntry, list[float]]] = {}
-        self._client: httpx.AsyncClient | None = None
+        self.client: httpx.AsyncClient | None = None
 
-    def _get_client(self) -> httpx.AsyncClient:
+    def get_client(self) -> httpx.AsyncClient:
         """惰性创建并复用共享 httpx 客户端（连接池）。"""
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(timeout=self.timeout)
-        return self._client
+        if self.client is None or self.client.is_closed:
+            self.client = httpx.AsyncClient(timeout=self.timeout)
+        return self.client
 
     async def default_embed(self, text: str) -> list[float]:
         if self.api_base is None:
@@ -128,7 +128,7 @@ class VectorStore:
             api_base=self.api_base,
             api_key=self.api_key,
             timeout=self.timeout,
-            client=self._get_client(),
+            client=self.get_client(),
         )
 
     async def local_embed(self, text: str) -> list[float]:
@@ -137,9 +137,9 @@ class VectorStore:
 
     async def aclose(self) -> None:
         """关闭共享 httpx 客户端。"""
-        if self._client is not None and not self._client.is_closed:
-            await self._client.aclose()
-        self._client = None
+        if self.client is not None and not self.client.is_closed:
+            await self.client.aclose()
+        self.client = None
 
     async def add(self, entry: MemoryEntry) -> None:
         """添加记忆并建立嵌入索引。"""

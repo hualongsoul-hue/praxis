@@ -13,7 +13,7 @@ from praxis import PraxisRuntime, __version__, load_config
 from praxis.config.settings import PraxisConfig
 from praxis.persistence.store import create_store
 
-_SECRET_CONFIG_KEYS = frozenset({
+SECRET_CONFIG_KEYS = frozenset({
     "api_key",
     "authorization",
     "credential",
@@ -22,27 +22,27 @@ _SECRET_CONFIG_KEYS = frozenset({
 })
 
 
-def _redact(value: object) -> object:
+def redact_config(value: object) -> object:
     if isinstance(value, dict):
         return {
             str(key): (
                 "[REDACTED]"
-                if str(key).casefold() in _SECRET_CONFIG_KEYS
-                else _redact(item)
+                if str(key).casefold() in SECRET_CONFIG_KEYS
+                else redact_config(item)
             )
             for key, item in cast(dict[object, object], value).items()
         }
     if isinstance(value, list):
-        return [_redact(item) for item in cast(list[object], value)]
+        return [redact_config(item) for item in cast(list[object], value)]
     return value
 
 
-def _path_argument(args: argparse.Namespace) -> str | None:
+def config_path_argument(args: argparse.Namespace) -> str | None:
     value = cast(object, getattr(args, "path", None))
     return value if isinstance(value, str) else None
 
 
-def _load(path: str | None) -> PraxisConfig:
+def load_cli_config(path: str | None) -> PraxisConfig:
     return load_config(Path(path) if path else None)
 
 
@@ -53,7 +53,7 @@ def cmd_version(_: argparse.Namespace) -> int:
 
 def cmd_config_validate(args: argparse.Namespace) -> int:
     try:
-        _load(_path_argument(args))
+        load_cli_config(config_path_argument(args))
     except Exception as exc:
         print(f"配置校验失败: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
@@ -63,18 +63,18 @@ def cmd_config_validate(args: argparse.Namespace) -> int:
 
 def cmd_config_show(args: argparse.Namespace) -> int:
     try:
-        config = _load(_path_argument(args))
+        config = load_cli_config(config_path_argument(args))
     except Exception as exc:
         print(f"配置加载失败: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
-    payload = _redact(config.model_dump(mode="json"))
+    payload = redact_config(config.model_dump(mode="json"))
     print(json.dumps(payload, ensure_ascii=False, indent=2))
     return 0
 
 
-async def _doctor(args: argparse.Namespace) -> int:
+async def doctor_command(args: argparse.Namespace) -> int:
     try:
-        config = _load(_path_argument(args))
+        config = load_cli_config(config_path_argument(args))
     except Exception as exc:
         print(f"[FAILED] config: {type(exc).__name__}: {exc}")
         return 1
@@ -109,11 +109,11 @@ async def _doctor(args: argparse.Namespace) -> int:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    return asyncio.run(_doctor(args))
+    return asyncio.run(doctor_command(args))
 
 
-async def _chat(args: argparse.Namespace) -> int:
-    config = _load(_path_argument(args))
+async def chat_command(args: argparse.Namespace) -> int:
+    config = load_cli_config(config_path_argument(args))
     async with PraxisRuntime(config) as runtime:
         async with runtime.session() as session:
             while True:
@@ -133,7 +133,7 @@ async def _chat(args: argparse.Namespace) -> int:
 
 def cmd_chat(args: argparse.Namespace) -> int:
     try:
-        return asyncio.run(_chat(args))
+        return asyncio.run(chat_command(args))
     except Exception as exc:
         print(f"聊天启动失败: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1

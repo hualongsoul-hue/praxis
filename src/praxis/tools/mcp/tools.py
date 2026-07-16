@@ -78,11 +78,11 @@ class MCPToolsBridge:
 
             async def handler(
                 arguments: dict[str, Any] | None = None,
-                _name: str = original_name,
+                logger_name: str = original_name,
                 _server: str = srv_name,
                 **kwargs: Any,
             ) -> str:
-                return await self.call_tool(_server, _name, arguments or {})
+                return await self.call_tool(_server, logger_name, arguments or {})
 
             self.registry.register(definition, handler)
 

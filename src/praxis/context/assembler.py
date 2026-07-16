@@ -47,7 +47,7 @@ class PromptAssembler:
         self.compaction_count: int = 0
         # 最近一次组装时，对话历史之外的静态层（系统提示/记忆/语义/工具）Token 估算，
         # 供 get_token_usage 计入真实上下文压力，避免只数对话历史导致的低估。
-        self._static_token_count: int = 0
+        self.static_token_count: int = 0
 
     def assemble_prompt(
         self,
@@ -160,7 +160,7 @@ class PromptAssembler:
             })
         if few_shot_messages:
             static_messages.extend(few_shot_messages)
-        self._static_token_count = get_token_count(static_messages, self.model)
+        self.static_token_count = get_token_count(static_messages, self.model)
 
         emit_metric(
             "context_assembled_tokens",
@@ -208,7 +208,7 @@ class PromptAssembler:
         """
         max_tokens = get_max_tokens(self.model)
         history = get_token_count(self.conversation_history, self.model) if self.conversation_history else 0
-        current = history + self._static_token_count
+        current = history + self.static_token_count
         ratio = current / max_tokens if max_tokens > 0 else 0.0
         return TokenUsage(
             current_tokens=current,

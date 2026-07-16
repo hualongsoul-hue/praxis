@@ -16,7 +16,7 @@ from praxis.config.schemas import TelemetryConfig
 from praxis.telemetry.logger import get_logger
 
 log = get_logger("telemetry.tracing")
-_current_tracer: ContextVar[Tracer | None] = ContextVar("praxis_tracer", default=None)
+current_tracer: ContextVar[Tracer | None] = ContextVar("praxis_tracer", default=None)
 
 
 def otlp_processor(endpoint: str | None) -> Any:
@@ -32,7 +32,7 @@ def configure_tracing(config: TelemetryConfig) -> Tracer:
     """为 CLI 当前上下文创建 Provider，不覆盖宿主全局 Provider。"""
     if not config.tracing_enabled or config.tracing_export == "none":
         tracer = trace.get_tracer("praxis")
-        _current_tracer.set(tracer)
+        current_tracer.set(tracer)
         return tracer
 
     provider = TracerProvider()
@@ -41,12 +41,12 @@ def configure_tracing(config: TelemetryConfig) -> Tracer:
     else:
         provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
     tracer = provider.get_tracer("praxis")
-    _current_tracer.set(tracer)
+    current_tracer.set(tracer)
     return tracer
 
 
 def get_tracer() -> Tracer:
-    return _current_tracer.get() or trace.get_tracer("praxis")
+    return current_tracer.get() or trace.get_tracer("praxis")
 
 
 def start_span(

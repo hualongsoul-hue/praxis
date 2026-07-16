@@ -12,22 +12,22 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 from praxis.config.settings import PraxisConfig
 from praxis.exceptions import ConfigError
 
-_OBJECT_MAP = TypeAdapter(dict[str, object])
+OBJECT_MAP = TypeAdapter(dict[str, object])
 
 
-def _deep_merge(base: dict[str, object], update: Mapping[str, object]) -> dict[str, object]:
+def merge_config(base: dict[str, object], update: Mapping[str, object]) -> dict[str, object]:
     result = deepcopy(base)
     for key, value in update.items():
         current = result.get(key)
         if isinstance(current, dict) and isinstance(value, Mapping):
             current_map = cast(dict[str, object], current)
-            result[key] = _deep_merge(current_map, cast(Mapping[str, object], value))
+            result[key] = merge_config(current_map, cast(Mapping[str, object], value))
         else:
             result[key] = deepcopy(value)
     return result
 
 
-def _environment_config(environ: Mapping[str, str]) -> dict[str, object]:
+def environment_config(environ: Mapping[str, str]) -> dict[str, object]:
     """将 PRAXIS_<SECTION>__<FIELD> 映射为嵌套配置。
 
     ``PRAXIS_MODEL_API_KEY`` 被明确排除；它只由模型适配器在运行时读取。
@@ -52,7 +52,7 @@ def _environment_config(environ: Mapping[str, str]) -> dict[str, object]:
     return result
 
 
-def _load_yaml(path: Path) -> dict[str, object]:
+def load_yaml_config(path: Path) -> dict[str, object]:
     try:
         raw: object = yaml.safe_load(path.read_text(encoding="utf-8"))
     except OSError as exc:
@@ -62,7 +62,7 @@ def _load_yaml(path: Path) -> dict[str, object]:
     if raw is None:
         return {}
     try:
-        return _OBJECT_MAP.validate_python(raw)
+        return OBJECT_MAP.validate_python(raw)
     except ValidationError as exc:
         raise ConfigError("配置文件根节点必须是映射") from exc
 
@@ -79,11 +79,11 @@ def load_config(
         path = Path(config_path).expanduser().resolve()
         if not path.is_file():
             raise ConfigError(f"配置文件不存在: {path}")
-        data = _load_yaml(path)
+        data = load_yaml_config(path)
 
-    env_data = _environment_config(os.environ if environ is None else environ)
-    merged = _deep_merge(data, env_data)
-    merged = _deep_merge(merged, overrides)
+    env_data = environment_config(os.environ if environ is None else environ)
+    merged = merge_config(data, env_data)
+    merged = merge_config(merged, overrides)
     return PraxisConfig.model_validate(merged)
 
 

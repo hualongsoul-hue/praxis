@@ -19,37 +19,37 @@ MetricKey = tuple[str, tuple[tuple[str, str], ...]]
 class Counter:
     """单调递增计数器。"""
 
-    __slots__ = ("_lock", "_value")
+    __slots__ = ("lock", "metric_value")
 
     def __init__(self) -> None:
-        self._value = 0.0
-        self._lock = threading.Lock()
+        self.metric_value = 0.0
+        self.lock = threading.Lock()
 
     def add(self, value: float = 1.0) -> None:
-        with self._lock:
-            self._value += value
+        with self.lock:
+            self.metric_value += value
 
     @property
     def value(self) -> float:
-        return self._value
+        return self.metric_value
 
 
 class Gauge:
     """可任意设置的瞬时值。"""
 
-    __slots__ = ("_lock", "_value")
+    __slots__ = ("lock", "metric_value")
 
     def __init__(self) -> None:
-        self._value = 0.0
-        self._lock = threading.Lock()
+        self.metric_value = 0.0
+        self.lock = threading.Lock()
 
     def set(self, value: float) -> None:
-        with self._lock:
-            self._value = float(value)
+        with self.lock:
+            self.metric_value = float(value)
 
     @property
     def value(self) -> float:
-        return self._value
+        return self.metric_value
 
 
 # Prometheus histogram 桶上界（秒/毫秒通用的对数刻度，覆盖亚毫秒到分钟级）
@@ -61,31 +61,37 @@ DEFAULT_BUCKETS: tuple[float, ...] = (
 class Histogram:
     """分布统计（计数 + 累计和 + 分桶），支持 Prometheus 直方图与分位估算。"""
 
-    __slots__ = ("_bounds", "_buckets", "_count", "_lock", "_sum")
+    __slots__ = (
+        "bucket_counts",
+        "histogram_bounds",
+        "lock",
+        "observation_count",
+        "observation_sum",
+    )
 
     def __init__(self, buckets: tuple[float, ...] = DEFAULT_BUCKETS) -> None:
-        self._count = 0
-        self._sum = 0.0
-        self._bounds = buckets
-        self._buckets = [0] * len(buckets)  # 每个 ≤ 上界的累计计数（非累积，导出时累加）
-        self._lock = threading.Lock()
+        self.observation_count = 0
+        self.observation_sum = 0.0
+        self.histogram_bounds = buckets
+        self.bucket_counts = [0] * len(buckets)  # 每个 ≤ 上界的累计计数（非累积，导出时累加）
+        self.lock = threading.Lock()
 
     def record(self, value: float) -> None:
-        with self._lock:
-            self._count += 1
-            self._sum += value
-            for i, bound in enumerate(self._bounds):
+        with self.lock:
+            self.observation_count += 1
+            self.observation_sum += value
+            for i, bound in enumerate(self.histogram_bounds):
                 if value <= bound:
-                    self._buckets[i] += 1
+                    self.bucket_counts[i] += 1
                     break
 
     @property
     def count(self) -> int:
-        return self._count
+        return self.observation_count
 
     @property
     def sum(self) -> float:
-        return self._sum
+        return self.observation_sum
 
     def bucket_lines(self, name: str, labels: str) -> list[str]:
         """生成 Prometheus 累积桶行（含 +Inf）。"""
@@ -93,23 +99,23 @@ class Histogram:
         cumulative = 0
         # labels 形如 {k="v"} 或 ""；需在花括号内追加 le 标签
         inner = labels[1:-1] if labels else ""
-        for i, bound in enumerate(self._bounds):
-            cumulative += self._buckets[i]
+        for i, bound in enumerate(self.histogram_bounds):
+            cumulative += self.bucket_counts[i]
             le = f'le="{bound}"'
             tag = "{" + (f"{inner}," if inner else "") + le + "}"
             lines.append(f"{name}_bucket{tag} {cumulative}")
         inf_tag = "{" + (f"{inner}," if inner else "") + 'le="+Inf"}'
-        lines.append(f"{name}_bucket{inf_tag} {self._count}")
+        lines.append(f"{name}_bucket{inf_tag} {self.observation_count}")
         return lines
 
     def quantile(self, q: float) -> float:
         """基于桶的近似分位数（返回命中桶的上界）。"""
-        if self._count == 0:
+        if self.observation_count == 0:
             return 0.0
-        target = q * self._count
+        target = q * self.observation_count
         cumulative = 0
-        for i, bound in enumerate(self._bounds):
-            cumulative += self._buckets[i]
+        for i, bound in enumerate(self.histogram_bounds):
+            cumulative += self.bucket_counts[i]
             if cumulative >= target:
                 return bound
         return float("inf")
@@ -126,40 +132,40 @@ class MetricsCollector:
     """线程安全的指标采集器。"""
 
     def __init__(self) -> None:
-        self._counters: dict[MetricKey, Counter] = {}
-        self._gauges: dict[MetricKey, Gauge] = {}
-        self._histograms: dict[MetricKey, Histogram] = {}
-        self._lock = threading.Lock()
+        self.counters: dict[MetricKey, Counter] = {}
+        self.gauges: dict[MetricKey, Gauge] = {}
+        self.histograms: dict[MetricKey, Histogram] = {}
+        self.lock = threading.Lock()
 
-    def _key(self, name: str, tags: dict[str, str] | None) -> MetricKey:
+    def metric_key(self, name: str, tags: dict[str, str] | None) -> MetricKey:
         return (name, tuple(sorted((tags or {}).items())))
 
     def counter(
         self, name: str, value: float = 1.0, tags: dict[str, str] | None = None
     ) -> None:
-        key = self._key(name, tags)
-        with self._lock:
-            if key not in self._counters:
-                self._counters[key] = Counter()
-        self._counters[key].add(value)
+        key = self.metric_key(name, tags)
+        with self.lock:
+            if key not in self.counters:
+                self.counters[key] = Counter()
+        self.counters[key].add(value)
 
     def gauge(
         self, name: str, value: float, tags: dict[str, str] | None = None
     ) -> None:
-        key = self._key(name, tags)
-        with self._lock:
-            if key not in self._gauges:
-                self._gauges[key] = Gauge()
-        self._gauges[key].set(value)
+        key = self.metric_key(name, tags)
+        with self.lock:
+            if key not in self.gauges:
+                self.gauges[key] = Gauge()
+        self.gauges[key].set(value)
 
     def histogram(
         self, name: str, value: float, tags: dict[str, str] | None = None
     ) -> None:
-        key = self._key(name, tags)
-        with self._lock:
-            if key not in self._histograms:
-                self._histograms[key] = Histogram()
-        self._histograms[key].record(value)
+        key = self.metric_key(name, tags)
+        with self.lock:
+            if key not in self.histograms:
+                self.histograms[key] = Histogram()
+        self.histograms[key].record(value)
 
     def export_prometheus(self) -> str:
         """导出 Prometheus 文本格式。
@@ -167,10 +173,10 @@ class MetricsCollector:
         在锁内对三类指标取快照，避免与并发 emit（如指标 HTTP 端点线程
         与主线程同时访问）发生 "dictionary changed size during iteration"。
         """
-        with self._lock:
-            counters = list(self._counters.items())
-            gauges = list(self._gauges.items())
-            histograms = list(self._histograms.items())
+        with self.lock:
+            counters = list(self.counters.items())
+            gauges = list(self.gauges.items())
+            histograms = list(self.histograms.items())
 
         lines: list[str] = []
         seen: set[str] = set()
@@ -203,7 +209,7 @@ class MetricsCollector:
         Path(path).write_text(self.export_prometheus(), encoding="utf-8")
 
 
-_current_collector: ContextVar[MetricsCollector | None] = ContextVar(
+current_collector: ContextVar[MetricsCollector | None] = ContextVar(
     "praxis_metrics_collector",
     default=None,
 )
@@ -211,24 +217,24 @@ _current_collector: ContextVar[MetricsCollector | None] = ContextVar(
 
 def configure_metrics(config: TelemetryConfig) -> None:
     """为当前 CLI 上下文绑定采集器；不启动永久线程或 HTTP 服务。"""
-    _current_collector.set(MetricsCollector())
+    current_collector.set(MetricsCollector())
 
 
 @contextmanager
 def use_metrics(collector: MetricsCollector) -> Generator[None]:
     """在当前异步上下文中使用 Runtime 实例拥有的采集器。"""
-    token = _current_collector.set(collector)
+    token = current_collector.set(collector)
     try:
         yield
     finally:
-        _current_collector.reset(token)
+        current_collector.reset(token)
 
 
 def get_collector() -> MetricsCollector:
-    collector = _current_collector.get()
+    collector = current_collector.get()
     if collector is None:
         collector = MetricsCollector()
-        _current_collector.set(collector)
+        current_collector.set(collector)
     return collector
 
 

@@ -99,11 +99,11 @@ class Session:
         self.mcp_sampling_manager: Any = None
         self.mcp_elicitation_manager: Any = None
         self.mcp_auth_manager: Any = None
-        self._mcp_stack: Any = None
+        self.mcp_stack: Any = None
 
     def attach_mcp_stack(self, stack: AsyncExitStack) -> None:
         """转移 MCP 连接退出栈的所有权，随 Session 统一关闭。"""
-        self._mcp_stack = stack
+        self.mcp_stack = stack
 
     @property
     def session_id(self) -> str:
@@ -113,7 +113,7 @@ class Session:
     def status(self) -> SessionStatus:
         return self.metadata.status
 
-    def _apply_continuation(self, kwargs: dict[str, Any]) -> None:
+    def apply_continuation(self, kwargs: dict[str, Any]) -> None:
         """续接阶段（初始化/热身）按需注入开发者指令，不覆盖显式入参。"""
         if self.continuation is None:
             return
@@ -123,7 +123,7 @@ class Session:
     async def run_turn(self, user_message: str, **kwargs: Any) -> AgentResponse:
         """执行一轮对话。"""
         self.metadata.status = SessionStatus.ACTIVE
-        self._apply_continuation(kwargs)
+        self.apply_continuation(kwargs)
         response = await self.loop.run(user_message, **kwargs)
         if self.continuation is not None:
             self.continuation.advance_phase(self)
@@ -160,10 +160,10 @@ class Session:
             file_refs=self.assembler.file_refs,
             description=f"Auto checkpoint after turn {self.metadata.total_turns}",
         )
-        await self._prune_checkpoints(checkpoint_mgr)
+        await self.prune_checkpoints(checkpoint_mgr)
         return checkpoint_id
 
-    async def _prune_checkpoints(self, checkpoint_mgr: CheckpointManager) -> None:
+    async def prune_checkpoints(self, checkpoint_mgr: CheckpointManager) -> None:
         """按 max_checkpoints_per_session 保留最新若干个，删除最旧的多余检查点。"""
         limit = self.config.max_checkpoints_per_session
         if limit <= 0:
@@ -182,7 +182,7 @@ class Session:
     ) -> AsyncIterator[AgentEvent]:
         """流式执行一轮对话。"""
         self.metadata.status = SessionStatus.ACTIVE
-        self._apply_continuation(kwargs)
+        self.apply_continuation(kwargs)
         turn_tokens = 0
         async for event in self.loop.run_stream(user_message, **kwargs):
             if event.event_type == "llm_request":
@@ -205,9 +205,9 @@ class Session:
         """终止会话：停止后台记忆 Worker、Dream 调度器并关闭 MCP 连接。"""
         if self.memory is not None:
             await self.memory.stop()
-        if self._mcp_stack is not None:
-            await self._mcp_stack.aclose()
-            self._mcp_stack = None
+        if self.mcp_stack is not None:
+            await self.mcp_stack.aclose()
+            self.mcp_stack = None
         self.metadata.status = SessionStatus.TERMINATED
         log.info("会话已终止", session_id=self.session_id)
 

@@ -108,7 +108,7 @@ class OrchestrationLoop:
         self.state = LoopState()
         # 最近一次在关键节点（turn_start / turn_end / termination）发射的事件，
         # 供流式路径精确 yield，避免依赖 emitter.events[-1] 受子系统插入事件影响。
-        self._last_event: AgentEvent | None = None
+        self.latest_event: AgentEvent | None = None
 
     # ── 公共准备方法 ─────────────────────────────────────────────────────
 
@@ -247,7 +247,7 @@ class OrchestrationLoop:
         """每轮迭代前的准备：遮蔽、压缩、Prompt 组装、历史追加。"""
         self.state.current_turn += 1
         self.state.phase = LoopPhase.ASSEMBLING
-        self._last_event = self.emitter.emit("turn_start", turn=self.state.current_turn)
+        self.latest_event = self.emitter.emit("turn_start", turn=self.state.current_turn)
 
         # S7 观察遮蔽与压缩仅在历史足够长时触发（阈值由 S7 配置驱动）
         history_len = len(self.assembler.conversation_history)
@@ -509,7 +509,7 @@ class OrchestrationLoop:
         if not self.strategy.is_plan_complete():
             self.strategy.advance_step()
 
-        self._last_event = self.emitter.emit("turn_end", turn=self.state.current_turn)
+        self.latest_event = self.emitter.emit("turn_end", turn=self.state.current_turn)
 
         elapsed = (time.perf_counter() - start_time) * 1000
         emit_metric("loop_turn_overhead_ms", elapsed, {}, "histogram")
@@ -736,9 +736,9 @@ class OrchestrationLoop:
 
     def last_event(self) -> AgentEvent:
         """返回最近事件；内部状态违反事件投影约束时立即失败。"""
-        if self._last_event is None:
+        if self.latest_event is None:
             raise RuntimeError("编排循环尚未产生事件")
-        return self._last_event
+        return self.latest_event
 
     def get_state(self) -> LoopState:
         """获取当前循环状态。"""
@@ -753,7 +753,7 @@ class OrchestrationLoop:
         self.state.phase = LoopPhase.TERMINATING
         self.state.termination_reason = reason
 
-        self._last_event = self.emitter.emit(
+        self.latest_event = self.emitter.emit(
             "termination",
             turn=self.state.current_turn,
             data={"reason": reason.value, "content": content},

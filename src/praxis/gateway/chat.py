@@ -121,7 +121,7 @@ def convert_stream_chunk(raw: Any) -> ModelResponseChunk:
     )
 
 
-def _prepare_reservation(
+def prepare_reservation(
     gateway: GatewayRouter,
     deployment: ModelDeployment,
     messages: list[dict[str, Any]],
@@ -162,7 +162,7 @@ def _prepare_reservation(
     )
 
 
-def _actual_cost(
+def actual_cost(
     deployment: ModelDeployment,
     usage: Usage,
     raw: Any | None = None,
@@ -189,7 +189,7 @@ def _actual_cost(
         return None
 
 
-def _settlement_cost(settlement: object, fallback: float | None) -> float:
+def settlement_cost(settlement: object, fallback: float | None) -> float:
     if isinstance(settlement, tuple):
         values = cast(tuple[object, ...], settlement)
         if len(values) != 2:
@@ -209,7 +209,7 @@ async def chat(
 ) -> ModelResponse:
     model_name = model or gateway.config.default_model
     deployment = gateway.resolve_deployment(model_name)
-    reservation = _prepare_reservation(gateway, deployment, messages, kwargs)
+    reservation = prepare_reservation(gateway, deployment, messages, kwargs)
     call_kwargs: dict[str, Any] = {
         "model": model_name,
         "messages": messages,
@@ -238,13 +238,13 @@ async def chat(
     except Exception:
         gateway.settle_usage(reservation, actual_tokens=None, actual_cost=None)
         raise
-    calculated_cost = _actual_cost(deployment, response.usage, raw)
+    calculated_cost = actual_cost(deployment, response.usage, raw)
     settlement = gateway.settle_usage(
         reservation,
         actual_tokens=response.usage.total_tokens,
         actual_cost=calculated_cost,
     )
-    cost = _settlement_cost(settlement, calculated_cost)
+    cost = settlement_cost(settlement, calculated_cost)
     record_usage(
         response.model,
         response.usage.prompt_tokens,
@@ -263,7 +263,7 @@ async def chat_stream(
 ) -> AsyncIterator[ModelResponseChunk]:
     model_name = model or gateway.config.default_model
     deployment = gateway.resolve_deployment(model_name)
-    reservation = _prepare_reservation(gateway, deployment, messages, kwargs)
+    reservation = prepare_reservation(gateway, deployment, messages, kwargs)
     call_kwargs: dict[str, Any] = {
         "model": model_name,
         "messages": messages,
@@ -323,13 +323,13 @@ async def chat_stream(
                     actual_cost=None,
                 )
             else:
-                calculated_cost = _actual_cost(deployment, final_usage)
+                calculated_cost = actual_cost(deployment, final_usage)
                 settlement = gateway.settle_usage(
                     reservation,
                     actual_tokens=final_usage.total_tokens,
                     actual_cost=calculated_cost,
                 )
-                cost = _settlement_cost(settlement, calculated_cost)
+                cost = settlement_cost(settlement, calculated_cost)
                 record_usage(
                     final_model,
                     final_usage.prompt_tokens,

@@ -31,21 +31,21 @@ class GatewayRouter:
         *,
         environ: Mapping[str, str] | None = None,
     ) -> None:
-        self._config = config
-        self._environ = os.environ if environ is None else environ
-        self._deployments = list(config.deployments)
-        self._router = self._build_router(config, self._deployments, self._environ)
-        self._total_spend_usd = 0.0
-        self._total_tokens = 0
-        self._reserved_spend_usd = 0.0
-        self._reserved_tokens = 0
-        self._reservations: dict[int, UsageReservation] = {}
-        self._next_reservation_id = 1
-        self._budget_lock = threading.Lock()
-        self._request_semaphore = asyncio.Semaphore(config.max_concurrent_requests)
+        self.gateway_config = config
+        self.environ = os.environ if environ is None else environ
+        self.deployments = list(config.deployments)
+        self.litellm_router = self.build_litellm_router(config, self.deployments, self.environ)
+        self.total_spend_usd = 0.0
+        self.total_token_count = 0
+        self.reserved_spend_usd = 0.0
+        self.reserved_tokens = 0
+        self.reservations: dict[int, UsageReservation] = {}
+        self.next_reservation_id = 1
+        self.budget_lock = threading.Lock()
+        self.request_semaphore = asyncio.Semaphore(config.max_concurrent_requests)
 
     @staticmethod
-    def _to_litellm_deployment(
+    def to_litellm_deployment(
         deployment: ModelDeployment,
         environ: Mapping[str, str],
     ) -> dict[str, Any]:
@@ -65,13 +65,13 @@ class GatewayRouter:
         }
 
     @classmethod
-    def _build_router(
+    def build_litellm_router(
         cls,
         config: GatewayConfig,
         deployments: list[ModelDeployment],
         environ: Mapping[str, str],
     ) -> Router:
-        model_list = [cls._to_litellm_deployment(item, environ) for item in deployments]
+        model_list = [cls.to_litellm_deployment(item, environ) for item in deployments]
         return Router(
             model_list=model_list,
             routing_strategy=config.routing_strategy,
@@ -81,43 +81,43 @@ class GatewayRouter:
 
     @property
     def router(self) -> Router:
-        return self._router
+        return self.litellm_router
 
     @property
     def config(self) -> GatewayConfig:
-        return self._config
+        return self.gateway_config
 
     @property
     def total_spend(self) -> float:
-        with self._budget_lock:
-            return self._total_spend_usd
+        with self.budget_lock:
+            return self.total_spend_usd
 
     @property
     def total_tokens(self) -> int:
-        with self._budget_lock:
-            return self._total_tokens
+        with self.budget_lock:
+            return self.total_token_count
 
     def add_usage(self, *, cost: float, tokens: int) -> None:
         """线程安全地累加模型用量。"""
-        with self._budget_lock:
+        with self.budget_lock:
             if cost > 0:
-                self._total_spend_usd += cost
+                self.total_spend_usd += cost
             if tokens > 0:
-                self._total_tokens += tokens
+                self.total_token_count += tokens
 
     def add_spend(self, cost: float) -> None:
         """兼容内部计量调用；新代码应使用 add_usage。"""
         self.add_usage(cost=cost, tokens=0)
 
     def resolve_deployment(self, model_name: str) -> ModelDeployment:
-        for deployment in self._deployments:
+        for deployment in self.deployments:
             if deployment.model_name == model_name:
                 return deployment
         raise GatewayError("模型别名未配置", details={"model_name": model_name})
 
     def supports_vision(self, model_name: str | None = None) -> bool:
         """Probe the typed capabilities declared for a configured model alias."""
-        resolved_name = model_name or self._config.default_model
+        resolved_name = model_name or self.gateway_config.default_model
         return self.resolve_deployment(resolved_name).supports_vision
 
     def reserve_usage(
@@ -129,43 +129,43 @@ class GatewayRouter:
         """在线程锁内原子校验并预留本次调用的 Token 与金额预算。"""
         if estimated_tokens < 0:
             raise ValueError("estimated_tokens 不能为负数")
-        with self._budget_lock:
-            if self._config.max_total_tokens is not None:
+        with self.budget_lock:
+            if self.gateway_config.max_total_tokens is not None:
                 projected_tokens = (
-                    self._total_tokens + self._reserved_tokens + estimated_tokens
+                    self.total_token_count + self.reserved_tokens + estimated_tokens
                 )
-                if projected_tokens > self._config.max_total_tokens:
+                if projected_tokens > self.gateway_config.max_total_tokens:
                     raise BudgetExceededError(
                         "预计累计 Token 超出上限",
                         details={
                             "projected_tokens": projected_tokens,
-                            "max_total_tokens": self._config.max_total_tokens,
+                            "max_total_tokens": self.gateway_config.max_total_tokens,
                         },
                     )
-            if self._config.max_budget is not None:
+            if self.gateway_config.max_budget is not None:
                 if estimated_cost is None:
                     raise BudgetExceededError("模型价格未知，启用金额预算时拒绝调用")
                 projected_cost = (
-                    self._total_spend_usd + self._reserved_spend_usd + estimated_cost
+                    self.total_spend_usd + self.reserved_spend_usd + estimated_cost
                 )
-                if projected_cost > self._config.max_budget:
+                if projected_cost > self.gateway_config.max_budget:
                     raise BudgetExceededError(
                         "预计累计成本超出金额预算",
                         details={
                             "projected_cost": projected_cost,
-                            "max_budget": self._config.max_budget,
+                            "max_budget": self.gateway_config.max_budget,
                         },
                     )
 
             reservation = UsageReservation(
-                identifier=self._next_reservation_id,
+                identifier=self.next_reservation_id,
                 estimated_tokens=estimated_tokens,
                 estimated_cost=estimated_cost or 0.0,
             )
-            self._next_reservation_id += 1
-            self._reservations[reservation.identifier] = reservation
-            self._reserved_tokens += reservation.estimated_tokens
-            self._reserved_spend_usd += reservation.estimated_cost
+            self.next_reservation_id += 1
+            self.reservations[reservation.identifier] = reservation
+            self.reserved_tokens += reservation.estimated_tokens
+            self.reserved_spend_usd += reservation.estimated_cost
             return reservation
 
     def settle_usage(
@@ -176,62 +176,62 @@ class GatewayRouter:
         actual_cost: float | None,
     ) -> tuple[int, float]:
         """结算预留；缺少最终用量时保守采用预估值。"""
-        with self._budget_lock:
-            active = self._reservations.pop(reservation.identifier, None)
+        with self.budget_lock:
+            active = self.reservations.pop(reservation.identifier, None)
             if active is None:
                 return (0, 0.0)
-            self._reserved_tokens -= active.estimated_tokens
-            self._reserved_spend_usd -= active.estimated_cost
+            self.reserved_tokens -= active.estimated_tokens
+            self.reserved_spend_usd -= active.estimated_cost
             settled_tokens = active.estimated_tokens if actual_tokens is None else actual_tokens
             settled_cost = active.estimated_cost if actual_cost is None else actual_cost
-            self._total_tokens += max(settled_tokens, 0)
-            self._total_spend_usd += max(settled_cost, 0.0)
+            self.total_token_count += max(settled_tokens, 0)
+            self.total_spend_usd += max(settled_cost, 0.0)
             return settled_tokens, settled_cost
 
     def release_usage(self, reservation: UsageReservation) -> None:
         """模型请求未开始或明确失败时释放预留。"""
-        with self._budget_lock:
-            active = self._reservations.pop(reservation.identifier, None)
+        with self.budget_lock:
+            active = self.reservations.pop(reservation.identifier, None)
             if active is None:
                 return
-            self._reserved_tokens -= active.estimated_tokens
-            self._reserved_spend_usd -= active.estimated_cost
+            self.reserved_tokens -= active.estimated_tokens
+            self.reserved_spend_usd -= active.estimated_cost
 
     @asynccontextmanager
     async def request_slot(self) -> AsyncGenerator[None]:
         """限制一个 Runtime 内所有会话共享的并发模型请求数。"""
-        async with self._request_semaphore:
+        async with self.request_semaphore:
             yield
 
     def get_model_names(self) -> list[str]:
-        return list(dict.fromkeys(item.model_name for item in self._deployments))
+        return list(dict.fromkeys(item.model_name for item in self.deployments))
 
     def get_model_list(self) -> list[ModelDeployment]:
         """返回不含密钥的类型化部署快照。"""
-        return list(self._deployments)
+        return list(self.deployments)
 
     def register_model(self, deployment: ModelDeployment) -> None:
-        self._deployments.append(deployment)
+        self.deployments.append(deployment)
         model_list = [
-            self._to_litellm_deployment(item, self._environ)
-            for item in self._deployments
+            self.to_litellm_deployment(item, self.environ)
+            for item in self.deployments
         ]
-        self._router.set_model_list(model_list)  # pyright: ignore[reportUnknownMemberType]
+        self.litellm_router.set_model_list(model_list)  # pyright: ignore[reportUnknownMemberType]
 
     def unregister_model(self, model_name: str) -> int:
-        original_count = len(self._deployments)
+        original_count = len(self.deployments)
         remaining_deployments = [
-            item for item in self._deployments if item.model_name != model_name
+            item for item in self.deployments if item.model_name != model_name
         ]
         if not remaining_deployments:
             raise GatewayError("不能移除最后一个模型部署")
         model_list = [
-            self._to_litellm_deployment(item, self._environ)
+            self.to_litellm_deployment(item, self.environ)
             for item in remaining_deployments
         ]
-        self._router.set_model_list(model_list)  # pyright: ignore[reportUnknownMemberType]
-        self._deployments = remaining_deployments
-        return original_count - len(self._deployments)
+        self.litellm_router.set_model_list(model_list)  # pyright: ignore[reportUnknownMemberType]
+        self.deployments = remaining_deployments
+        return original_count - len(self.deployments)
 
     async def close(self) -> None:
         """释放网关资源；LiteLLM Router 当前没有异步持有资源需要关闭。"""
@@ -263,4 +263,4 @@ class GatewayRouter:
 
     async def health(self) -> bool:
         """配置级健康探针；不产生计费模型调用。"""
-        return bool(self._deployments)
+        return bool(self.deployments)

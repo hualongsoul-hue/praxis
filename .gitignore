@@ -39,6 +39,7 @@ Thumbs.db
 
 # Project
 progress.json
+.superpowers/
 *.log
 .windsurf/
 data/

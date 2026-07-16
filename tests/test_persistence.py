@@ -184,16 +184,16 @@ class TestCheckpoint:
     async def test_corrupted_checkpoint_is_rejected(self, manager: CheckpointManager) -> None:
         checkpoint_id = await manager.save_checkpoint("sess-1", {"turn": 1})
         key = f"sess-1:{checkpoint_id}"
-        raw = await manager._store.load("checkpoints", key)
+        raw = await manager.store.load("checkpoints", key)
         assert isinstance(raw, dict)
         raw["state"] = {"turn": 999}
-        await manager._store.save("checkpoints", key, raw)
+        await manager.store.save("checkpoints", key, raw)
         with pytest.raises(CheckpointCorruptionError):
             await manager.load_checkpoint(key)
 
     async def test_legacy_checkpoint_is_rejected(self, manager: CheckpointManager) -> None:
         key = "sess-1:legacy"
-        await manager._store.save(
+        await manager.store.save(
             "checkpoints",
             key,
             {"checkpoint_id": "legacy", "session_id": "sess-1", "state": {}},
@@ -216,15 +216,15 @@ class TestNamespace:
         await store.close()
 
     async def test_clear_namespace(self, ns_mgr: NamespaceManager) -> None:
-        await ns_mgr._store.save("to_clear", "k1", "v1")
-        await ns_mgr._store.save("to_clear", "k2", "v2")
-        await ns_mgr._store.save("keep", "k1", "v1")
+        await ns_mgr.store.save("to_clear", "k1", "v1")
+        await ns_mgr.store.save("to_clear", "k2", "v2")
+        await ns_mgr.store.save("keep", "k1", "v1")
         count = await ns_mgr.clear_namespace("to_clear")
         assert count == 2
         assert not await ns_mgr.namespace_exists("to_clear")
         assert await ns_mgr.namespace_exists("keep")
 
     async def test_key_count(self, ns_mgr: NamespaceManager) -> None:
-        await ns_mgr._store.save("counted", "a", 1)
-        await ns_mgr._store.save("counted", "b", 2)
+        await ns_mgr.store.save("counted", "a", 1)
+        await ns_mgr.store.save("counted", "b", 2)
         assert await ns_mgr.namespace_key_count("counted") == 2

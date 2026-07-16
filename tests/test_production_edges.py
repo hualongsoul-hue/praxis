@@ -111,21 +111,21 @@ class FakeRedis:
         self.values: dict[str, bytes] = {}
         self.keys: list[bytes | str] = []
         self.ping = AsyncMock(return_value=True)
-        self.set = AsyncMock(side_effect=self._set)
-        self.get = AsyncMock(side_effect=self._get)
-        self.delete = AsyncMock(side_effect=self._delete)
+        self.set = AsyncMock(side_effect=self.set_value)
+        self.get = AsyncMock(side_effect=self.get_value)
+        self.delete = AsyncMock(side_effect=self.delete_value)
         self.aclose = AsyncMock()
 
-    async def _set(self, key: str, value: bytes, nx: bool = False) -> bool:
+    async def set_value(self, key: str, value: bytes, nx: bool = False) -> bool:
         if nx and key in self.values:
             return False
         self.values[key] = value
         return True
 
-    async def _get(self, key: str) -> bytes | None:
+    async def get_value(self, key: str) -> bytes | None:
         return self.values.get(key)
 
-    async def _delete(self, *keys: bytes | str) -> int:
+    async def delete_value(self, *keys: bytes | str) -> int:
         return len(keys)
 
     async def scan_iter(self, match: str):
@@ -411,10 +411,10 @@ class TestVectorAndMeteringEdges:
             assert await remote.default_embed("x") == [1.0, 0.0]
         local = VectorStore(scoped, dimensions=4)
         assert len(await local.default_embed("x")) == 4
-        remote._client = MagicMock(is_closed=False)
-        remote._client.aclose = AsyncMock()
+        remote.client = MagicMock(is_closed=False)
+        remote.client.aclose = AsyncMock()
         await remote.aclose()
-        assert remote._client is None
+        assert remote.client is None
 
     def test_metering_fallbacks_budget_and_metrics(self, monkeypatch: pytest.MonkeyPatch) -> None:
         with patch("praxis.gateway.metering.litellm.get_max_tokens", side_effect=ValueError):

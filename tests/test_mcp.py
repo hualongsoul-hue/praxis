@@ -758,7 +758,7 @@ class TestMCPStdioIntegration:
         sampling_requests: list[str] = []
         elicitation_requests: list[str] = []
 
-        async def sample(_context: Any, params: Any) -> CreateMessageResult:
+        async def sample(log_context: Any, params: Any) -> CreateMessageResult:
             content = params.messages[0].content
             sampling_requests.append(content.text)
             return CreateMessageResult(
@@ -767,7 +767,7 @@ class TestMCPStdioIntegration:
                 model="test-model",
             )
 
-        async def elicit(_context: Any, params: Any) -> ElicitResult:
+        async def elicit(log_context: Any, params: Any) -> ElicitResult:
             elicitation_requests.append(params.message)
             return ElicitResult(action="accept", content={"answer": "approved"})
 

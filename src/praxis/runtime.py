@@ -67,20 +67,20 @@ class PraxisRuntime:
         self.embedding_provider = embedding_provider
         self.metrics = MetricsCollector()
         self.supervisor = TaskSupervisor()
-        self._session_builder = session_builder
-        self._guardrails: GuardrailEngine | None = None
-        self._sessions: set[AgentSession] = set()
-        self._subagent_sessions: set[Session] = set()
-        self._state = RuntimeState.NEW
-        self._lifecycle_lock = asyncio.Lock()
+        self.session_builder = session_builder
+        self.guardrails: GuardrailEngine | None = None
+        self.sessions: set[AgentSession] = set()
+        self.subagent_sessions: set[Session] = set()
+        self.runtime_state = RuntimeState.NEW
+        self.lifecycle_lock = asyncio.Lock()
 
     @property
     def state(self) -> RuntimeState:
-        return self._state
+        return self.runtime_state
 
     @property
     def started(self) -> bool:
-        return self._state is RuntimeState.ACTIVE
+        return self.runtime_state is RuntimeState.ACTIVE
 
     async def __aenter__(self) -> "PraxisRuntime":
         await self.start()
@@ -95,12 +95,12 @@ class PraxisRuntime:
         await self.close()
 
     async def start(self) -> None:
-        async with self._lifecycle_lock:
-            if self._state is RuntimeState.ACTIVE:
+        async with self.lifecycle_lock:
+            if self.runtime_state is RuntimeState.ACTIVE:
                 return
-            if self._state in {RuntimeState.STOPPING, RuntimeState.CLOSED}:
+            if self.runtime_state in {RuntimeState.STOPPING, RuntimeState.CLOSED}:
                 raise RuntimeStateError("已关闭的 Runtime 不能重新启动")
-            self._state = RuntimeState.STARTING
+            self.runtime_state = RuntimeState.STARTING
             try:
                 if self.store is None:
                     self.store = await create_store(self.config.persistence)
@@ -111,13 +111,13 @@ class PraxisRuntime:
                         self.store,
                         enabled=self.config.telemetry.audit_enabled,
                     )
-                self._guardrails = build_guardrail_engine(
+                self.guardrails = build_guardrail_engine(
                     self.config.guardrails,
                     audit_sink=self.audit_sink,
                 )
-                self._state = RuntimeState.ACTIVE
+                self.runtime_state = RuntimeState.ACTIVE
             except BaseException:
-                self._state = RuntimeState.FAILED
+                self.runtime_state = RuntimeState.FAILED
                 if self.store is not None:
                     await self.store.close()
                     self.store = None
@@ -131,12 +131,12 @@ class PraxisRuntime:
     @property
     def owned_subagent_count(self) -> int:
         """Return the number of isolated child sessions owned by this Runtime."""
-        return len(self._subagent_sessions)
+        return len(self.subagent_sessions)
 
     async def build_session(self) -> SessionRunner:
-        if self._session_builder is not None:
-            return await self._session_builder(self)
-        if self.store is None or self.gateway is None or self._guardrails is None:
+        if self.session_builder is not None:
+            return await self.session_builder(self)
+        if self.store is None or self.gateway is None or self.guardrails is None:
             raise RuntimeStateError("Runtime 组件尚未就绪")
         factory = SessionFactory(
             store=self.store,
@@ -149,7 +149,7 @@ class PraxisRuntime:
             audit_sink=self.audit_sink,
         )
         session = await factory.create_session(
-            guardrails=self._guardrails,
+            guardrails=self.guardrails,
             gateway=cast(Any, self.gateway),
             model=self.config.gateway.default_model,
             tools_config=self.config.tools,
@@ -159,7 +159,7 @@ class PraxisRuntime:
         wire_subagent(
             session=session,
             store=self.store,
-            guardrails=self._guardrails,
+            guardrails=self.guardrails,
             gateway=cast(Any, self.gateway),
             orchestrator_config=self.config.orchestrator,
             context_config=self.config.context,
@@ -178,7 +178,7 @@ class PraxisRuntime:
         """Create an isolated child session with only explicitly delegated tools."""
         if not self.started:
             raise RuntimeStateError("Runtime 尚未启动")
-        if self.store is None or self.gateway is None or self._guardrails is None:
+        if self.store is None or self.gateway is None or self.guardrails is None:
             raise RuntimeStateError("Runtime 组件尚未就绪")
 
         child_registry = ToolRegistry()
@@ -201,37 +201,37 @@ class PraxisRuntime:
             audit_sink=self.audit_sink,
         )
         child = await factory.create_session(
-            guardrails=self._guardrails,
+            guardrails=self.guardrails,
             gateway=cast(Any, self.gateway),
             registry=child_registry,
             model=self.config.gateway.default_model,
             tools_config=self.config.tools,
             include_builtins=False,
         )
-        self._subagent_sessions.add(child)
+        self.subagent_sessions.add(child)
         return child
 
     async def release_subagent_session(self, session: Session) -> None:
         """Terminate and forget a child session; safe to call more than once."""
         try:
-            if session in self._subagent_sessions:
+            if session in self.subagent_sessions:
                 session.abort()
                 await session.terminate()
         finally:
-            self._subagent_sessions.discard(session)
+            self.subagent_sessions.discard(session)
 
     def register_session(self, session: "AgentSession") -> None:
-        self._sessions.add(session)
+        self.sessions.add(session)
 
     def unregister_session(self, session: "AgentSession") -> None:
-        self._sessions.discard(session)
+        self.sessions.discard(session)
 
     async def health(self) -> RuntimeHealth:
         components: dict[str, ComponentHealth] = {}
         if not self.started or self.gateway is None or self.store is None:
             return RuntimeHealth(
                 status=HealthStatus.FAILED,
-                runtime_state=self._state,
+                runtime_state=self.runtime_state,
                 components={
                     "runtime": ComponentHealth(
                         status=HealthStatus.FAILED,
@@ -326,23 +326,23 @@ class PraxisRuntime:
         )
         return RuntimeHealth(
             status=status,
-            runtime_state=self._state,
+            runtime_state=self.runtime_state,
             components=components,
         )
 
     async def close(self) -> None:
-        async with self._lifecycle_lock:
-            if self._state is RuntimeState.CLOSED:
+        async with self.lifecycle_lock:
+            if self.runtime_state is RuntimeState.CLOSED:
                 return
-            self._state = RuntimeState.STOPPING
-            sessions = list(self._sessions)
+            self.runtime_state = RuntimeState.STOPPING
+            sessions = list(self.sessions)
             if sessions:
                 await asyncio.gather(
                     *(session.close() for session in sessions),
                     return_exceptions=True,
                 )
             await self.supervisor.close()
-            child_sessions = list(self._subagent_sessions)
+            child_sessions = list(self.subagent_sessions)
             if child_sessions:
                 await asyncio.gather(
                     *(self.release_subagent_session(session) for session in child_sessions),
@@ -356,33 +356,33 @@ class PraxisRuntime:
                 await self.gateway.close()
             if self.store is not None:
                 await self.store.close()
-            self._state = RuntimeState.CLOSED
+            self.runtime_state = RuntimeState.CLOSED
 
 
 class AgentSession:
     """异步上下文管理的会话；同一实例禁止并发执行轮次。"""
 
     def __init__(self, runtime: PraxisRuntime) -> None:
-        self._runtime = runtime
-        self._runner: SessionRunner | None = None
-        self._run_lock = asyncio.Lock()
-        self._closed = False
+        self.runtime = runtime
+        self.runner: SessionRunner | None = None
+        self.run_lock = asyncio.Lock()
+        self.closed = False
 
     @property
     def session_id(self) -> str | None:
-        return self._runner.session_id if self._runner is not None else None
+        return self.runner.session_id if self.runner is not None else None
 
     @property
     def status(self) -> SessionStatus:
-        if self._runner is None:
+        if self.runner is None:
             return SessionStatus.INITIALIZING
-        return self._runner.status
+        return self.runner.status
 
     async def __aenter__(self) -> "AgentSession":
-        if self._runner is None:
-            with use_metrics(self._runtime.metrics):
-                self._runner = await self._runtime.build_session()
-            self._runtime.register_session(self)
+        if self.runner is None:
+            with use_metrics(self.runtime.metrics):
+                self.runner = await self.runtime.build_session()
+            self.runtime.register_session(self)
         return self
 
     async def __aexit__(
@@ -393,19 +393,19 @@ class AgentSession:
     ) -> None:
         await self.close()
 
-    def _require_runner(self) -> SessionRunner:
-        if self._runner is None:
+    def require_runner(self) -> SessionRunner:
+        if self.runner is None:
             raise SessionError("AgentSession 尚未启动，请使用 async with")
-        if self._closed or self._runner.status is SessionStatus.TERMINATED:
+        if self.closed or self.runner.status is SessionStatus.TERMINATED:
             raise SessionError("AgentSession 已终止")
-        return self._runner
+        return self.runner
 
     async def run(self, user_message: str, **kwargs: Any) -> AgentResponse:
-        runner = self._require_runner()
-        if self._run_lock.locked():
+        runner = self.require_runner()
+        if self.run_lock.locked():
             raise ConcurrentSessionRunError("同一 AgentSession 不能并发执行两个轮次")
-        async with self._run_lock:
-            with use_metrics(self._runtime.metrics):
+        async with self.run_lock:
+            with use_metrics(self.runtime.metrics):
                 return await runner.run_turn(user_message, **kwargs)
 
     async def run_stream(
@@ -413,26 +413,26 @@ class AgentSession:
         user_message: str,
         **kwargs: Any,
     ) -> AsyncIterator[AgentEvent]:
-        runner = self._require_runner()
-        if self._run_lock.locked():
+        runner = self.require_runner()
+        if self.run_lock.locked():
             raise ConcurrentSessionRunError("同一 AgentSession 不能并发执行两个轮次")
-        async with self._run_lock:
-            with use_metrics(self._runtime.metrics):
+        async with self.run_lock:
+            with use_metrics(self.runtime.metrics):
                 async for event in runner.run_turn_stream(user_message, **kwargs):
                     yield event
 
     def abort(self) -> None:
-        self._require_runner().abort()
+        self.require_runner().abort()
 
     async def close(self) -> None:
-        if self._closed:
+        if self.closed:
             return
-        self._closed = True
-        if self._runner is not None:
-            self._runner.abort()
-            async with self._run_lock:
-                await self._runner.terminate()
-        self._runtime.unregister_session(self)
+        self.closed = True
+        if self.runner is not None:
+            self.runner.abort()
+            async with self.run_lock:
+                await self.runner.terminate()
+        self.runtime.unregister_session(self)
 
 
 __all__ = [

@@ -51,13 +51,13 @@ class ProcessRunner:
                 timeout=timeout,
             )
         except TimeoutError:
-            await self._terminate_tree(process)
+            await self.terminate_process_tree(process)
             raise ToolTimeoutError(
                 f"命令执行超时（{timeout}s）",
                 details={"timeout": timeout},
             ) from None
         except asyncio.CancelledError:
-            await asyncio.shield(self._terminate_tree(process))
+            await asyncio.shield(self.terminate_process_tree(process))
             raise
         return ProcessResult(
             process.returncode or 0,
@@ -66,7 +66,7 @@ class ProcessRunner:
         )
 
     @staticmethod
-    async def _terminate_tree(process: asyncio.subprocess.Process) -> None:
+    async def terminate_process_tree(process: asyncio.subprocess.Process) -> None:
         if process.returncode is not None:
             return
         if os.name == "nt":

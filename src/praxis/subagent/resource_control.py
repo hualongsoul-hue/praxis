@@ -13,7 +13,7 @@ from praxis.lifecycle import TaskSupervisor
 from praxis.telemetry.logger import get_logger
 
 log = get_logger("subagent.resource_control")
-_T = TypeVar("_T")
+T = TypeVar("T")
 
 
 class ResourceController:
@@ -30,6 +30,7 @@ class ResourceController:
         self.config = config
         self.supervisor = supervisor
         self.semaphore = asyncio.Semaphore(config.max_concurrent)
+        self.available_permits = config.max_concurrent
         self.running: dict[str, asyncio.Task[Any]] = {}
 
     async def acquire(self, subagent_id: str) -> bool:
@@ -42,12 +43,14 @@ class ResourceController:
             是否成功获取。
         """
         await self.semaphore.acquire()
+        self.available_permits -= 1
         log.info("并发槽位已分配", subagent_id=subagent_id)
         return True
 
     def release(self, subagent_id: str) -> None:
         """释放并发槽位。"""
         self.semaphore.release()
+        self.available_permits += 1
         self.running.pop(subagent_id, None)
         log.info("并发槽位已释放", subagent_id=subagent_id)
 
@@ -58,8 +61,8 @@ class ResourceController:
     def create_task(
         self,
         subagent_id: str,
-        coroutine: Coroutine[Any, Any, _T],
-    ) -> asyncio.Task[_T]:
+        coroutine: Coroutine[Any, Any, T],
+    ) -> asyncio.Task[T]:
         """Create and register a child task under the Runtime supervisor."""
         if self.supervisor is None:
             task = asyncio.create_task(coroutine, name=f"praxis-subagent-{subagent_id}")
@@ -70,11 +73,11 @@ class ResourceController:
             )
         self.register_task(subagent_id, task)
         task.add_done_callback(
-            lambda completed: self._discard_completed(subagent_id, completed)
+            lambda completed: self.discard_completed(subagent_id, completed)
         )
         return task
 
-    def _discard_completed(
+    def discard_completed(
         self,
         subagent_id: str,
         task: asyncio.Task[Any],
@@ -98,4 +101,4 @@ class ResourceController:
     @property
     def available_slots(self) -> int:
         """当前可用并发槽位数（基于信号量实际剩余值）。"""
-        return self.semaphore._value
+        return self.available_permits
