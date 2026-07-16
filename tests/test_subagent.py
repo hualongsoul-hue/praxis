@@ -10,6 +10,7 @@ import pytest
 
 from praxis.config.schemas import (
     ContextConfig,
+    InputConfig,
     OrchestratorConfig,
     PersistenceConfig,
     SubagentConfig,
@@ -194,6 +195,34 @@ class TestIsolatedContext:
             assert session is not None
             assert session.session_id
             assert session.registry.has_tool("test_tool")
+        finally:
+            await session.terminate()
+
+    async def test_fallback_session_inherits_input_config(
+        self,
+        store: PersistenceStore,
+        mock_gateway: MagicMock,
+        guardrails: GuardrailEngine,
+        registry: ToolRegistry,
+    ) -> None:
+        input_config = InputConfig(max_attachment_bytes=321)
+        isolation = IsolatedContext(
+            store=store,
+            gateway=mock_gateway,
+            orchestrator_config=OrchestratorConfig(max_turns=10),
+            context_config=ContextConfig(),
+            input_config=input_config,
+            runtime=None,
+        )
+
+        session = await isolation.create_isolated_session(
+            SubagentSpec(task="input policy"),
+            guardrails,
+            registry,
+        )
+        try:
+            assert session.input_resolver.config is input_config
+            assert session.input_resolver.config.max_attachment_bytes == 321
         finally:
             await session.terminate()
 

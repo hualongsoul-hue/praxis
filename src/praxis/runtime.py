@@ -1,7 +1,8 @@
 """应用级 PraxisRuntime 与并发安全的 AgentSession。"""
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import aclosing
 from importlib.util import find_spec
 from typing import Any, Protocol, cast
 
@@ -36,7 +37,7 @@ class SessionRunner(Protocol):
         self,
         user_input: InputValue,
         **kwargs: Any,
-    ) -> AsyncIterator[AgentEvent]: ...
+    ) -> AsyncGenerator[AgentEvent, None]: ...
 
     def abort(self) -> None: ...
 
@@ -416,14 +417,16 @@ class AgentSession:
         self,
         user_input: InputValue,
         **kwargs: Any,
-    ) -> AsyncIterator[AgentEvent]:
+    ) -> AsyncGenerator[AgentEvent, None]:
         runner = self.require_runner()
         if self.run_lock.locked():
             raise ConcurrentSessionRunError("同一 AgentSession 不能并发执行两个轮次")
         async with self.run_lock:
             with use_metrics(self.runtime.metrics):
-                async for event in runner.run_turn_stream(user_input, **kwargs):
-                    yield event
+                stream = runner.run_turn_stream(user_input, **kwargs)
+                async with aclosing(stream):
+                    async for event in stream:
+                        yield event
 
     def abort(self) -> None:
         self.require_runner().abort()

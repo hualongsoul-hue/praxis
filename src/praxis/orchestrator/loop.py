@@ -6,7 +6,8 @@
 """
 
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from typing import Any, cast
 
 from json_repair import repair_json
@@ -319,21 +320,49 @@ class OrchestrationLoop:
 
     def sanitize_run_input(self, ctx: RunContext) -> None:
         """Replace active provider content with its safe text projection."""
+        history = self.assembler.conversation_history
         index = ctx.input_history_index
-        if index is None:
-            return
         history_message = ctx.input_history_message
-        if history_message is not None:
-            history_message.clear()
-            history_message.update({
-                "role": "user",
-                "content": ctx.safe_input_projection,
-            })
-        elif 0 <= index < len(self.assembler.conversation_history):
-            self.assembler.conversation_history[index] = {
-                "role": "user",
-                "content": ctx.safe_input_projection,
-            }
+
+        live_message = next(
+            (
+                message
+                for message in history
+                if history_message is not None and message is history_message
+            ),
+            None,
+        )
+        if live_message is None and index is not None and 0 <= index < len(history):
+            indexed_message = history[index]
+            is_structured_user = (
+                indexed_message.get("role") == "user"
+                and isinstance(indexed_message.get("content"), list)
+            )
+            matches_active_input = (
+                history_message is None or indexed_message == history_message
+            )
+            if is_structured_user and matches_active_input:
+                live_message = indexed_message
+
+        safe_message = {
+            "role": "user",
+            "content": ctx.safe_input_projection,
+        }
+        if live_message is not None:
+            live_message.clear()
+            live_message.update(safe_message)
+            return
+
+        for message in history:
+            if (
+                message.get("role") == "user"
+                and isinstance(message.get("content"), list)
+            ):
+                message.clear()
+                message.update({
+                    "role": "user",
+                    "content": ctx.safe_input_projection,
+                })
 
     # ── 公共后处理方法 ────────────────────────────────────────────────────
 
@@ -667,7 +696,7 @@ class OrchestrationLoop:
         developer_instructions: str = "",
         user_instructions: str = "",
         task_stage: str = "general",
-    ) -> AsyncIterator[AgentEvent]:
+    ) -> AsyncGenerator[AgentEvent, None]:
         """流式运行 Agent 轮次，逐事件 yield。
 
         Args:
@@ -685,13 +714,15 @@ class OrchestrationLoop:
             developer_instructions, user_instructions, task_stage,
         )
 
+        stream = self.stream_run(ctx)
         try:
-            async for event in self.stream_run(ctx):
-                yield event
+            async with aclosing(stream):
+                async for event in stream:
+                    yield event
         finally:
             self.sanitize_run_input(ctx)
 
-    async def stream_run(self, ctx: RunContext) -> AsyncIterator[AgentEvent]:
+    async def stream_run(self, ctx: RunContext) -> AsyncGenerator[AgentEvent, None]:
         """Execute the streaming state machine for an initialized run."""
 
         early = await self.prepare_run(ctx)
@@ -717,27 +748,29 @@ class OrchestrationLoop:
 
             # 逐 chunk 消费响应
             accumulator = StreamAccumulator()
-            async for chunk in chat_stream(
+            response_stream = chat_stream(
                 self.gateway,
                 prompt.messages,
                 model=self.model,
                 tools=prompt.tools if prompt.tools else None,
-            ):
-                delta = accumulator.feed(chunk)
-                if delta.reasoning:
-                    reasoning_event = self.emitter.emit(
-                        "reasoning_delta",
-                        turn=self.state.current_turn,
-                        data={"text": delta.reasoning},
-                    )
-                    yield reasoning_event
-                if delta.content:
-                    delta_event = self.emitter.emit(
-                        "content_delta",
-                        turn=self.state.current_turn,
-                        data={"text": delta.content},
-                    )
-                    yield delta_event
+            )
+            async with aclosing(response_stream):
+                async for chunk in response_stream:
+                    delta = accumulator.feed(chunk)
+                    if delta.reasoning:
+                        reasoning_event = self.emitter.emit(
+                            "reasoning_delta",
+                            turn=self.state.current_turn,
+                            data={"text": delta.reasoning},
+                        )
+                        yield reasoning_event
+                    if delta.content:
+                        delta_event = self.emitter.emit(
+                            "content_delta",
+                            turn=self.state.current_turn,
+                            data={"text": delta.content},
+                        )
+                        yield delta_event
 
             response = accumulator.build_response()
 

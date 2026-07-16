@@ -2,7 +2,7 @@
 
 import asyncio
 import warnings
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator
 from typing import Any, cast
 
 from pydantic.warnings import PydanticDeprecatedSince211
@@ -260,7 +260,7 @@ async def chat_stream(
     model: str | None = None,
     tools: list[dict[str, Any]] | None = None,
     **kwargs: Any,
-) -> AsyncIterator[ModelResponseChunk]:
+) -> AsyncGenerator[ModelResponseChunk, None]:
     model_name = model or gateway.config.default_model
     deployment = gateway.resolve_deployment(model_name)
     reservation = prepare_reservation(gateway, deployment, messages, kwargs)

@@ -1,8 +1,10 @@
 """S11 编排循环单元测试。"""
 
 import asyncio
+from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from copy import deepcopy
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,7 +12,7 @@ import pytest
 from praxis.config.schemas import ContextConfig, OrchestratorConfig
 from praxis.context.assembler import PromptAssembler
 from praxis.context.compaction import ContextCompactor
-from praxis.models.context import TokenUsage
+from praxis.models.context import RunContext, TokenUsage
 from praxis.models.guardrails import GuardrailVerdict, VerdictType
 from praxis.models.messages import (
     ImageContent,
@@ -706,15 +708,42 @@ class TestOrchestrationLoop:
 
     async def test_stream_generator_close_sanitizes_structured_history(self) -> None:
         loop = self.make_history_loop()
+        delegated_closed = asyncio.Event()
+        delegated_streams: list[AsyncGenerator[AgentEvent, None]] = []
+        original_stream_run = loop.stream_run
+
+        async def observe_delegated_stream(
+            ctx: RunContext,
+        ) -> AsyncGenerator[AgentEvent, None]:
+            inner_stream = original_stream_run(ctx)
+            try:
+                async with aclosing(inner_stream):
+                    async for event in inner_stream:
+                        yield event
+            finally:
+                delegated_closed.set()
+
+        def observed_stream_run(ctx: RunContext) -> AsyncGenerator[AgentEvent, None]:
+            delegated = observe_delegated_stream(ctx)
+            delegated_streams.append(delegated)
+            return delegated
+
         event_stream = loop.run_stream(resolved_image_input())
 
-        assert (await anext(event_stream)).event_type == "turn_start"
-        await event_stream.aclose()
+        try:
+            with patch.object(loop, "stream_run", observed_stream_run):
+                assert (await anext(event_stream)).event_type == "turn_start"
+                await event_stream.aclose()
 
-        assert loop.assembler.conversation_history == [{
-            "role": "user",
-            "content": "describe\n\n[image: image.png, image/png, 3 bytes]",
-        }]
+            assert delegated_closed.is_set()
+            assert loop.assembler.conversation_history == [{
+                "role": "user",
+                "content": "describe\n\n[image: image.png, image/png, 3 bytes]",
+            }]
+        finally:
+            await event_stream.aclose()
+            for delegated in delegated_streams:
+                await delegated.aclose()
 
     @patch("praxis.orchestrator.loop.chat")
     async def test_max_turn_termination_sanitizes_structured_history(
@@ -792,6 +821,53 @@ class TestOrchestrationLoop:
             "content": "describe\n\n[image: image.png, image/png, 3 bytes]",
         }
         assert "data:" not in str(loop.assembler.conversation_history)
+
+    @patch("praxis.orchestrator.loop.chat")
+    async def test_copying_compactor_failure_sanitizes_live_structured_history(
+        self,
+        mock_chat: Any,
+    ) -> None:
+        class CopyingCompactor:
+            async def compact(
+                self,
+                messages: list[dict[str, Any]],
+                file_refs: list[str],
+            ) -> None:
+                copied_structured = [
+                    deepcopy(message)
+                    for message in messages
+                    if message.get("role") == "user"
+                    and isinstance(message.get("content"), list)
+                ]
+                messages.clear()
+                messages.extend([
+                    {"role": "system", "content": "compacted"},
+                    *copied_structured,
+                ])
+
+        mock_chat.return_value = make_model_response(tool_calls=[make_tool_call()])
+        loop = self.make_loop()
+        loop.assembler = PromptAssembler(
+            ContextConfig(compaction_threshold=0.000001)
+        )
+        loop.compactor = cast(Any, CopyingCompactor())
+        loop.compaction_min_history = 1
+
+        with pytest.raises(
+            RuntimeError,
+            match="context compaction discarded the active user input",
+        ):
+            await loop.run(resolved_image_input())
+
+        assert loop.assembler.conversation_history == [
+            {"role": "system", "content": "compacted"},
+            {
+                "role": "user",
+                "content": "describe\n\n[image: image.png, image/png, 3 bytes]",
+            },
+        ]
+        assert "data:" not in str(loop.assembler.conversation_history)
+        assert "cG5n" not in str(loop.assembler.conversation_history)
 
     @patch("praxis.orchestrator.loop.chat")
     async def test_plan_and_execute_generates_plan(self, mock_chat: Any) -> None:

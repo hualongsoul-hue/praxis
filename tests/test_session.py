@@ -1,6 +1,8 @@
 """S12 会话管理单元测试。"""
 
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -143,7 +145,7 @@ class TestSessionFactory:
         async def stream_events(
             resolved_input: ResolvedUserInput,
             **kwargs: Any,
-        ) -> AsyncIterator[AgentEvent]:
+        ) -> AsyncGenerator[AgentEvent, None]:
             assert resolved_input is resolved
             yield session.loop.emitter.emit("stream_test", turn=0)
 
@@ -231,6 +233,78 @@ class TestSessionFactory:
             ]]
             assert "data:" not in str(checkpoint_history)
         finally:
+            await session.terminate()
+
+    async def test_stream_close_cascades_and_checkpoint_sees_sanitized_history(
+        self,
+        store: PersistenceStore,
+        guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
+    ) -> None:
+        mock_gateway.capabilities.return_value = ModelCapabilities(image=True)
+        factory = SessionFactory(
+            store=store,
+            session_config=SessionConfig(auto_checkpoint=False),
+            orchestrator_config=OrchestratorConfig(),
+            context_config=ContextConfig(),
+            input_config=InputConfig(),
+        )
+        session = await factory.create_session(
+            guardrails=guardrails,
+            gateway=mock_gateway,
+        )
+        user_input = UserInput(
+            text="describe",
+            parts=(ImageInput.from_bytes(b"png", media_type="image/png"),),
+        )
+        delegated_closed = asyncio.Event()
+        delegated_streams: list[AsyncGenerator[AgentEvent, None]] = []
+        original_run_stream = session.loop.run_stream
+
+        async def observe_delegated_stream(
+            resolved_input: ResolvedUserInput,
+            stream_kwargs: dict[str, Any],
+        ) -> AsyncGenerator[AgentEvent, None]:
+            inner_stream = original_run_stream(resolved_input, **stream_kwargs)
+            try:
+                async with aclosing(inner_stream):
+                    async for event in inner_stream:
+                        yield event
+            finally:
+                delegated_closed.set()
+
+        def observed_run_stream(
+            resolved_input: ResolvedUserInput,
+            **kwargs: Any,
+        ) -> AsyncGenerator[AgentEvent, None]:
+            delegated = observe_delegated_stream(resolved_input, kwargs)
+            delegated_streams.append(delegated)
+            return delegated
+
+        outer_stream = session.run_turn_stream(user_input)
+        try:
+            with patch.object(session.loop, "run_stream", observed_run_stream):
+                assert (await anext(outer_stream)).event_type == "turn_start"
+                assert "data:" in str(session.assembler.conversation_history)
+                await outer_stream.aclose()
+
+            assert delegated_closed.is_set()
+            assert "data:" not in str(session.assembler.conversation_history)
+            assert "cG5n" not in str(session.assembler.conversation_history)
+
+            checkpoint_id = await session.save_auto_checkpoint()
+            assert checkpoint_id is not None
+            checkpoint = await CheckpointManager(store).load_checkpoint(
+                session.session_id,
+                checkpoint_id,
+            )
+            assert checkpoint is not None
+            assert "data:" not in str(checkpoint.state)
+            assert "cG5n" not in str(checkpoint.state)
+        finally:
+            await outer_stream.aclose()
+            for delegated in delegated_streams:
+                await delegated.aclose()
             await session.terminate()
 
     async def test_session_has_unique_id(

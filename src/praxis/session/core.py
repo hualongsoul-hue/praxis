@@ -4,8 +4,8 @@ create_session 创建新会话时初始化所有组件实例，
 注入配置，加载项目级记忆/工具/权限，生成会话 ID 和初始检查点。
 """
 
-from collections.abc import AsyncIterator
-from contextlib import AsyncExitStack
+from collections.abc import AsyncGenerator
+from contextlib import AsyncExitStack, aclosing
 from typing import Any
 
 from praxis.config.schemas import (
@@ -191,7 +191,7 @@ class Session:
         self,
         user_input: InputValue,
         **kwargs: Any,
-    ) -> AsyncIterator[AgentEvent]:
+    ) -> AsyncGenerator[AgentEvent, None]:
         """流式执行一轮对话。"""
         self.metadata.status = SessionStatus.ACTIVE
         self.apply_continuation(kwargs)
@@ -200,10 +200,12 @@ class Session:
             self.model_capabilities,
         )
         turn_tokens = 0
-        async for event in self.loop.run_stream(resolved, **kwargs):
-            if event.event_type == "llm_request":
-                turn_tokens += event.data.get("token_count", 0)
-            yield event
+        stream = self.loop.run_stream(resolved, **kwargs)
+        async with aclosing(stream):
+            async for event in stream:
+                if event.event_type == "llm_request":
+                    turn_tokens += event.data.get("token_count", 0)
+                yield event
 
         # 与 run_turn 对齐：续接推进、累加统计并触发自动检查点
         if self.continuation is not None:

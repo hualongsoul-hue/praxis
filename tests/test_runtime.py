@@ -1,7 +1,8 @@
 """应用级 Runtime 与 AgentSession 生命周期测试。"""
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import aclosing
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,13 +22,14 @@ from praxis.config.schemas import (
 )
 from praxis.exceptions import ConcurrentSessionRunError, RuntimeStateError, SessionError
 from praxis.gateway.router import GatewayRouter
-from praxis.models.inputs import ImageInput, UserInput
+from praxis.models.inputs import ImageInput, InputValue, UserInput
 from praxis.models.orchestrator import AgentEvent, AgentResponse
 from praxis.models.responses import ModelResponse, ModelResponseChunk
 from praxis.models.session import SessionStatus
 from praxis.models.subagent import SubagentSpec
 from praxis.models.tools import ToolDefinition, ToolMetadata
 from praxis.runtime import HealthStatus, PraxisRuntime
+from praxis.session.core import Session
 from praxis.tools.registry import ToolRegistry
 
 
@@ -77,7 +79,7 @@ class FakeRunner:
         self.terminated = False
         self.aborted = False
 
-    async def run_turn(self, user_message: str, **kwargs: Any) -> AgentResponse:
+    async def run_turn(self, user_message: InputValue, **kwargs: Any) -> AgentResponse:
         if self.started is not None:
             self.started.set()
         if self.release is not None:
@@ -86,9 +88,9 @@ class FakeRunner:
 
     async def run_turn_stream(
         self,
-        user_message: str,
+        user_message: InputValue,
         **kwargs: Any,
-    ) -> AsyncIterator[AgentEvent]:
+    ) -> AsyncGenerator[AgentEvent, None]:
         yield AgentEvent(event_type="content", data={"content": user_message})
 
     def abort(self) -> None:
@@ -235,6 +237,80 @@ async def test_multimodal_run_and_stream_send_equivalent_provider_content(
     assert isinstance(content, list)
     assert content[0] == {"type": "text", "text": "describe"}
     assert content[1]["type"] == "image_url"
+
+
+async def test_agent_session_stream_close_cascades_before_lock_release(
+    tmp_path: Path,
+) -> None:
+    gateway = RecordingGateway()
+    config = runtime_config(tmp_path).model_copy(
+        update={
+            "gateway": gateway.config,
+            "inputs": InputConfig(),
+        }
+    )
+    user_input = UserInput(
+        text="describe",
+        parts=(ImageInput.from_bytes(b"png", media_type="image/png"),),
+    )
+    delegated_closed = asyncio.Event()
+    delegated_streams: list[AsyncGenerator[AgentEvent, None]] = []
+
+    async with PraxisRuntime(config, gateway=gateway) as runtime:
+        async with runtime.session() as agent_session:
+            runner = agent_session.runner
+            assert isinstance(runner, Session)
+            original_run_turn_stream = runner.run_turn_stream
+
+            async def observe_delegated_stream(
+                stream_input: InputValue,
+                stream_kwargs: dict[str, Any],
+            ) -> AsyncGenerator[AgentEvent, None]:
+                inner_stream = original_run_turn_stream(stream_input, **stream_kwargs)
+                try:
+                    async with aclosing(inner_stream):
+                        async for event in inner_stream:
+                            yield event
+                finally:
+                    delegated_closed.set()
+
+            def observed_run_turn_stream(
+                stream_input: InputValue,
+                **kwargs: Any,
+            ) -> AsyncGenerator[AgentEvent, None]:
+                delegated = observe_delegated_stream(stream_input, kwargs)
+                delegated_streams.append(delegated)
+                return delegated
+
+            outer_stream = agent_session.run_stream(user_input)
+            try:
+                with patch.object(
+                    runner,
+                    "run_turn_stream",
+                    observed_run_turn_stream,
+                ):
+                    assert (await anext(outer_stream)).event_type == "turn_start"
+                    assert "data:" in str(runner.assembler.conversation_history)
+                    await outer_stream.aclose()
+
+                assert delegated_closed.is_set()
+                assert not agent_session.run_lock.locked()
+                assert "data:" not in str(runner.assembler.conversation_history)
+                assert "cG5n" not in str(runner.assembler.conversation_history)
+
+                previous_request_count = len(gateway.recording_router.messages)
+                response = await agent_session.run("next")
+                assert response.content == "ok"
+                subsequent_requests = gateway.recording_router.messages[
+                    previous_request_count:
+                ]
+                assert subsequent_requests
+                assert "data:" not in str(subsequent_requests)
+                assert "cG5n" not in str(subsequent_requests)
+            finally:
+                await outer_stream.aclose()
+                for delegated in delegated_streams:
+                    await delegated.aclose()
 
 
 async def test_start_and_close_are_idempotent(tmp_path: Path) -> None:
