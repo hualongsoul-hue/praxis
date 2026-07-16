@@ -28,25 +28,59 @@ SECRET_RULES: tuple[tuple[str, re.Pattern[bytes]], ...] = (
     ),
 )
 
+API_SECRET_KEY_LABEL = (
+    rb"(?:[A-Za-z0-9]+[_-]+)*(?:api[_-]?key|access[_-]?token|client[_-]?secret)"
+)
+API_SECRET_QUOTED_LITERAL = (
+    rb'''(?:"[A-Za-z0-9._${}<>{}\[\]%/+~=-]*"|'''
+    rb'''\'[A-Za-z0-9._${}<>{}\[\]%/+~=-]*\')'''
+)
+API_SECRET_BARE_LITERAL = (
+    rb"(?:[A-Za-z0-9._${}<>%/+~-]+={0,2})"
+    rb"(?![A-Za-z0-9_.$/+%<>{}~=()\[\]-])"
+)
 API_SECRET_ASSIGNMENT = re.compile(
-    rb"""(?imx)
-    ^[ \t]*(?:export[ \t]+|\$env:)?
-    (?P<key>(?:[A-Za-z0-9]+[_-]+)*(?:api[_-]?key|access[_-]?token|client[_-]?secret))
-    [ \t]*(?:=|:)[ \t]*
-    (?P<value>"[^"\r\n]*"|'[^'\r\n]*'|[A-Za-z0-9._${}<>%/+~-]+)
-    [ \t]*(?:\#[^\r\n]*)?$
-    """
+    rb"(?ix)(?:"
+    rb"(?<![A-Za-z0-9_'\"?&/])"
+    + API_SECRET_KEY_LABEL
+    + rb"[ \t]{0,8}(?:=|:)[ \t]{0,8}"
+    rb"(?P<direct_value>"
+    + API_SECRET_QUOTED_LITERAL
+    + rb"|"
+    + API_SECRET_BARE_LITERAL
+    + rb")|"
+    rb"(?:os\.)?environ[ \t]{0,8}\[[ \t]{0,8}"
+    rb"(?P<subscript_quote>[\"'])"
+    + API_SECRET_KEY_LABEL
+    + rb"(?P=subscript_quote)[ \t]{0,8}\][ \t]{0,8}=[ \t]{0,8}"
+    rb"(?P<subscript_value>"
+    + API_SECRET_QUOTED_LITERAL
+    + rb")|"
+    rb"(?:\{|,)[ \t]{0,8}(?P<label_quote>[\"'])"
+    + API_SECRET_KEY_LABEL
+    + rb"(?P=label_quote)[ \t]{0,8}:[ \t]{0,8}"
+    rb"(?P<mapped_value>"
+    + API_SECRET_QUOTED_LITERAL
+    + rb")"
+    rb")"
 )
 API_SECRET_ASSIGNMENT_ALLOWLIST = frozenset(
     {
         b"",
         b"<your-key>",
+        b"[REDACTED]",
+        b"None",
         b"abc123",
         b"expired",
         b"fake-contract-credential",
         b"intentionally-invalid-live-credential",
+        b"null",
+        b"secret-value-that-must-not-leak",
         b"sk-example0123456789abcdef",
         b"str",
+        b"test-key",
+        b"unit-secret",
+        b"unit-test-model-key",
     }
 )
 ENVIRONMENT_REFERENCE = re.compile(
@@ -103,11 +137,24 @@ def tracked_secret_candidates(root: Path) -> list[Path]:
 def assignment_value_is_allowed(value: bytes) -> bool:
     """Return whether a complete assignment uses an explicit safe placeholder."""
 
-    if len(value) >= 2 and value[:1] == value[-1:] and value[:1] in {b"'", b'"'}:
+    value_is_quoted = (
+        len(value) >= 2
+        and value[:1] == value[-1:]
+        and value[:1] in {b"'", b'"'}
+    )
+    if value_is_quoted:
         value = value[1:-1]
     return (
         value in API_SECRET_ASSIGNMENT_ALLOWLIST
         or ENVIRONMENT_REFERENCE.fullmatch(value) is not None
+        or (
+            not value_is_quoted
+            and re.fullmatch(
+                rb"[a-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*",
+                value,
+            )
+            is not None
+        )
     )
 
 
@@ -130,7 +177,12 @@ def scan_secret_files(
                     SecretFinding(path=relative_path, rule_name=rule_name)
                 )
         for assignment in API_SECRET_ASSIGNMENT.finditer(content):
-            if not assignment_value_is_allowed(assignment.group("value")):
+            value = (
+                assignment.group("direct_value")
+                or assignment.group("subscript_value")
+                or assignment.group("mapped_value")
+            )
+            if not assignment_value_is_allowed(value):
                 findings.append(
                     SecretFinding(
                         path=relative_path,
@@ -192,27 +244,77 @@ def test_secret_scanner_detects_multiple_provider_shapes(
 
 
 @pytest.mark.parametrize(
-    "assignment",
+    ("key", "assignment_template"),
     [
-        '$env:PRAXIS_MODEL_API_KEY = "' + "Q" * 32 + '"',
-        "export PRAXIS_MODEL_API_KEY=" + "R" * 32,
-        "PRAXIS_MODEL_API_KEY: '" + "S" * 32 + "'",
-        'PRAXIS_MODEL_API_KEY = "' + "T" * 32 + '"',
-        "INTERNAL_PROVIDER_API_KEY=" + "U" * 32,
+        ("PRAXIS_MODEL_API_KEY", '$env:{key} = "{token}"'),
+        ("PRAXIS_MODEL_API_KEY", "export {key}={token}"),
+        ("PRAXIS_MODEL_API_KEY", "{key}: '{token}'"),
+        ("PRAXIS_MODEL_API_KEY", '{key} = "{token}"'),
+        ("INTERNAL_PROVIDER_API_KEY", "{key}={token}"),
     ],
     ids=["powershell", "bash", "yaml", "python", "prefixed-generic"],
 )
 def test_secret_scanner_detects_target_and_generic_assignments(
     tmp_path: Path,
-    assignment: str,
+    key: str,
+    assignment_template: str,
 ) -> None:
     candidate = tmp_path / "assignment.txt"
-    candidate.write_text(assignment, encoding="utf-8")
+    candidate.write_text(
+        assignment_template.format(key=key, token="Q" * 32),
+        encoding="utf-8",
+    )
 
     findings = scan_secret_files([candidate], root=tmp_path)
 
     assert [(finding.path, finding.rule_name) for finding in findings] == [
         ("assignment.txt", "api_secret_assignment")
+    ]
+
+
+@pytest.mark.parametrize(
+    "assignment_template",
+    [
+        'os.environ["{key}"] = "{token}"',
+        'environ={{"{key}": "{token}"}}',
+        'dict({key}="{token}")',
+        "{key}={token}==",
+    ],
+    ids=["environ-subscript", "dict-literal", "dict-keyword", "base64-padding"],
+)
+def test_secret_scanner_detects_embedded_literal_assignments(
+    tmp_path: Path,
+    assignment_template: str,
+) -> None:
+    key = "PRAXIS_MODEL_API_KEY"
+    token = "W9xY2z" * 6
+    candidate = tmp_path / "embedded.py"
+    candidate.write_text(
+        assignment_template.format(key=key, token=token),
+        encoding="utf-8",
+    )
+
+    findings = scan_secret_files([candidate], root=tmp_path)
+
+    assert [(finding.path, finding.rule_name) for finding in findings] == [
+        ("embedded.py", "api_secret_assignment")
+    ]
+
+
+@pytest.mark.parametrize("marker", ["+", "-", " "], ids=["added", "removed", "context"])
+def test_secret_scanner_ignores_diff_markers_before_assignment(
+    tmp_path: Path,
+    marker: str,
+) -> None:
+    key = "PRAXIS_MODEL_API_KEY"
+    token = "D7fF3e" * 6
+    candidate = tmp_path / "review.diff"
+    candidate.write_text(f'{marker}{key}="{token}"', encoding="utf-8")
+
+    findings = scan_secret_files([candidate], root=tmp_path)
+
+    assert [(finding.path, finding.rule_name) for finding in findings] == [
+        ("review.diff", "api_secret_assignment")
     ]
 
 
@@ -259,6 +361,46 @@ def test_secret_assignment_allowlist_rejects_extended_values(
     assert [(finding.path, finding.rule_name) for finding in findings] == [
         ("not-allowlisted.txt", "api_secret_assignment")
     ]
+
+
+@pytest.mark.parametrize(
+    "source_template",
+    [
+        'environ={{"{key}": api_key}}',
+        'environ={{"{key}": ""}}',
+        'environ={{"{key}": None}}',
+        'os.environ.get("{key}", "")',
+        "{key}=",
+    ],
+    ids=["variable-reference", "empty-literal", "none-default", "get-default", "empty-shell"],
+)
+def test_secret_scanner_ignores_non_secret_mapping_values(
+    tmp_path: Path,
+    source_template: str,
+) -> None:
+    candidate = tmp_path / "safe.py"
+    candidate.write_text(
+        source_template.format(key="PRAXIS_MODEL_API_KEY"),
+        encoding="utf-8",
+    )
+
+    assert scan_secret_files([candidate], root=tmp_path) == []
+
+
+def test_assignment_failure_summary_never_contains_literal_value(tmp_path: Path) -> None:
+    key = "PRAXIS_MODEL_API_KEY"
+    token = "L8mN4p" * 6
+    candidate = tmp_path / "mapping.py"
+    candidate.write_text(
+        f'environ={{"{key}": "{token}"}}',
+        encoding="utf-8",
+    )
+
+    findings = scan_secret_files([candidate], root=tmp_path)
+    summary = format_secret_findings(findings)
+
+    assert summary == "mapping.py:api_secret_assignment"
+    assert token not in summary
 
 
 def test_secret_failure_summary_never_contains_matched_value(tmp_path: Path) -> None:
