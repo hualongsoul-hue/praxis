@@ -42,6 +42,16 @@ class OpenAIContractHandler(BaseHTTPRequestHandler):
                     401,
                     b'{"error":{"message":"invalid credential","type":"authentication_error"}}',
                 )
+            elif response_kind == "not_found":
+                self.send_payload(
+                    404,
+                    b'{"error":{"message":"model not found","type":"not_found_error"}}',
+                )
+            elif response_kind == "service_unavailable":
+                self.send_payload(
+                    503,
+                    b'{"error":{"message":"no healthy worker","type":"service_unavailable"}}',
+                )
             elif response_kind == "malformed":
                 self.send_payload(200, b"{not-json")
             elif request.get("stream") is True:
@@ -94,7 +104,7 @@ class OpenAIContractHandler(BaseHTTPRequestHandler):
     def send_stream(self, *, block_after_first: bool = False) -> None:
         contract = cast(ContractHttpServer, self.server).contract
         contract.stream_completed.clear()
-        frames = [
+        frames: list[dict[str, Any]] = [
             {
                 "id": "chatcmpl-contract-stream",
                 "object": "chat.completion.chunk",
@@ -171,8 +181,10 @@ class OpenAIContractHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
         self.wfile.flush()
 
-    def log_message(self, format_string: str, *args: object) -> None:
+    def log_message(self, format: str, *args: object) -> None:
         """Suppress the base class's stderr request log."""
+
+        del format, args
 
 
 class OpenAICompatibleServer:
@@ -192,7 +204,9 @@ class OpenAICompatibleServer:
         self.closed = False
         self.http_server = ContractHttpServer(("127.0.0.1", 0), OpenAIContractHandler)
         self.http_server.contract = self
-        host, port = self.http_server.server_address
+        address = self.http_server.server_address
+        host = str(address[0])
+        port = int(address[1])
         self.base_url = f"http://{host}:{port}/v1"
         self.thread = threading.Thread(
             target=self.http_server.serve_forever,

@@ -6,11 +6,17 @@ import asyncio
 import json
 import os
 from collections.abc import AsyncIterator
+from contextlib import aclosing
 
 import pytest
 
 from praxis.config import GatewayConfig, ModelDeployment
-from praxis.exceptions import GatewayError, GatewayTimeoutError
+from praxis.exceptions import (
+    AuthenticationError,
+    GatewayError,
+    GatewayTimeoutError,
+    ModelNotFoundError,
+)
 from praxis.gateway.chat import chat, chat_stream
 from praxis.gateway.router import GatewayRouter
 
@@ -40,7 +46,7 @@ async def live_gateway() -> AsyncIterator[GatewayRouter]:
             default_model="default",
             timeout=30.0,
             num_retries=0,
-            max_concurrent_requests=2,
+            max_concurrent_requests=1,
             max_total_tokens=20_000,
         ),
         environ={"PRAXIS_MODEL_API_KEY": api_key},
@@ -136,37 +142,72 @@ async def test_live_forced_tool_call(live_gateway: GatewayRouter) -> None:
 
 
 async def test_live_stream_can_be_cancelled(live_gateway: GatewayRouter) -> None:
-    started = asyncio.Event()
+    first_chunk_received = asyncio.Event()
+    hold_stream = asyncio.Event()
 
     async def consume() -> None:
-        started.set()
-        async for chunk in chat_stream(
-            live_gateway,
-            [{"role": "user", "content": "写一篇较长的分布式系统说明"}],
-            max_tokens=512,
-        ):
-            assert chunk is not None
+        async with aclosing(
+            chat_stream(
+                live_gateway,
+                [{"role": "user", "content": "写一篇较长的分布式系统说明"}],
+                max_tokens=512,
+            )
+        ) as stream:
+            async for chunk in stream:
+                assert chunk is not None
+                first_chunk_received.set()
+                await hold_stream.wait()
 
     task = asyncio.create_task(consume())
-    await started.wait()
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    try:
+        await asyncio.wait_for(first_chunk_received.wait(), timeout=30.0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        if not task.done():
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
 
-    assert await live_gateway.health()
+    response = None
+    error_category: str | None = None
+    try:
+        response = await asyncio.wait_for(
+            chat(
+                live_gateway,
+                [{"role": "user", "content": "只回复单词 healthy"}],
+                timeout=30.0,
+                max_tokens=32,
+            ),
+            timeout=35.0,
+        )
+    except GatewayError as exc:
+        error_category = type(exc).__name__
+    if error_category is not None:
+        pytest.fail(f"post-cancellation text request returned {error_category}")
+    assert response is not None
+    assert response.content
+    assert "healthy" in response.content.lower()
 
 
 async def test_live_timeout_is_mapped(live_gateway: GatewayRouter) -> None:
-    with pytest.raises((GatewayTimeoutError, GatewayError)):
+    observed_error: GatewayError | None = None
+    try:
         await chat(
             live_gateway,
             [{"role": "user", "content": "回复任意内容"}],
             timeout=0.000001,
             max_tokens=16,
         )
+    except GatewayError as exc:
+        observed_error = exc
+
+    assert type(observed_error) is GatewayTimeoutError
+    assert observed_error.details["original_type"] == "Timeout"
 
 
-async def test_live_endpoint_error_is_mapped() -> None:
+async def test_live_not_found_is_mapped() -> None:
     api_key = os.environ.get("PRAXIS_MODEL_API_KEY")
     if not api_key:
         pytest.skip("需要 PRAXIS_MODEL_API_KEY 才能执行 live model 测试")
@@ -186,11 +227,52 @@ async def test_live_endpoint_error_is_mapped() -> None:
         environ={"PRAXIS_MODEL_API_KEY": api_key},
     )
     try:
-        with pytest.raises(GatewayError):
+        observed_error: GatewayError | None = None
+        try:
             await chat(
                 gateway,
                 [{"role": "user", "content": "ping"}],
                 max_tokens=8,
             )
+        except GatewayError as exc:
+            observed_error = exc
     finally:
         await gateway.close()
+
+    assert type(observed_error) is ModelNotFoundError
+    assert observed_error.details["original_type"] == "NotFoundError"
+
+
+async def test_live_authentication_error_is_mapped() -> None:
+    if not os.environ.get("PRAXIS_MODEL_API_KEY"):
+        pytest.skip("需要 PRAXIS_MODEL_API_KEY 才能执行 live model 测试")
+    gateway = GatewayRouter(
+        GatewayConfig(
+            deployments=[
+                ModelDeployment(
+                    model_name="default",
+                    model=MODEL,
+                    api_base=API_BASE,
+                ),
+            ],
+            num_retries=0,
+            timeout=30.0,
+        ),
+        environ={"PRAXIS_MODEL_API_KEY": "intentionally-invalid-live-credential"},
+    )
+    try:
+        observed_error: GatewayError | None = None
+        try:
+            await chat(
+                gateway,
+                [{"role": "user", "content": "ping"}],
+                timeout=30.0,
+                max_tokens=8,
+            )
+        except GatewayError as exc:
+            observed_error = exc
+    finally:
+        await gateway.close()
+
+    assert type(observed_error) is AuthenticationError
+    assert observed_error.details["original_type"] == "AuthenticationError"

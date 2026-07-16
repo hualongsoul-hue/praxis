@@ -27,8 +27,8 @@ gateway:
 记忆处理、验证和 MCP Sampling 都使用 `default_model`；MCP Server 的模型 hint 不能覆盖它。
 
 `capabilities` 描述当前端点已验证的能力，不是 SDK 支持列表。Praxis 的输入传输层支持图片、音频、
-视频和文件；但只有在真实健康窗口中稳定成功的端点模态才能配置为 `true`。`false` 会在任何文件或
-网络 I/O 之前返回 `UnsupportedInputModalityError`，避免把未验证能力交给远端碰运气。
+视频和文件；但只有在至少三个独立真实健康窗口中稳定成功的端点模态才能配置为 `true`。`false`
+会在任何文件或网络 I/O 之前返回 `UnsupportedInputModalityError`，避免把未验证能力交给远端碰运气。
 
 启用 `max_budget` 时，每个部署必须提供可信的显式价格，或由 LiteLLM 返回可识别价格；价格未知时
 调用失败关闭。`max_total_tokens` 独立生效，不能通过零价格绕过。

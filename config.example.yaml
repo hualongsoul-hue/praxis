@@ -44,7 +44,7 @@ gateway:
 
 # ── 用户输入解析 ──────────────────────────────────────────
 inputs:
-  # 本地附件必须位于至少一个授权根目录内；空列表拒绝所有本地路径。
+  # schema 默认空列表并拒绝所有本地路径；本示例显式授权 ./attachments。
   allowed_paths:
     - "./attachments"
   remote_enabled: false       # URL 附件必须显式启用

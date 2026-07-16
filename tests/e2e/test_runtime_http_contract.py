@@ -18,9 +18,16 @@ from praxis.config.schemas import (
     SessionConfig,
 )
 from praxis.config.settings import PraxisConfig
-from praxis.exceptions import AuthenticationError, GatewayError, GatewayTimeoutError
+from praxis.exceptions import (
+    AuthenticationError,
+    GatewayError,
+    GatewayTimeoutError,
+    ModelNotFoundError,
+    ProviderUnavailableError,
+)
 from praxis.gateway.router import GatewayRouter
 from praxis.models.inputs import AudioInput, FileInput, ImageInput, UserInput, VideoInput
+from praxis.models.orchestrator import AgentEvent
 from praxis.runtime import PraxisRuntime
 
 if TYPE_CHECKING:
@@ -224,10 +231,17 @@ async def test_runtime_stream_cancellation_releases_real_http_handler(
     openai_compatible_server: OpenAICompatibleServer,
 ) -> None:
     openai_compatible_server.block_stream_after_first_frame()
-    config = make_contract_config(tmp_path, openai_compatible_server.base_url)
+    base_config = make_contract_config(tmp_path, openai_compatible_server.base_url)
+    config = base_config.model_copy(
+        update={
+            "gateway": base_config.gateway.model_copy(
+                update={"max_concurrent_requests": 1}
+            )
+        }
+    )
     async with PraxisRuntime(config, gateway=make_gateway(config)) as runtime:
         async with runtime.session() as session:
-            events = []
+            events: list[AgentEvent] = []
             content_received = asyncio.Event()
 
             async def consume_stream() -> None:
@@ -254,12 +268,20 @@ async def test_runtime_stream_cancellation_releases_real_http_handler(
                     with pytest.raises(asyncio.CancelledError):
                         await pending
 
-    assert len(openai_compatible_server.requests) == 1
+        openai_compatible_server.choose_response("regular")
+        async with runtime.session() as followup_session:
+            followup = await asyncio.wait_for(
+                followup_session.run("after cancellation"),
+                timeout=5,
+            )
+
+    assert len(openai_compatible_server.requests) == 2
     assert [event.event_type for event in events[:3]] == [
         "turn_start",
         "llm_request",
         "content_delta",
     ]
+    assert followup.content == "contract-ok"
 
 
 async def test_runtime_maps_real_http_timeout(
@@ -319,4 +341,34 @@ async def test_runtime_maps_real_http_unauthorized_response(
                 await session.run("unauthorized contract")
 
     assert captured.value.details["original_type"] == "AuthenticationError"
+    assert len(openai_compatible_server.requests) == 1
+
+
+async def test_runtime_maps_real_http_not_found_response(
+    tmp_path: Path,
+    openai_compatible_server: OpenAICompatibleServer,
+) -> None:
+    openai_compatible_server.choose_response("not_found")
+    config = make_contract_config(tmp_path, openai_compatible_server.base_url)
+    async with PraxisRuntime(config, gateway=make_gateway(config)) as runtime:
+        async with runtime.session() as session:
+            with pytest.raises(ModelNotFoundError) as captured:
+                await session.run("not found contract")
+
+    assert captured.value.details["original_type"] == "NotFoundError"
+    assert len(openai_compatible_server.requests) == 1
+
+
+async def test_runtime_maps_real_http_service_unavailable_response(
+    tmp_path: Path,
+    openai_compatible_server: OpenAICompatibleServer,
+) -> None:
+    openai_compatible_server.choose_response("service_unavailable")
+    config = make_contract_config(tmp_path, openai_compatible_server.base_url)
+    async with PraxisRuntime(config, gateway=make_gateway(config)) as runtime:
+        async with runtime.session() as session:
+            with pytest.raises(ProviderUnavailableError) as captured:
+                await session.run("service unavailable contract")
+
+    assert captured.value.details["original_type"] == "ServiceUnavailableError"
     assert len(openai_compatible_server.requests) == 1

@@ -84,12 +84,14 @@ print(response.content)
 ```
 
 SDK 能安全解析和传输这四类输入，不代表每个模型端点都接受它们。部署的
-`gateway.deployments[].capabilities` 是失败关闭的端点事实声明：只有经过真实端点稳定验证的模态
-才能设为 `true`；`config.example.yaml` 中的 `false` 也可能表示端点尚未产生足够稳定的成功证据。
+`gateway.deployments[].capabilities` 是失败关闭的端点事实声明：只有经过至少三个独立健康窗口
+稳定验证的模态才能设为 `true`；`config.example.yaml` 中的 `false` 也可能表示端点尚未产生足够稳定的成功证据。
 未声明能力会在读取文件或发起网络请求之前本地失败。
 
-单附件和单轮总大小默认分别限制为 20 MB、50 MB。本地路径默认拒绝；远程 URL 默认禁用，必须
-显式设置 `inputs.remote_enabled: true`，并仍会执行协议、DNS、重定向、私网地址和响应大小检查。
+单附件和单轮总大小默认分别限制为 20 MB、50 MB。`InputConfig` 的 schema 默认使用空授权根目录，
+因此拒绝所有本地路径；快速开始使用的 `config.example.yaml` 为了让上例可运行，显式授权了
+`./attachments`。远程 URL 默认禁用，必须设置 `inputs.remote_enabled: true`，并仍会执行协议、
+DNS、重定向、私网地址和响应大小检查。
 
 ## CLI
 
