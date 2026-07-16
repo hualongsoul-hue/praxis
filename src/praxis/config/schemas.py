@@ -36,22 +36,24 @@ class InputConfig(StrictConfigModel):
     max_total_bytes: int = Field(default=50_000_000, ge=1, le=500_000_000)
     max_redirects: int = Field(default=5, ge=0, le=20)
     remote_timeout: float = Field(default=30.0, gt=0, le=300.0)
-    image_media_types: list[str] = Field(
-        default_factory=lambda: ["image/jpeg", "image/png", "image/gif", "image/webp"]
+    image_media_types: tuple[str, ...] = Field(
+        default_factory=lambda: ("image/jpeg", "image/png", "image/gif", "image/webp")
     )
-    audio_media_types: list[str] = Field(default_factory=lambda: ["audio/mpeg", "audio/wav"])
-    video_media_types: list[str] = Field(
-        default_factory=lambda: ["video/mp4", "video/webm", "video/quicktime"]
+    audio_media_types: tuple[str, ...] = Field(
+        default_factory=lambda: ("audio/mpeg", "audio/wav")
     )
-    file_media_types: list[str] = Field(
-        default_factory=lambda: [
+    video_media_types: tuple[str, ...] = Field(
+        default_factory=lambda: ("video/mp4", "video/webm", "video/quicktime")
+    )
+    file_media_types: tuple[str, ...] = Field(
+        default_factory=lambda: (
             "application/pdf",
             "application/json",
             "application/yaml",
             "text/csv",
             "text/markdown",
             "text/plain",
-        ]
+        )
     )
 
 

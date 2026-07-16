@@ -27,7 +27,7 @@ class InputSourceKind(StrEnum):
 class AttachmentInput(BaseModel):
     """Immutable attachment source envelope."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     source_kind: InputSourceKind
     source: bytes | Path | str
@@ -106,7 +106,7 @@ InputAttachment = Annotated[
 class UserInput(BaseModel):
     """A user turn containing text, attachments, or both."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     text: str = ""
     parts: tuple[InputAttachment, ...] = ()

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from praxis.config.schemas import ToolsConfig
 from praxis.exceptions import ToolPolicyViolationError
-from praxis.network import validate_http_url
+from praxis.network import ValidatedHttpTarget, validate_http_url
 
 SAFE_ENVIRONMENT = frozenset({
     "COMSPEC",
@@ -93,9 +93,9 @@ class ToolPolicy:
                 details={"network_allowed": False},
             )
 
-    async def check_url(self, url: str) -> str:
+    async def check_url(self, url: str) -> ValidatedHttpTarget:
         self.check_network()
         try:
             return await validate_http_url(url, self.allow_private_networks)
         except ValueError as exc:
-            raise ToolPolicyViolationError(str(exc)) from exc
+            raise ToolPolicyViolationError(str(exc)) from None

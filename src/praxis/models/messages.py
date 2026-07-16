@@ -18,62 +18,68 @@ class Role(StrEnum):
     TOOL = "tool"
 
 
-class TextContent(BaseModel):
+class StrictContentModel(BaseModel):
+    """Provider content model that rejects misspelled or unexpected fields."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class TextContent(StrictContentModel):
     """文本内容块。"""
 
     type: Literal["text"] = "text"
     text: str
 
 
-class ImageUrl(BaseModel):
+class ImageUrl(StrictContentModel):
     """图片 URL 及细节级别。"""
 
     url: str
     detail: Literal["auto", "low", "high"] = "auto"
 
 
-class ImageContent(BaseModel):
+class ImageContent(StrictContentModel):
     """图片内容块。"""
 
     type: Literal["image_url"] = "image_url"
     image_url: ImageUrl
 
 
-class AudioData(BaseModel):
+class AudioData(StrictContentModel):
     """Provider audio payload and encoding."""
 
     data: str
     format: Literal["wav", "mp3"]
 
 
-class AudioContent(BaseModel):
+class AudioContent(StrictContentModel):
     """Provider audio content block."""
 
     type: Literal["input_audio"] = "input_audio"
     input_audio: AudioData
 
 
-class VideoUrl(BaseModel):
+class VideoUrl(StrictContentModel):
     """Provider video data URL."""
 
     url: str
 
 
-class VideoContent(BaseModel):
+class VideoContent(StrictContentModel):
     """Provider video content block."""
 
     type: Literal["video_url"] = "video_url"
     video_url: VideoUrl
 
 
-class FileData(BaseModel):
+class FileData(StrictContentModel):
     """Provider file payload."""
 
     filename: str
     file_data: str
 
 
-class FileContent(BaseModel):
+class FileContent(StrictContentModel):
     """Provider file content block."""
 
     type: Literal["file"] = "file"
@@ -89,7 +95,7 @@ ContentPart = Annotated[
 class AttachmentMetadata(BaseModel):
     """Non-sensitive facts retained after attachment resolution."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     kind: InputKind
     filename: str
@@ -100,7 +106,7 @@ class AttachmentMetadata(BaseModel):
 class ResolvedUserInput(BaseModel):
     """Provider content plus a safe text-only projection."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     content: str | list[ContentPart]
     text_projection: str

@@ -463,30 +463,50 @@ class TestWebFetchSecurity:
 
         policy = ToolPolicy(ToolsConfig(
             network_allowed=True,
-            allow_private_networks=True,
+            allow_private_networks=False,
         ))
-        checked: list[str] = []
+        requested_hosts: list[str] = []
 
-        async def check_url(url: str) -> str:
-            checked.append(url)
-            if "127.0.0.1" in url:
-                raise ToolPolicyViolationError("private redirect")
-            return url
-
-        policy.check_url = check_url  # type: ignore[method-assign]
-        client = httpx.AsyncClient(transport=httpx.MockTransport(
-            lambda request: httpx.Response(
+        def redirect(request: httpx.Request) -> httpx.Response:
+            requested_hosts.append(request.url.host)
+            return httpx.Response(
                 302,
                 headers={"location": "http://127.0.0.1/x"},
             )
-        ))
-        try:
-            handler = web_fetch.create_handler(policy, client)
-            with pytest.raises(ToolPolicyViolationError, match="private redirect"):
-                await handler({"url": "https://example.com/start"})
-        finally:
-            await client.aclose()
-        assert checked == ["https://example.com/start", "http://127.0.0.1/x"]
+
+        transport = httpx.MockTransport(
+            redirect,
+        )
+        handler = web_fetch.create_handler(policy, transport)
+        with pytest.raises(ToolPolicyViolationError, match="私网"):
+            await handler({"url": "http://93.184.216.34/start"})
+        assert requested_hosts == ["93.184.216.34"]
+
+    async def test_pins_dns_target_and_preserves_host_and_sni(self, monkeypatch) -> None:
+        import socket
+
+        import httpx
+
+        policy = ToolPolicy(ToolsConfig(network_allowed=True))
+        requests: list[httpx.Request] = []
+
+        def resolve_host(host: str, port: int, **options):
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+
+        def handle(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, content=b"safe")
+
+        monkeypatch.setattr(socket, "getaddrinfo", resolve_host)
+        result = await web_fetch.create_handler(
+            policy,
+            httpx.MockTransport(handle),
+        )({"url": "https://example.com/data"})
+
+        assert "safe" in result
+        assert requests[0].url.host == "93.184.216.34"
+        assert requests[0].headers["host"] == "example.com"
+        assert requests[0].extensions["sni_hostname"] == "example.com"
 
     async def test_enforces_streamed_byte_limit(self) -> None:
         import httpx
@@ -496,16 +516,16 @@ class TestWebFetchSecurity:
             allow_private_networks=True,
             network_max_response_bytes=5,
         ))
-        client = httpx.AsyncClient(transport=httpx.MockTransport(
-            lambda request: httpx.Response(200, content=b"0123456789")
-        ))
-        try:
-            result = await web_fetch.create_handler(policy, client)({
-                "url": "https://example.com/data",
-                "max_bytes": 999,
-            })
-        finally:
-            await client.aclose()
+        transport = httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                content=b"0123456789",
+            )
+        )
+        result = await web_fetch.create_handler(policy, transport)({
+            "url": "http://127.0.0.1/data",
+            "max_bytes": 999,
+        })
         assert "01234" in result
         assert "012345" not in result
         assert "已截断" in result
