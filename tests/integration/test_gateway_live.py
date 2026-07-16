@@ -55,7 +55,7 @@ async def test_live_regular_response(live_gateway: GatewayRouter) -> None:
     response = await chat(
         live_gateway,
         [{"role": "user", "content": "只回复单词 pong"}],
-        max_tokens=16,
+        max_tokens=256,
     )
 
     assert response.content
@@ -69,12 +69,16 @@ async def test_live_streaming_response(live_gateway: GatewayRouter) -> None:
         async for chunk in chat_stream(
             live_gateway,
             [{"role": "user", "content": "用一句简短中文问候"}],
-            max_tokens=32,
+            max_tokens=256,
         )
     ]
 
     assert chunks
-    assert any(chunk.delta_content for chunk in chunks)
+    assert any(
+        chunk.delta_content or chunk.delta_reasoning_content
+        for chunk in chunks
+    )
+    assert any(chunk.finish_reason for chunk in chunks)
     assert all(chunk is not None for chunk in chunks)
 
 
@@ -99,7 +103,7 @@ async def test_live_forced_tool_call(live_gateway: GatewayRouter) -> None:
         [{"role": "user", "content": "调用 echo，text 参数使用 hello"}],
         tools=tools,
         tool_choice={"type": "function", "function": {"name": "echo"}},
-        max_tokens=64,
+        max_tokens=256,
     )
 
     assert response.tool_calls

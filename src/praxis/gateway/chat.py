@@ -1,8 +1,11 @@
 """类型安全的非流式与流式模型调用。"""
 
 import asyncio
+import warnings
 from collections.abc import AsyncIterator
 from typing import Any, cast
+
+from pydantic.warnings import PydanticDeprecatedSince211
 
 from praxis.config.schemas import ModelDeployment
 from praxis.gateway.metering import (
@@ -214,6 +217,9 @@ async def chat(
     }
     if tools:
         call_kwargs["tools"] = tools
+        # Praxis owns MCP discovery/execution. Bypass LiteLLM's proxy-only MCP
+        # bridge, which otherwise imports web-server dependencies for SDK calls.
+        call_kwargs["_skip_mcp_handler"] = True
 
     try:
         async with gateway.request_slot():
@@ -267,6 +273,7 @@ async def chat_stream(
     }
     if tools:
         call_kwargs["tools"] = tools
+        call_kwargs["_skip_mcp_handler"] = True
 
     final_usage: Usage | None = None
     final_model = model_name
@@ -281,13 +288,25 @@ async def chat_stream(
                 ),
             )
             started = True
-            async for raw_chunk in stream:
-                chunk = convert_stream_chunk(raw_chunk)
-                if chunk.usage is not None:
-                    final_usage = chunk.usage
-                if chunk.model:
-                    final_model = chunk.model
-                yield chunk
+            with warnings.catch_warnings():
+                # LiteLLM 1.92 introspects Pydantic model instances while
+                # deciding whether a usage chunk is empty. Pydantic 2.11+
+                # emits this specific compatibility warning from that path.
+                warnings.filterwarnings(
+                    "ignore",
+                    message=(
+                        "Accessing the 'model_(?:computed_)?fields' attribute on the instance "
+                        "is deprecated.*"
+                    ),
+                    category=PydanticDeprecatedSince211,
+                )
+                async for raw_chunk in stream:
+                    chunk = convert_stream_chunk(raw_chunk)
+                    if chunk.usage is not None:
+                        final_usage = chunk.usage
+                    if chunk.model:
+                        final_model = chunk.model
+                    yield chunk
     except asyncio.CancelledError:
         raise
     except Exception as exc:

@@ -2,11 +2,13 @@
 
 import asyncio
 import json
+import warnings
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
+from pydantic.warnings import PydanticDeprecatedSince211
 
 from praxis.config.schemas import GatewayConfig, ModelDeployment
 from praxis.exceptions import (
@@ -303,6 +305,17 @@ class TestChat:
         assert resp.content == "answer"
         gw._router.acompletion.assert_called_once()
 
+    async def test_tool_calls_bypass_litellm_mcp_proxy_bridge(self) -> None:
+        gw = GatewayRouter(make_config())
+        gw._router.acompletion = AsyncMock(return_value=make_raw_response())
+        tools = [{"type": "function", "function": {"name": "echo"}}]
+
+        await chat(gw, [{"role": "user", "content": "hi"}], tools=tools)
+
+        kwargs = gw._router.acompletion.await_args.kwargs
+        assert kwargs["tools"] == tools
+        assert kwargs["_skip_mcp_handler"] is True
+
     async def test_chat_records_actual_tokens(self) -> None:
         gw = GatewayRouter(make_config())
         gw._router.acompletion = AsyncMock(return_value=make_raw_response(
@@ -424,6 +437,33 @@ class TestChat:
         assert chunks[0].delta_content == "Hello"
         assert chunks[1].delta_content == " world"
         assert chunks[2].finish_reason == "stop"
+
+    async def test_stream_suppresses_known_litellm_pydantic_warning(self) -> None:
+        gw = GatewayRouter(make_config())
+
+        async def warning_stream():
+            for attribute in ("model_computed_fields", "model_fields"):
+                warnings.warn(
+                    f"Accessing the '{attribute}' attribute on the instance is deprecated. "
+                    "Instead, you should access this attribute from the model class.",
+                    PydanticDeprecatedSince211,
+                    stacklevel=2,
+                )
+            yield make_raw_stream_chunk(content="ok")
+
+        gw._router.acompletion = AsyncMock(return_value=warning_stream())
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            chunks = [
+                chunk
+                async for chunk in chat_stream(
+                    gw,
+                    [{"role": "user", "content": "hi"}],
+                )
+            ]
+
+        assert [chunk.delta_content for chunk in chunks] == ["ok"]
 
     async def test_stream_does_not_retry_after_partial_output(self) -> None:
         gw = GatewayRouter(make_config(num_retries=3))
