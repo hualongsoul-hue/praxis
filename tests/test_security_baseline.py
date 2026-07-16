@@ -26,15 +26,31 @@ SECRET_RULES: tuple[tuple[str, re.Pattern[bytes]], ...] = (
             re.IGNORECASE,
         ),
     ),
-    (
-        "generic_api_secret",
-        re.compile(
-            rb"\b(?:api[_-]?key|access[_-]?token|client[_-]?secret)\b\s*[:=]\s*"
-            rb"[\"'](?!PRAXIS_|<|example|test|fake|sk-(?:example|test|fake)|\{|\$)"
-            rb"[A-Za-z0-9._-]{20,}[\"']",
-            re.IGNORECASE,
-        ),
-    ),
+)
+
+API_SECRET_ASSIGNMENT = re.compile(
+    rb"""(?imx)
+    ^[ \t]*(?:export[ \t]+|\$env:)?
+    (?P<key>(?:[A-Za-z0-9]+[_-]+)*(?:api[_-]?key|access[_-]?token|client[_-]?secret))
+    [ \t]*(?:=|:)[ \t]*
+    (?P<value>"[^"\r\n]*"|'[^'\r\n]*'|[A-Za-z0-9._${}<>%/+~-]+)
+    [ \t]*(?:\#[^\r\n]*)?$
+    """
+)
+API_SECRET_ASSIGNMENT_ALLOWLIST = frozenset(
+    {
+        b"",
+        b"<your-key>",
+        b"abc123",
+        b"expired",
+        b"fake-contract-credential",
+        b"intentionally-invalid-live-credential",
+        b"sk-example0123456789abcdef",
+        b"str",
+    }
+)
+ENVIRONMENT_REFERENCE = re.compile(
+    rb"(?:\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*|%[A-Za-z_][A-Za-z0-9_]*%)"
 )
 
 
@@ -47,7 +63,7 @@ class SecretFinding:
 
 
 def tracked_secret_candidates(root: Path) -> list[Path]:
-    """Return tracked files plus untracked source/docs task surfaces."""
+    """Return tracked files plus untracked source, docs, and SDD task artifacts."""
 
     result = subprocess.run(
         ["git", "ls-files", "-z"],
@@ -74,10 +90,25 @@ def tracked_secret_candidates(root: Path) -> list[Path]:
             and path.suffix.lower() in text_suffixes
             and "__pycache__" not in path.parts
         )
-    task_report = root / ".superpowers" / "sdd" / "task-5-report.md"
-    if task_report.is_file():
-        candidates.add(task_report)
+    task_artifacts = root / ".superpowers" / "sdd"
+    if task_artifacts.is_dir():
+        candidates.update(
+            path
+            for path in task_artifacts.rglob("*")
+            if path.is_file() and "__pycache__" not in path.parts
+        )
     return sorted(candidates)
+
+
+def assignment_value_is_allowed(value: bytes) -> bool:
+    """Return whether a complete assignment uses an explicit safe placeholder."""
+
+    if len(value) >= 2 and value[:1] == value[-1:] and value[:1] in {b"'", b'"'}:
+        value = value[1:-1]
+    return (
+        value in API_SECRET_ASSIGNMENT_ALLOWLIST
+        or ENVIRONMENT_REFERENCE.fullmatch(value) is not None
+    )
 
 
 def scan_secret_files(
@@ -98,6 +129,15 @@ def scan_secret_files(
                 findings.append(
                     SecretFinding(path=relative_path, rule_name=rule_name)
                 )
+        for assignment in API_SECRET_ASSIGNMENT.finditer(content):
+            if not assignment_value_is_allowed(assignment.group("value")):
+                findings.append(
+                    SecretFinding(
+                        path=relative_path,
+                        rule_name="api_secret_assignment",
+                    )
+                )
+                break
     return sorted(findings, key=lambda finding: (finding.path, finding.rule_name))
 
 
@@ -151,6 +191,76 @@ def test_secret_scanner_detects_multiple_provider_shapes(
     ]
 
 
+@pytest.mark.parametrize(
+    "assignment",
+    [
+        '$env:PRAXIS_MODEL_API_KEY = "' + "Q" * 32 + '"',
+        "export PRAXIS_MODEL_API_KEY=" + "R" * 32,
+        "PRAXIS_MODEL_API_KEY: '" + "S" * 32 + "'",
+        'PRAXIS_MODEL_API_KEY = "' + "T" * 32 + '"',
+        "INTERNAL_PROVIDER_API_KEY=" + "U" * 32,
+    ],
+    ids=["powershell", "bash", "yaml", "python", "prefixed-generic"],
+)
+def test_secret_scanner_detects_target_and_generic_assignments(
+    tmp_path: Path,
+    assignment: str,
+) -> None:
+    candidate = tmp_path / "assignment.txt"
+    candidate.write_text(assignment, encoding="utf-8")
+
+    findings = scan_secret_files([candidate], root=tmp_path)
+
+    assert [(finding.path, finding.rule_name) for finding in findings] == [
+        ("assignment.txt", "api_secret_assignment")
+    ]
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    [
+        'PRAXIS_MODEL_API_KEY = "<your-key>"',
+        "export PRAXIS_MODEL_API_KEY=${MODEL_KEY}",
+        "$env:PRAXIS_MODEL_API_KEY = 'fake-contract-credential'",
+        'PRAXIS_MODEL_API_KEY = "intentionally-invalid-live-credential"',
+        'API_KEY = "sk-example0123456789abcdef"',
+    ],
+    ids=["angle-placeholder", "shell-variable", "contract-fake", "invalid-live", "example-key"],
+)
+def test_secret_assignment_allowlist_is_narrow_and_explicit(
+    tmp_path: Path,
+    assignment: str,
+) -> None:
+    candidate = tmp_path / "allowlisted.txt"
+    candidate.write_text(assignment, encoding="utf-8")
+
+    assert scan_secret_files([candidate], root=tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    "assignment",
+    [
+        "API_KEY=abc123-production",
+        "API_KEY=fake-contract-credential-production",
+        "PRAXIS_MODEL_API_KEY=${MODEL_KEY}-leaked-suffix",
+        "PRAXIS_MODEL_API_KEY=<your-key>-production-secret",
+    ],
+    ids=["extended-short-fake", "extended-fake", "extended-variable", "extended-placeholder"],
+)
+def test_secret_assignment_allowlist_rejects_extended_values(
+    tmp_path: Path,
+    assignment: str,
+) -> None:
+    candidate = tmp_path / "not-allowlisted.txt"
+    candidate.write_text(assignment, encoding="utf-8")
+
+    findings = scan_secret_files([candidate], root=tmp_path)
+
+    assert [(finding.path, finding.rule_name) for finding in findings] == [
+        ("not-allowlisted.txt", "api_secret_assignment")
+    ]
+
+
 def test_secret_failure_summary_never_contains_matched_value(tmp_path: Path) -> None:
     secret = "s" + "k-" + "Z" * 32
     candidate = tmp_path / "docs.md"
@@ -177,3 +287,4 @@ def test_tracked_file_inventory_includes_task_surfaces() -> None:
     assert "tests/integration/test_gateway_live.py" in relative_paths
     assert "tests/integration/live_model_evidence.py" in relative_paths
     assert ".superpowers/sdd/task-5-report.md" in relative_paths
+    assert ".superpowers/sdd/task-5-brief.md" in relative_paths
