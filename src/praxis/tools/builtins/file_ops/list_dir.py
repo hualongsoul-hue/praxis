@@ -44,7 +44,10 @@ def create_handler(sandbox: ToolPolicy):
         entries: list[str] = []
         for item in sorted(path.iterdir()):
             if item.is_dir():
-                sub_count = len(list(item.rglob("*")))
+                sub_count = sum(  # noqa: B007, RUF100 - public discard required by policy
+                    1
+                    for discarded_descendant in item.rglob("*")  # pyright: ignore[reportUnusedVariable]
+                )
                 entries.append(f"  {item.name}/  ({sub_count} items)")
             else:
                 size = item.stat().st_size

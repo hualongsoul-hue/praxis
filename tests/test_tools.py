@@ -212,6 +212,41 @@ class TestFileOps:
         assert "b.py" in result
         assert "sub/" in result
 
+    async def test_list_dir_streams_descendant_count(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        class StreamingPaths:
+            def __init__(self, paths: list[Path]) -> None:
+                self.paths = iter(paths)
+
+            def __iter__(self) -> "StreamingPaths":
+                return self
+
+            def __next__(self) -> Path:
+                return next(self.paths)
+
+            def __length_hint__(self) -> int:
+                raise AssertionError("descendants must not be materialized")
+
+        sandbox = make_sandbox(tmp_path)
+        subdirectory = tmp_path / "sub"
+        subdirectory.mkdir()
+
+        def streaming_rglob(path: Path, pattern: str) -> StreamingPaths:
+            assert path == subdirectory
+            assert pattern == "*"
+            return StreamingPaths([subdirectory / "a", subdirectory / "b"])
+
+        monkeypatch.setattr(Path, "rglob", streaming_rglob)
+
+        from praxis.tools.builtins.file_ops.list_dir import create_handler
+
+        result = await create_handler(sandbox)({"dir_path": str(tmp_path)})
+
+        assert "sub/  (2 items)" in result
+
 
 # ── Task 5.3: 内置搜索工具 ──────────────────────────────────────────────────
 
