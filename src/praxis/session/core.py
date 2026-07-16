@@ -5,14 +5,15 @@ create_session 创建新会话时初始化所有组件实例，
 """
 
 from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack
 from typing import Any
 
 from praxis.config.schemas import (
     ContextConfig,
     MemoryConfig,
+    OrchestratorConfig,
     RecoveryConfig,
     SessionConfig,
-    OrchestratorConfig,
     ToolsConfig,
 )
 from praxis.context.assembler import PromptAssembler
@@ -21,35 +22,33 @@ from praxis.context.masking import ObservationMasker
 from praxis.context.tool_injection import ToolInjector
 from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
-from praxis.session.checkpoint import CheckpointManager
 from praxis.memory.core import CognitiveMemory
+from praxis.models.orchestrator import AgentEvent, AgentResponse, StrategyMode
 from praxis.models.session import (
-    ContinuationPhase,
     SessionMetadata,
     SessionStatus,
 )
-from praxis.models.orchestrator import AgentEvent, AgentResponse
 from praxis.orchestrator.events import EventEmitter
 from praxis.orchestrator.loop import OrchestrationLoop
 from praxis.orchestrator.parser import OutputParser
 from praxis.orchestrator.strategy import LoopStrategy
-from praxis.models.orchestrator import StrategyMode
 from praxis.orchestrator.termination import TerminationManager
 from praxis.orchestrator.tool_coordination import ToolCoordinator
 from praxis.persistence.store import PersistenceStore
+from praxis.protocols import ApprovalHandler, AuditSink
 from praxis.recovery.circuit_breaker import CircuitBreakerRegistry
 from praxis.recovery.fallback import FallbackRegistry
 from praxis.recovery.retry import RetryPolicy
+from praxis.session.checkpoint import CheckpointManager
 from praxis.skills.manager import SkillManager
-from praxis.telemetry.audit import configure_audit
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
 from praxis.tools.builtins.jit_ops import register_jit_tools
 from praxis.tools.builtins.memory_ops import register_memory_tools
 from praxis.tools.builtins.registration import register_builtins
 from praxis.tools.executor import ToolExecutor
+from praxis.tools.policy import ToolPolicy
 from praxis.tools.registry import ToolRegistry
-from praxis.tools.sandbox import Sandbox
 from praxis.verification.registry import VerifierRegistry
 
 log = get_logger("session.core")
@@ -101,6 +100,10 @@ class Session:
         self.mcp_elicitation_manager: Any = None
         self.mcp_auth_manager: Any = None
         self._mcp_stack: Any = None
+
+    def attach_mcp_stack(self, stack: AsyncExitStack) -> None:
+        """转移 MCP 连接退出栈的所有权，随 Session 统一关闭。"""
+        self._mcp_stack = stack
 
     @property
     def session_id(self) -> str:
@@ -223,7 +226,8 @@ class SessionFactory:
         context_config: ContextConfig,
         memory_config: MemoryConfig | None = None,
         recovery_config: RecoveryConfig | None = None,
-        audit_enabled: bool = True,
+        approval_handler: ApprovalHandler | None = None,
+        audit_sink: AuditSink | None = None,
     ) -> None:
         self.store = store
         self.session_config = session_config
@@ -231,8 +235,8 @@ class SessionFactory:
         self.context_config = context_config
         self.memory_config = memory_config or MemoryConfig()
         self.recovery_config = recovery_config or RecoveryConfig()
-        # 配置 S2 审计持久化通道（护栏裁决事件写入 store 的 "audit" 命名空间）
-        configure_audit(store, enabled=audit_enabled)
+        self.approval_handler = approval_handler
+        self.audit_sink = audit_sink
 
     async def create_session(
         self,
@@ -282,12 +286,10 @@ class SessionFactory:
         created_new_registry = registry is None
         if created_new_registry:
             registry = ToolRegistry()
-        sandbox = Sandbox(resolved_tools_config)
+        sandbox = ToolPolicy(resolved_tools_config)
         if created_new_registry and include_builtins:
             register_builtins(registry, sandbox, store=self.store)
-            # S6: 记忆热路径接口暴露为 LLM 可调用工具（仅在装配了记忆系统时）
-            if memory is not None:
-                register_memory_tools(registry, memory)
+            register_memory_tools(registry, memory)
             # S7: JIT 懒加载工具（仅在 JITRetriever 配置了 ContentLoader 时）
             if jit_retriever is not None:
                 register_jit_tools(registry, jit_retriever)
@@ -327,6 +329,11 @@ class SessionFactory:
             retry_policy=retry_policy,
             emitter=emitter,
             fallback_registry=fallbacks,
+            approval_handler=self.approval_handler,
+            approval_timeout=resolved_tools_config.approval_timeout,
+            audit_sink=self.audit_sink,
+            session_id=metadata.session_id,
+            status_callback=lambda status: setattr(metadata, "status", status),
         )
 
         # S10: 为验证器注册表注入网关，启用推理型/视觉型验证（否则二者不可用）

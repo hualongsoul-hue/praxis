@@ -58,11 +58,3 @@ class TelemetryCallback(CustomLogger):
         tags = {"model": model, "status": "error", "error_type": error_type}
         emit_metric("llm_requests_total", 1.0, tags, "counter")
         emit_metric("llm_errors_total", 1.0, {"model": model, "error_type": error_type}, "counter")
-
-
-def register_callbacks() -> None:
-    """注册 Praxis 遥测回调到 LiteLLM（幂等：重复调用不重复注册）。"""
-    for existing in litellm.callbacks:
-        if isinstance(existing, TelemetryCallback):
-            return
-    litellm.callbacks.append(TelemetryCallback())  # type: ignore[arg-type]

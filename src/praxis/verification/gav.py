@@ -4,14 +4,13 @@
 前馈/反馈控制矩阵覆盖四象限。
 """
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 from praxis.models.verification import (
     VerificationResult,
-    VerificationStatus,
     VerificationType,
 )
 from praxis.telemetry.logger import get_logger
@@ -20,7 +19,7 @@ from praxis.telemetry.metrics import emit_metric
 log = get_logger("verification.gav")
 
 
-class ControlQuadrant(str, Enum):
+class ControlQuadrant(StrEnum):
     """前馈/反馈控制矩阵象限。"""
 
     FEEDFORWARD_COMPUTATIONAL = "feedforward_computational"
@@ -29,7 +28,7 @@ class ControlQuadrant(str, Enum):
     FEEDBACK_INFERENTIAL = "feedback_inferential"
 
 
-class GAVPhase(str, Enum):
+class GAVPhase(StrEnum):
     """GAV 循环阶段。"""
 
     GATHER = "gather"

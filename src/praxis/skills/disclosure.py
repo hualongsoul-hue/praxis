@@ -6,9 +6,9 @@
 第三层：附属文件——深度探索时按需加载
 """
 
-from pathlib import Path
 
 from praxis.models.skills import SkillDefinition, SkillIndexEntry
+from praxis.skills.paths import resolve_skill_path
 from praxis.telemetry.logger import get_logger
 
 log = get_logger("skills.disclosure")
@@ -79,7 +79,7 @@ class SkillDisclosure:
             log.warning("附属文件不在技能目录中", skill_id=skill_id, file_name=filename)
             return None
 
-        file_path = Path(skill.base_path) / filename
+        file_path = resolve_skill_path(skill.base_path, filename)
         if not file_path.is_file():
             log.warning("附属文件不存在", path=str(file_path))
             return None

@@ -1,12 +1,14 @@
 """S4 模型网关验证测试。"""
 
+import asyncio
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
-from praxis.config.schemas import GatewayConfig
+from praxis.config.schemas import GatewayConfig, ModelDeployment
 from praxis.exceptions import (
     AuthenticationError,
     BudgetExceededError,
@@ -22,34 +24,39 @@ from praxis.gateway.chat import (
     convert_response,
     convert_stream_chunk,
 )
-from praxis.gateway.metering import get_max_tokens, get_token_count
+from praxis.gateway.metering import estimate_input_cost, get_max_tokens, get_token_count
 from praxis.gateway.resilience import EXCEPTION_MAP, map_litellm_exception
 from praxis.gateway.router import GatewayRouter
 from praxis.gateway.tasks import judge, summarize
 from praxis.models.gateway import JudgeResult
 from praxis.models.responses import ModelResponse, ModelResponseChunk
 
-
-SAMPLE_MODEL_LIST = [
-    {
-        "model_name": "default",
-        "litellm_params": {"model": "openai/gpt-4o", "api_key": "test-key-1"},
-    },
-    {
-        "model_name": "default",
-        "litellm_params": {"model": "anthropic/claude-sonnet-4-20250514", "api_key": "test-key-2"},
-    },
-    {
-        "model_name": "fast",
-        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key-1"},
-    },
+SAMPLE_DEPLOYMENTS = [
+    ModelDeployment(model_name="default", model="openai/gpt-4o"),
+    ModelDeployment(model_name="default", model="anthropic/claude-sonnet-4-20250514"),
+    ModelDeployment(model_name="fast", model="openai/gpt-4o-mini"),
 ]
 
 
 def make_config(**overrides: object) -> GatewayConfig:
-    defaults = {"model_list": SAMPLE_MODEL_LIST}
+    defaults = {"deployments": SAMPLE_DEPLOYMENTS}
     defaults.update(overrides)
     return GatewayConfig(**defaults)
+
+
+def test_model_capability_probe_uses_typed_deployment() -> None:
+    gateway = GatewayRouter(
+        GatewayConfig(
+            deployments=[ModelDeployment(supports_vision=True)],
+        )
+    )
+    assert gateway.supports_vision()
+    assert gateway.supports_vision("default")
+
+
+@pytest.fixture(autouse=True)
+def model_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PRAXIS_MODEL_API_KEY", "unit-test-model-key")
 
 
 def make_raw_response(
@@ -116,57 +123,93 @@ def make_raw_stream_chunk(
 class TestGatewayRouter:
     """Task 4.1: LiteLLM Router 集成验证。"""
 
-    @patch("praxis.gateway.router.register_callbacks")
-    def test_init_with_valid_config(self, mock_cb: MagicMock) -> None:
+    def test_init_with_valid_config(self) -> None:
         config = make_config()
         gw = GatewayRouter(config)
         assert gw.router is not None
         assert gw.config is config
-        mock_cb.assert_called_once()
 
-    @patch("praxis.gateway.router.register_callbacks")
-    def test_empty_model_list_raises(self, mock_cb: MagicMock) -> None:
-        config = GatewayConfig(model_list=[])
-        with pytest.raises(GatewayError, match="model_list 为空"):
-            GatewayRouter(config)
+    def test_empty_deployments_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            GatewayConfig(deployments=[])
 
-    @patch("praxis.gateway.router.register_callbacks")
-    def test_get_model_names(self, mock_cb: MagicMock) -> None:
+    def test_get_model_names(self) -> None:
         gw = GatewayRouter(make_config())
         names = gw.get_model_names()
         assert "default" in names
         assert "fast" in names
         assert len(names) == 2
 
-    @patch("praxis.gateway.router.register_callbacks")
-    def test_get_model_list(self, mock_cb: MagicMock) -> None:
+    def test_get_model_list(self) -> None:
         gw = GatewayRouter(make_config())
         ml = gw.get_model_list()
         assert len(ml) == 3
 
-    @patch("praxis.gateway.router.register_callbacks")
-    def test_register_model(self, mock_cb: MagicMock) -> None:
+    def test_register_model(self) -> None:
         gw = GatewayRouter(make_config())
-        new_deploy = {
-            "model_name": "local",
-            "litellm_params": {"model": "ollama/llama3"},
-        }
+        new_deploy = ModelDeployment(model_name="local", model="ollama/llama3")
         gw.register_model(new_deploy)
         assert "local" in gw.get_model_names()
         assert len(gw.get_model_list()) == 4
 
-    @patch("praxis.gateway.router.register_callbacks")
-    def test_register_model_no_name_raises(self, mock_cb: MagicMock) -> None:
-        gw = GatewayRouter(make_config())
-        with pytest.raises(GatewayError, match="model_name"):
-            gw.register_model({"litellm_params": {"model": "test"}})
-
-    @patch("praxis.gateway.router.register_callbacks")
-    def test_unregister_model(self, mock_cb: MagicMock) -> None:
+    def test_unregister_model(self) -> None:
         gw = GatewayRouter(make_config())
         removed = gw.unregister_model("fast")
         assert removed == 1
         assert "fast" not in gw.get_model_names()
+
+    def test_missing_credential_and_unknown_alias_fail_explicitly(self) -> None:
+        with pytest.raises(AuthenticationError, match="PRAXIS_MODEL_API_KEY"):
+            GatewayRouter(make_config(), environ={})
+
+        gw = GatewayRouter(make_config())
+        with pytest.raises(GatewayError) as error:
+            gw.resolve_deployment("missing")
+        assert error.value.details == {"model_name": "missing"}
+
+    def test_unregister_last_model_is_atomic(self) -> None:
+        config = GatewayConfig(deployments=[ModelDeployment()])
+        gw = GatewayRouter(config)
+
+        with pytest.raises(GatewayError, match="最后一个"):
+            gw.unregister_model("default")
+
+        assert gw.get_model_names() == ["default"]
+        assert gw.unregister_model("missing") == 0
+
+    def test_usage_reservation_settlement_and_release_are_idempotent(self) -> None:
+        gw = GatewayRouter(make_config(max_total_tokens=20, max_budget=1.0))
+        gw.add_usage(cost=-1.0, tokens=-1)
+        assert gw.total_spend == 0.0
+        assert gw.total_tokens == 0
+
+        with pytest.raises(ValueError, match="estimated_tokens"):
+            gw.reserve_usage(estimated_tokens=-1, estimated_cost=0.0)
+        with pytest.raises(BudgetExceededError, match="成本"):
+            gw.reserve_usage(estimated_tokens=1, estimated_cost=2.0)
+
+        reservation = gw.reserve_usage(estimated_tokens=3, estimated_cost=0.25)
+        assert gw.settle_usage(
+            reservation,
+            actual_tokens=None,
+            actual_cost=None,
+        ) == (3, 0.25)
+        assert gw.settle_usage(
+            reservation,
+            actual_tokens=10,
+            actual_cost=0.5,
+        ) == (0, 0.0)
+
+        released = gw.reserve_usage(estimated_tokens=2, estimated_cost=0.1)
+        gw.release_usage(released)
+        gw.release_usage(released)
+        assert gw.total_tokens == 3
+        assert gw.total_spend == 0.25
+
+    async def test_health_and_close_are_non_networking(self) -> None:
+        gw = GatewayRouter(make_config())
+        assert await gw.health() is True
+        await gw.close()
 
 
 class TestChat:
@@ -251,8 +294,7 @@ class TestChat:
         assert usage.reasoning_tokens == 0
         assert usage.cached_prompt_tokens == 0
 
-    @patch("praxis.gateway.router.register_callbacks")
-    async def test_chat_success(self, mock_cb: MagicMock) -> None:
+    async def test_chat_success(self) -> None:
         gw = GatewayRouter(make_config())
         raw = make_raw_response(content="answer")
         gw._router.acompletion = AsyncMock(return_value=raw)
@@ -261,8 +303,98 @@ class TestChat:
         assert resp.content == "answer"
         gw._router.acompletion.assert_called_once()
 
-    @patch("praxis.gateway.router.register_callbacks")
-    async def test_chat_maps_exception(self, mock_cb: MagicMock) -> None:
+    async def test_chat_records_actual_tokens(self) -> None:
+        gw = GatewayRouter(make_config())
+        gw._router.acompletion = AsyncMock(return_value=make_raw_response(
+            prompt_tokens=11,
+            completion_tokens=7,
+        ))
+        with patch("praxis.gateway.chat.completion_cost", return_value=0.25):
+            await chat(gw, [{"role": "user", "content": "hi"}])
+        assert gw.total_tokens == 18
+        assert gw.total_spend == 0.25
+
+    async def test_token_limit_is_independent_from_cost_budget(self) -> None:
+        gw = GatewayRouter(make_config(max_total_tokens=10, max_budget=None))
+        gw._router.acompletion = AsyncMock(return_value=make_raw_response())
+        with (
+            patch("praxis.gateway.chat.get_token_count", return_value=11),
+            pytest.raises(BudgetExceededError, match="Token"),
+        ):
+            await chat(gw, [{"role": "user", "content": "too large"}])
+        gw._router.acompletion.assert_not_called()
+
+    async def test_unknown_model_price_fails_closed_when_budget_enabled(self) -> None:
+        gw = GatewayRouter(make_config(max_budget=1.0))
+        gw._router.acompletion = AsyncMock(return_value=make_raw_response())
+        with (
+            patch("praxis.gateway.chat.get_token_count", return_value=2),
+            patch("praxis.gateway.chat.estimate_input_cost", return_value=None),
+            pytest.raises(BudgetExceededError, match="价格"),
+        ):
+            await chat(gw, [{"role": "user", "content": "hi"}])
+        gw._router.acompletion.assert_not_called()
+
+    async def test_gateway_enforces_shared_concurrency_limit(self) -> None:
+        gw = GatewayRouter(make_config(max_concurrent_requests=1))
+        active = 0
+        maximum = 0
+
+        async def completion(**_kwargs: object):
+            nonlocal active, maximum
+            active += 1
+            maximum = max(maximum, active)
+            await asyncio.sleep(0.05)
+            active -= 1
+            return make_raw_response()
+
+        gw._router.acompletion = AsyncMock(side_effect=completion)
+        await asyncio.gather(
+            chat(gw, [{"role": "user", "content": "one"}]),
+            chat(gw, [{"role": "user", "content": "two"}]),
+        )
+        assert maximum == 1
+
+    async def test_concurrent_budget_reservations_fail_closed(self) -> None:
+        deployment = ModelDeployment(
+            model_name="default",
+            model="openai/glm-5.1-openai",
+            default_max_output_tokens=4,
+        )
+        gw = GatewayRouter(GatewayConfig(
+            deployments=[deployment],
+            max_total_tokens=5,
+            max_concurrent_requests=1,
+        ))
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def completion(**_kwargs: object) -> SimpleNamespace:
+            started.set()
+            await release.wait()
+            return make_raw_response(prompt_tokens=1, completion_tokens=4)
+
+        gw._router.acompletion = AsyncMock(side_effect=completion)
+        with patch("praxis.gateway.chat.get_token_count", return_value=1):
+            first = asyncio.create_task(chat(
+                gw,
+                [{"role": "user", "content": "one"}],
+                max_tokens=4,
+            ))
+            await started.wait()
+            with pytest.raises(BudgetExceededError, match="Token"):
+                await chat(
+                    gw,
+                    [{"role": "user", "content": "two"}],
+                    max_tokens=4,
+                )
+            release.set()
+            await first
+
+        assert gw.total_tokens == 5
+        assert gw._router.acompletion.await_count == 1
+
+    async def test_chat_maps_exception(self) -> None:
         import litellm
 
         gw = GatewayRouter(make_config())
@@ -274,8 +406,7 @@ class TestChat:
         with pytest.raises(AuthenticationError):
             await chat(gw, [{"role": "user", "content": "hi"}])
 
-    @patch("praxis.gateway.router.register_callbacks")
-    async def test_chat_stream_yields_chunks(self, mock_cb: MagicMock) -> None:
+    async def test_chat_stream_yields_chunks(self) -> None:
         gw = GatewayRouter(make_config())
 
         async def mock_stream():
@@ -294,12 +425,66 @@ class TestChat:
         assert chunks[1].delta_content == " world"
         assert chunks[2].finish_reason == "stop"
 
+    async def test_stream_does_not_retry_after_partial_output(self) -> None:
+        gw = GatewayRouter(make_config(num_retries=3))
+
+        async def broken_stream():
+            yield make_raw_stream_chunk(content="partial")
+            raise RuntimeError("connection lost")
+
+        gw._router.acompletion = AsyncMock(return_value=broken_stream())
+        chunks: list[ModelResponseChunk] = []
+        with pytest.raises(GatewayError):
+            async for chunk in chat_stream(gw, [{"role": "user", "content": "hi"}]):
+                chunks.append(chunk)
+        assert [chunk.delta_content for chunk in chunks] == ["partial"]
+        gw._router.acompletion.assert_awaited_once()
+
+    async def test_stream_cancellation_settles_budget_and_releases_slot(self) -> None:
+        deployment = ModelDeployment(
+            model_name="default",
+            model="openai/glm-5.1-openai",
+            default_max_output_tokens=9,
+        )
+        gw = GatewayRouter(GatewayConfig(
+            deployments=[deployment],
+            max_total_tokens=100,
+            max_concurrent_requests=1,
+        ))
+        emitted = asyncio.Event()
+
+        async def pending_stream():
+            emitted.set()
+            yield make_raw_stream_chunk(content="partial")
+            await asyncio.Event().wait()
+
+        gw._router.acompletion = AsyncMock(return_value=pending_stream())
+
+        async def consume() -> None:
+            async for _chunk in chat_stream(
+                gw,
+                [{"role": "user", "content": "cancel"}],
+                max_tokens=9,
+            ):
+                pass
+
+        with patch("praxis.gateway.chat.get_token_count", return_value=1):
+            task = asyncio.create_task(consume())
+            await emitted.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+        assert gw.total_tokens == 10
+        async with asyncio.timeout(0.2):
+            async with gw.request_slot():
+                pass
+
 
 class TestTasks:
     """Task 4.3: summarize / judge 便捷接口验证。"""
 
-    @patch("praxis.gateway.router.register_callbacks")
-    async def test_summarize(self, mock_cb: MagicMock) -> None:
+    async def test_summarize(self) -> None:
         gw = GatewayRouter(make_config())
         raw = make_raw_response(content="这是摘要内容")
         gw._router.acompletion = AsyncMock(return_value=raw)
@@ -307,8 +492,7 @@ class TestTasks:
         result = await summarize(gw, "一段很长的文本...", instruction="请摘要")
         assert result == "这是摘要内容"
 
-    @patch("praxis.gateway.router.register_callbacks")
-    async def test_judge_valid_json(self, mock_cb: MagicMock) -> None:
+    async def test_judge_valid_json(self) -> None:
         gw = GatewayRouter(make_config())
         judge_json = json.dumps({
             "verdict": True,
@@ -324,8 +508,7 @@ class TestTasks:
         assert result.confidence == 0.95
         assert result.reasoning == "内容符合标准"
 
-    @patch("praxis.gateway.router.register_callbacks")
-    async def test_judge_invalid_json_fallback(self, mock_cb: MagicMock) -> None:
+    async def test_judge_invalid_json_fallback(self) -> None:
         gw = GatewayRouter(make_config())
         raw = make_raw_response(content="这不是 JSON")
         gw._router.acompletion = AsyncMock(return_value=raw)
@@ -349,6 +532,13 @@ class TestMetering:
     def test_get_max_tokens(self, mock_mt: MagicMock) -> None:
         max_t = get_max_tokens("gpt-4o")
         assert max_t == 128000
+
+    @patch("litellm.cost_per_token", return_value=(0.0, 0.0))
+    def test_zero_price_is_unknown_without_explicit_deployment_price(
+        self,
+        _mock_cost: MagicMock,
+    ) -> None:
+        assert estimate_input_cost(100, "custom/model") is None
 
 
 class TestResilience:

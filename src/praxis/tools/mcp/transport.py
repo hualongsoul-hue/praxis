@@ -9,9 +9,10 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 
+import httpx
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 
 from praxis.models.mcp import MCPServerConfig, MCPTransportType
 from praxis.telemetry.logger import get_logger
@@ -40,16 +41,15 @@ async def create_stdio_transport(
         args=config.args,
         env=config.env or None,
     )
-    async with stdio_client(params) as (read_stream, write_stream):
-        async with ClientSession(
-            read_stream,
-            write_stream,
-            sampling_callback=sampling_callback,
-            elicitation_callback=elicitation_callback,
-        ) as session:
-            await session.initialize()
-            log.info("Stdio 连接已建立", server=config.name)
-            yield session
+    async with stdio_client(params) as (read_stream, write_stream), ClientSession(
+        read_stream,
+        write_stream,
+        sampling_callback=sampling_callback,
+        elicitation_callback=elicitation_callback,
+    ) as session:
+        await session.initialize()
+        log.info("Stdio 连接已建立", server=config.name)
+        yield session
 
 
 @asynccontextmanager
@@ -68,12 +68,14 @@ async def create_http_transport(
     Yields:
         已初始化的 ClientSession。
     """
-    async with streamablehttp_client(
-        url=config.url,
+    async with httpx.AsyncClient(
         headers=config.headers or None,
         timeout=config.timeout,
-    ) as (read_stream, write_stream, _get_session_id):
-        async with ClientSession(
+    ) as http_client:
+        async with streamable_http_client(
+            url=config.url,
+            http_client=http_client,
+        ) as (read_stream, write_stream, _get_session_id), ClientSession(
             read_stream,
             write_stream,
             sampling_callback=sampling_callback,

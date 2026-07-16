@@ -1,80 +1,30 @@
-"""PraxisConfig 顶层配置模型。
+"""不可变的 Praxis 顶层配置模型。"""
 
-配置来源优先级（从低到高）：默认值 → YAML 文件 → 环境变量 → 初始化参数。
-YAML 数据通过 set_yaml_data() 注入，由 loader 在 load_config 时调用。
-"""
-
-from typing import Any
-
-from pydantic import Field
-from pydantic.fields import FieldInfo
-from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
+from pydantic import ConfigDict, Field
 
 from praxis.config.schemas import (
     ContextConfig,
     GatewayConfig,
     GuardrailsConfig,
-    SessionConfig,
+    MCPConfig,
     MemoryConfig,
     OrchestratorConfig,
     PersistenceConfig,
     RecoveryConfig,
+    SessionConfig,
     SkillsConfig,
+    StrictConfigModel,
     SubagentConfig,
     TelemetryConfig,
     ToolsConfig,
     VerificationConfig,
 )
 
-yaml_data: dict[str, Any] = {}
 
+class PraxisConfig(StrictConfigModel):
+    """应用配置快照；加载后不可变，可供多个 Runtime 安全共享。"""
 
-def set_yaml_data(data: dict[str, Any]) -> None:
-    """设置 YAML 配置数据，供 YamlFileSource 读取。"""
-    global yaml_data
-    yaml_data = data
-
-
-class YamlFileSource(PydanticBaseSettingsSource):
-    """YAML 配置源。优先级介于环境变量和默认值之间。"""
-
-    def get_field_value(
-        self, field: FieldInfo, field_name: str
-    ) -> tuple[Any, str, bool]:
-        value = yaml_data.get(field_name)
-        return value, field_name, False
-
-    def prepare_field_value(
-        self,
-        field_name: str,
-        field: FieldInfo,
-        value: Any,
-        value_is_complex: bool,
-    ) -> Any:
-        return value
-
-    def __call__(self) -> dict[str, Any]:
-        d: dict[str, Any] = {}
-        for field_name, field_info in self.settings_cls.model_fields.items():
-            value, key, is_complex = self.get_field_value(field_info, field_name)
-            value = self.prepare_field_value(field_name, field_info, value, is_complex)
-            if value is not None:
-                d[key] = value
-        return d
-
-
-class PraxisConfig(BaseSettings):
-    """Praxis 顶层配置，包含所有组件配置切片。
-
-    环境变量前缀：``PRAXIS_``，嵌套分隔符：``__``。
-    示例：``PRAXIS_TELEMETRY__LOG_LEVEL=DEBUG``。
-    """
-
-    model_config = SettingsConfigDict(
-        env_prefix="PRAXIS_",
-        env_nested_delimiter="__",
-        extra="ignore",
-    )
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
     persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
@@ -89,18 +39,4 @@ class PraxisConfig(BaseSettings):
     session: SessionConfig = Field(default_factory=SessionConfig)
     subagent: SubagentConfig = Field(default_factory=SubagentConfig)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
-
-    @classmethod
-    def settings_customise_sources(
-        cls,
-        settings_cls: type[BaseSettings],
-        init_settings: PydanticBaseSettingsSource,
-        env_settings: PydanticBaseSettingsSource,
-        dotenv_settings: PydanticBaseSettingsSource,
-        file_secret_settings: PydanticBaseSettingsSource,
-    ) -> tuple[PydanticBaseSettingsSource, ...]:
-        return (
-            init_settings,
-            env_settings,
-            YamlFileSource(settings_cls),
-        )
+    mcp: MCPConfig = Field(default_factory=MCPConfig)

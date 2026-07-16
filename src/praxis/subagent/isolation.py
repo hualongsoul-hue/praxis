@@ -5,20 +5,34 @@
 遥测关联父追踪链路。
 """
 
+from typing import Protocol
+
 from praxis.config.schemas import (
     ContextConfig,
-    SessionConfig,
     OrchestratorConfig,
+    SessionConfig,
 )
 from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
-from praxis.session.core import Session, SessionFactory
 from praxis.models.subagent import SubagentSpec
 from praxis.persistence.store import PersistenceStore
+from praxis.session.core import Session, SessionFactory
 from praxis.telemetry.logger import get_logger
 from praxis.tools.registry import ToolRegistry
 
 log = get_logger("subagent.isolation")
+
+
+class RuntimeSubagentFactory(Protocol):
+    """Runtime-owned child-session boundary used without importing runtime.py."""
+
+    async def build_subagent_session(
+        self,
+        spec: SubagentSpec,
+        parent_registry: ToolRegistry,
+    ) -> Session: ...
+
+    async def release_subagent_session(self, session: Session) -> None: ...
 
 
 class IsolatedContext:
@@ -33,11 +47,13 @@ class IsolatedContext:
         gateway: GatewayRouter,
         orchestrator_config: OrchestratorConfig,
         context_config: ContextConfig,
+        runtime: RuntimeSubagentFactory | None = None,
     ) -> None:
         self.store = store
         self.gateway = gateway
         self.orchestrator_config = orchestrator_config
         self.context_config = context_config
+        self.runtime = runtime
 
     async def create_isolated_session(
         self,
@@ -57,6 +73,9 @@ class IsolatedContext:
         Returns:
             隔离的子代理 Session。
         """
+        if self.runtime is not None:
+            return await self.runtime.build_subagent_session(spec, parent_registry)
+
         # 创建独立工具注册表（仅包含指定工具子集）
         child_registry = ToolRegistry()
         for tool_name in spec.tool_names:
@@ -82,6 +101,7 @@ class IsolatedContext:
             gateway=self.gateway,
             registry=child_registry,
             model=model,
+            include_builtins=False,
         )
 
         log.info(
@@ -90,3 +110,11 @@ class IsolatedContext:
             tool_count=len(spec.tool_names),
         )
         return session
+
+    async def close_session(self, session: Session) -> None:
+        """Release a child session through its owning Runtime when available."""
+        if self.runtime is not None:
+            await self.runtime.release_subagent_session(session)
+            return
+        session.abort()
+        await session.terminate()

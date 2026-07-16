@@ -7,8 +7,8 @@
 
 from typing import Any
 
+from praxis.models.session import ContinuationPhase
 from praxis.session.core import Session
-from praxis.models.session import ContinuationPhase, SessionStatus
 from praxis.telemetry.logger import get_logger
 
 log = get_logger("session.continuation")

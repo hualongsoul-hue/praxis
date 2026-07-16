@@ -8,10 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
-import pytest
-
 from praxis.config.schemas import ContextConfig, OrchestratorConfig
-from praxis.context.assembler import PromptAssembler
 from praxis.models.orchestrator import TerminationReason
 from tests.e2e.conftest import build_loop
 

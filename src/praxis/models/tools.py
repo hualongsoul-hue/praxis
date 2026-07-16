@@ -1,6 +1,8 @@
 """工具相关类型定义——跨 S5、S8、S11 共享。"""
 
+from datetime import UTC, datetime
 from typing import Any, Literal
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -40,6 +42,7 @@ class ToolMetadata(BaseModel):
     # 显式声明时该声明优先于全局默认。
     permission_level: Literal["auto_approve", "confirm", "deny"] | None = None
     readonly: bool = False
+    idempotent: bool = False
     timeout_seconds: float = 30.0
     tags: list[str] = Field(default_factory=list)
 
@@ -51,3 +54,20 @@ class ToolDefinition(BaseModel):
     description: str
     parameters: dict[str, Any]
     metadata: ToolMetadata = Field(default_factory=ToolMetadata)
+
+
+class ApprovalRequest(BaseModel):
+    """交给宿主应用审批处理器的结构化工具请求。"""
+
+    request_id: str = Field(default_factory=lambda: uuid4().hex)
+    session_id: str | None = None
+    tool_name: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    requested_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class ApprovalDecision(BaseModel):
+    """审批处理器的显式决定。"""
+
+    approved: bool
+    reason: str = ""

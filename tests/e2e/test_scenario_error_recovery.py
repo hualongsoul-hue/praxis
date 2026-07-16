@@ -9,10 +9,6 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
-import pytest
-
-from praxis.models.orchestrator import TerminationReason
-from praxis.recovery.circuit_breaker import CircuitBreakerRegistry
 from tests.e2e.conftest import build_loop, register_tool
 
 

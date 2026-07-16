@@ -22,7 +22,7 @@ HANDOFF_FUNCTION_PREFIX = "handoff_to_"
 class ParsedOutput:
     """解析后的 LLM 输出。"""
 
-    __slots__ = ("content", "tool_calls", "is_final", "handoff_target")
+    __slots__ = ("content", "handoff_target", "is_final", "tool_calls")
 
     def __init__(
         self,

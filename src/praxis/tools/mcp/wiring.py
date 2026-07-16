@@ -8,7 +8,7 @@
 """
 
 from contextlib import AsyncExitStack
-from typing import Any
+from typing import Any, cast
 
 from praxis.models.mcp import (
     MCPElicitationRequest,
@@ -41,7 +41,10 @@ def make_sampling_callback(server_name: str, manager: SamplingManager) -> Any:
             content = getattr(msg, "content", None)
             text = getattr(content, "text", "") if content is not None else ""
             messages.append({"role": getattr(msg, "role", "user"), "content": text})
-        prefs = params.modelPreferences.model_dump() if params.modelPreferences else {}
+        prefs = cast(
+            dict[str, Any],
+            params.modelPreferences.model_dump() if params.modelPreferences else {},
+        )
         request = MCPSamplingRequest(
             server_name=server_name,
             messages=messages,
@@ -50,7 +53,7 @@ def make_sampling_callback(server_name: str, manager: SamplingManager) -> Any:
         )
         try:
             result = await manager.handle_sampling(request)
-        except Exception as exc:  # noqa: BLE001 - 转为 MCP 协议错误
+        except Exception as exc:
             return ErrorData(code=-32603, message=str(exc))
         return CreateMessageResult(
             role="assistant",
@@ -72,12 +75,12 @@ def make_elicitation_callback(server_name: str, manager: ElicitationManager) -> 
         request = MCPElicitationRequest(
             server_name=server_name,
             message=getattr(params, "message", "") or "",
-            request_schema=schema if isinstance(schema, dict) else {},
+            request_schema=cast(dict[str, Any], schema) if isinstance(schema, dict) else {},
             url=getattr(params, "url", None),
         )
         try:
             response = await manager.handle_elicitation(request)
-        except Exception as exc:  # noqa: BLE001 - 转为 MCP 协议错误
+        except Exception as exc:
             return ErrorData(code=-32603, message=str(exc))
         return ElicitResult(
             action="accept" if response.accepted else "decline",

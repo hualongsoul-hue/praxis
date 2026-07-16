@@ -1,6 +1,5 @@
 """S10 验证引擎验证测试。"""
 
-import json
 import textwrap
 from unittest.mock import MagicMock, patch
 
@@ -24,13 +23,11 @@ from praxis.verification.computational import (
 from praxis.verification.gav import (
     ControlQuadrant,
     GAVController,
-    GAVPhase,
     GAVVerifyRequest,
     GAVVerifyResponse,
 )
 from praxis.verification.inferential import InferentialVerifier, run_inferential
 from praxis.verification.registry import VerifierRegistry
-
 
 # ── Task 9.1: 计算型验证 ───────────────────────────────────────────────────
 
@@ -408,6 +405,28 @@ class TestVerifierRegistry:
         reg = VerifierRegistry()
         result = await reg.run_visual(url="http://x", expectations="y")
         assert result.status == VerificationStatus.SKIP
+
+    async def test_run_visual_skips_when_default_model_lacks_vision(self) -> None:
+        gateway = MagicMock()
+        gateway.supports_vision.return_value = False
+        reg = VerifierRegistry(gateway=gateway, visual_enabled=True)
+
+        result = await reg.run_visual(url="https://example.com", expectations="ok")
+
+        assert result.status is VerificationStatus.SKIP
+        assert "视觉能力" in result.feedback
+        gateway.supports_vision.assert_called_once_with()
+
+    async def test_run_visual_reports_missing_optional_dependency(self) -> None:
+        gateway = MagicMock()
+        gateway.supports_vision.return_value = True
+        reg = VerifierRegistry(gateway=gateway, visual_enabled=True)
+
+        with (
+            patch("praxis.verification.registry.find_spec", return_value=None),
+            pytest.raises(RuntimeError, match=r"praxis\[visual\]"),
+        ):
+            await reg.run_visual(url="https://example.com", expectations="ok")
 
     async def test_custom_verifier(self) -> None:
         class CustomVerifier:

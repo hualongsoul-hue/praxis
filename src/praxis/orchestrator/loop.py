@@ -7,7 +7,7 @@
 
 import time
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, cast
 
 from json_repair import repair_json
 
@@ -32,7 +32,6 @@ from praxis.models.orchestrator import (
     StrategyMode,
     TerminationReason,
 )
-
 from praxis.models.verification import QualityPhase, VerificationStatus, VerificationType
 from praxis.orchestrator.events import EventEmitter
 from praxis.orchestrator.parser import OutputParser, ParsedOutput, StreamAccumulator
@@ -221,11 +220,15 @@ class OrchestrationLoop:
             log.warning("计划生成失败，退化为 ReAct", error=str(exc))
             return
 
-        data = repair_json(response.content or "[]", return_objects=True)
+        data = cast(object, repair_json(response.content or "[]", return_objects=True))
         steps: list[PlanStep] = []
         if isinstance(data, list):
-            for item in data:
-                if isinstance(item, dict) and item.get("description"):
+            for raw_item in cast(list[object], data):
+                if isinstance(raw_item, dict):
+                    item = cast(dict[str, Any], raw_item)
+                else:
+                    continue
+                if item.get("description"):
                     steps.append(PlanStep(
                         description=str(item["description"]),
                         tool_hint=str(item.get("tool_hint", "")),
@@ -388,7 +391,7 @@ class OrchestrationLoop:
 
         # S6: 记录工具调用摘要到工作记忆
         if self.memory is not None:
-            summary_parts = []
+            summary_parts: list[str] = []
             if parsed.content:
                 summary_parts.append(parsed.content)
             for o in outcomes:
@@ -408,11 +411,16 @@ class OrchestrationLoop:
                 if o.result is not None and o.result.success
             ]
             if successful_tools:
+                verified_outcomes: list[dict[str, str]] = []
+                for outcome in successful_tools:
+                    result = outcome.result
+                    if result is not None:
+                        verified_outcomes.append({
+                            "name": outcome.tool_call.function.name,
+                            "result": result.content,
+                        })
                 verification_results = await self.verifier_registry.run_computational(
-                    target={"tool_outcomes": [
-                        {"name": o.tool_call.function.name, "result": o.result.content}
-                        for o in successful_tools
-                    ]},
+                    target={"tool_outcomes": verified_outcomes},
                     phase=QualityPhase.POST_INTEGRATION,
                 )
                 for vr in verification_results:
@@ -624,7 +632,7 @@ class OrchestrationLoop:
 
         early = await self.prepare_run(user_message, ctx)
         if early is not None:
-            yield self._last_event
+            yield self.last_event()
             return
 
         while True:
@@ -632,7 +640,7 @@ class OrchestrationLoop:
             prompt = await self.prepare_turn(ctx)
 
             # yield turn_start 事件
-            yield self._last_event
+            yield self.last_event()
 
             # LLM 推理
             self.state.phase = LoopPhase.LLM_CALLING
@@ -693,7 +701,7 @@ class OrchestrationLoop:
             reason = self.check_final_termination(parsed, response.finish_reason)
             if reason is not None:
                 await self.handle_final_response(parsed, reason)
-                yield self._last_event
+                yield self.last_event()
                 return
 
             # 工具执行（tool_call_start/end 事件由 coordinator 通过 emitter 产生）
@@ -707,17 +715,17 @@ class OrchestrationLoop:
             # Handoff 短路
             handoff_resp = self.check_handoff_result(parsed, outcomes)
             if handoff_resp is not None:
-                yield self._last_event
+                yield self.last_event()
                 return
 
             # 轮次结束
             end_resp = self.finish_turn(ctx, tripwire, start_time)
             if end_resp is not None:
-                yield self._last_event
+                yield self.last_event()
                 return
 
             # yield turn_end 事件
-            yield self._last_event
+            yield self.last_event()
 
     # ── 控制方法 ──────────────────────────────────────────────────────────
 
@@ -725,6 +733,12 @@ class OrchestrationLoop:
         """中断循环。"""
         self.state.aborted = True
         log.info("循环中断请求已标记")
+
+    def last_event(self) -> AgentEvent:
+        """返回最近事件；内部状态违反事件投影约束时立即失败。"""
+        if self._last_event is None:
+            raise RuntimeError("编排循环尚未产生事件")
+        return self._last_event
 
     def get_state(self) -> LoopState:
         """获取当前循环状态。"""

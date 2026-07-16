@@ -4,9 +4,8 @@ import base64
 import hashlib
 import secrets
 import time
-from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from praxis.models.mcp import MCPElicitationRequest
 from praxis.telemetry.logger import get_logger

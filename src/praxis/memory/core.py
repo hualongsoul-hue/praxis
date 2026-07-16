@@ -6,12 +6,13 @@
 生命周期的 start()/stop() 由 S12（SessionFactory）管理，Agent 不直接接触。
 """
 
-from datetime import datetime, timezone
-from typing import Any
+import os
+from datetime import UTC, datetime
+from typing import Any, cast
 
 from praxis.config.schemas import MemoryConfig
 from praxis.gateway.router import GatewayRouter
-from praxis.memory.consolidator import ConsolidationResult, MemoryConsolidator
+from praxis.memory.consolidator import MemoryConsolidator
 from praxis.memory.dream import DreamConsolidator, DreamReport, DreamScheduler
 from praxis.memory.extractor import MemoryExtractor
 from praxis.memory.profile import ProfileManager
@@ -27,7 +28,6 @@ from praxis.models.memory import (
     MemoryIndexEntry,
     MemoryScope,
     MemorySearchResult,
-    MemoryStatus,
     MemoryType,
     ScopeType,
     SemanticMemory,
@@ -65,6 +65,7 @@ class CognitiveMemory:
         self.default_scope = default_scope or MemoryScope(
             scope_type=ScopeType.SESSION, scope_id=session_id,
         )
+        default_model = self.gateway.config.default_model
 
         # 持久化层
         self.scoped_store = ScopedMemoryStore(store)
@@ -74,7 +75,11 @@ class CognitiveMemory:
         self.vector_store = VectorStore(
             self.scoped_store,
             api_base=self.config.embedding_api_base,
-            api_key=self.config.embedding_api_key,
+            api_key=(
+                os.getenv(self.config.embedding_api_key_env, "")
+                if self.config.embedding_api_key_env
+                else ""
+            ),
             timeout=self.config.embedding_timeout,
             dimensions=self.config.embedding_dimensions,
         )
@@ -93,14 +98,14 @@ class CognitiveMemory:
         # 提取 + 整合
         self.extractor = MemoryExtractor(
             gateway=self.gateway,
-            model=self.config.extraction_model,
+            model=default_model,
             prompts=self.config.extraction_prompts,
         )
         self.consolidator = MemoryConsolidator(
             gateway=self.gateway,
             vector_store=self.vector_store,
             retention=self.retention,
-            model=self.config.extraction_model,
+            model=default_model,
             similarity_threshold=self.config.consolidation_similarity_threshold,
         )
 
@@ -119,7 +124,7 @@ class CognitiveMemory:
             scoped_store=self.scoped_store,
             retention=self.retention,
             meta_store=store,
-            model=self.config.extraction_model,
+            model=default_model,
             min_hours_since_last=self.config.dream_min_hours,
             min_sessions=self.config.dream_min_sessions,
             decay_enabled=self.config.decay_enabled,
@@ -366,7 +371,8 @@ class CognitiveMemory:
         pending_data = snapshot.get("pending")
         if isinstance(pending_data, list):
             self.worker.pending = [
-                WorkingMemoryMessage.model_validate(m) for m in pending_data
+                WorkingMemoryMessage.model_validate(item)
+                for item in cast(list[object], pending_data)
             ]
         self.dream_session_count = int(snapshot.get("dream_session_count", 0) or 0)
         self.project_preloaded = bool(snapshot.get("project_preloaded", False))
@@ -398,8 +404,10 @@ class CognitiveMemory:
         """从持久化存储恢复系统元数据（dream 计数等）。"""
         data = await self.store.load(COGNITIVE_META_NAMESPACE, self.session_id)
         if isinstance(data, dict):
-            self.dream_session_count = int(data.get("dream_session_count", 0) or 0)
-            self.project_preloaded = bool(data.get("project_preloaded", False))
+            payload = cast(dict[str, object], data)
+            count = payload.get("dream_session_count", 0)
+            self.dream_session_count = int(count) if isinstance(count, (int, str)) else 0
+            self.project_preloaded = bool(payload.get("project_preloaded", False))
 
     async def save_meta(self) -> None:
         """持久化系统元数据。"""
@@ -409,7 +417,7 @@ class CognitiveMemory:
             {
                 "dream_session_count": self.dream_session_count,
                 "project_preloaded": self.project_preloaded,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": datetime.now(UTC).isoformat(),
             },
         )
 

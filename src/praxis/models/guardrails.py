@@ -1,12 +1,12 @@
 """护栏系统数据模型——S8 内部及跨组件共享。"""
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-class VerdictType(str, Enum):
+class VerdictType(StrEnum):
     """护栏裁决类型。"""
 
     PASS = "pass"

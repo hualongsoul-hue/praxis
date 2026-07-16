@@ -1,6 +1,6 @@
 """praxis.gateway — 模型网关（S4）：基于 LiteLLM 的统一 LLM 接入。"""
 
-from praxis.gateway.callbacks import TelemetryCallback, register_callbacks
+from praxis.gateway.callbacks import TelemetryCallback
 from praxis.gateway.chat import chat, chat_stream
 from praxis.gateway.metering import (
     check_budget,
@@ -25,6 +25,5 @@ __all__ = [
     "judge",
     "map_litellm_exception",
     "record_usage",
-    "register_callbacks",
     "summarize",
 ]

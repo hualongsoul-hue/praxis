@@ -3,8 +3,6 @@
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
 from praxis.config.schemas import ContextConfig
 from praxis.context.assembler import PromptAssembler
 from praxis.context.compaction import ContextCompactor
@@ -14,7 +12,6 @@ from praxis.context.tool_injection import ToolInjector
 from praxis.models.context import TurnContext
 from praxis.models.tools import ToolDefinition, ToolMetadata
 from praxis.tools.registry import ToolRegistry
-
 
 # ── 公共 Mock ──────────────────────────────────────────────────────────────
 
@@ -447,12 +444,13 @@ class TestJITInjection:
 
     async def test_loop_pulls_jit_by_task_stage(self) -> None:
         """循环 prepare_run 应按 task_stage 从 JITRetriever 取示例与索引。"""
-        from praxis.context.assembler import PromptAssembler
+        from unittest.mock import AsyncMock, MagicMock
+
         from praxis.config.schemas import ContextConfig
+        from praxis.context.assembler import PromptAssembler
         from praxis.context.jit_retrieval import JITRetriever
         from praxis.models.context import RunContext, TurnContext
         from praxis.orchestrator.loop import OrchestrationLoop
-        from unittest.mock import AsyncMock, MagicMock
 
         jit = JITRetriever()
         jit.add_example("coding", "如何排序", "用 sorted()", tags=["py"])

@@ -5,9 +5,11 @@
 """
 
 import threading
-import time
+from collections.abc import Generator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 from praxis.config.schemas import TelemetryConfig
 
@@ -17,7 +19,7 @@ MetricKey = tuple[str, tuple[tuple[str, str], ...]]
 class Counter:
     """单调递增计数器。"""
 
-    __slots__ = ("_value", "_lock")
+    __slots__ = ("_lock", "_value")
 
     def __init__(self) -> None:
         self._value = 0.0
@@ -35,7 +37,7 @@ class Counter:
 class Gauge:
     """可任意设置的瞬时值。"""
 
-    __slots__ = ("_value", "_lock")
+    __slots__ = ("_lock", "_value")
 
     def __init__(self) -> None:
         self._value = 0.0
@@ -59,7 +61,7 @@ DEFAULT_BUCKETS: tuple[float, ...] = (
 class Histogram:
     """分布统计（计数 + 累计和 + 分桶），支持 Prometheus 直方图与分位估算。"""
 
-    __slots__ = ("_count", "_sum", "_buckets", "_bounds", "_lock")
+    __slots__ = ("_bounds", "_buckets", "_count", "_lock", "_sum")
 
     def __init__(self, buckets: tuple[float, ...] = DEFAULT_BUCKETS) -> None:
         self._count = 0
@@ -201,87 +203,32 @@ class MetricsCollector:
         Path(path).write_text(self.export_prometheus(), encoding="utf-8")
 
 
-collector: MetricsCollector | None = None
-metrics_server: Any = None
-file_exporter_started: bool = False
-
-
-def start_file_exporter(path: str, interval: float = 15.0) -> None:
-    """后台线程：周期性把指标快照写入文件（metrics_export=file）。"""
-    global file_exporter_started
-    if file_exporter_started:
-        return
-
-    def _loop() -> None:
-        while True:
-            time.sleep(interval)
-            try:
-                get_collector().export_to_file(path)
-            except Exception:  # 写文件失败不应使线程退出
-                pass
-
-    thread = threading.Thread(target=_loop, name="praxis-metrics-file", daemon=True)
-    thread.start()
-    file_exporter_started = True
-
-
-def start_metrics_server(port: int) -> None:
-    """在后台线程启动一个仅暴露 /metrics 的 Prometheus 抓取端点。"""
-    global metrics_server
-    if metrics_server is not None:
-        return
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
-    class _Handler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802
-            if self.path.rstrip("/") in ("/metrics", ""):
-                body = export_prometheus().encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "text/plain; version=0.0.4")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-            else:
-                self.send_response(404)
-                self.end_headers()
-
-        def log_message(self, *args: Any) -> None:  # 静默 HTTP 访问日志
-            return
-
-    server = ThreadingHTTPServer(("0.0.0.0", port), _Handler)
-    thread = threading.Thread(target=server.serve_forever, name="praxis-metrics", daemon=True)
-    thread.start()
-    metrics_server = server
+_current_collector: ContextVar[MetricsCollector | None] = ContextVar(
+    "praxis_metrics_collector",
+    default=None,
+)
 
 
 def configure_metrics(config: TelemetryConfig) -> None:
-    """初始化指标采集器；按 metrics_export 选择导出方式。
+    """为当前 CLI 上下文绑定采集器；不启动永久线程或 HTTP 服务。"""
+    _current_collector.set(MetricsCollector())
 
-    幂等：已存在采集器时保留之（避免 create_agent_session 每会话重复调用
-    时清空累计指标）。
-    """
-    global collector
-    if not config.metrics_enabled:
-        collector = None
-        return
-    if collector is None:
-        collector = MetricsCollector()
-    if config.metrics_export == "prometheus":
-        try:
-            start_metrics_server(config.metrics_port)
-        except Exception:  # 端口占用等不应阻断主流程
-            pass
-    elif config.metrics_export == "file" and config.metrics_file:
-        try:
-            start_file_exporter(config.metrics_file)
-        except Exception:
-            pass
+
+@contextmanager
+def use_metrics(collector: MetricsCollector) -> Generator[None]:
+    """在当前异步上下文中使用 Runtime 实例拥有的采集器。"""
+    token = _current_collector.set(collector)
+    try:
+        yield
+    finally:
+        _current_collector.reset(token)
 
 
 def get_collector() -> MetricsCollector:
-    global collector
+    collector = _current_collector.get()
     if collector is None:
         collector = MetricsCollector()
+        _current_collector.set(collector)
     return collector
 
 

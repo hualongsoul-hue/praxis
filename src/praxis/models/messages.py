@@ -1,14 +1,14 @@
 """消息类型定义——跨 S4、S6、S7、S11 共享。"""
 
-from enum import Enum
-from typing import Annotated, Literal, Union
+from enum import StrEnum
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field
 
 from praxis.models.tools import ToolCall
 
 
-class Role(str, Enum):
+class Role(StrEnum):
     """消息角色。"""
 
     SYSTEM = "system"
@@ -38,7 +38,7 @@ class ImageContent(BaseModel):
     image_url: ImageUrl
 
 
-ContentPart = Annotated[Union[TextContent, ImageContent], Field(discriminator="type")]
+ContentPart = Annotated[TextContent | ImageContent, Field(discriminator="type")]
 
 
 class Message(BaseModel):

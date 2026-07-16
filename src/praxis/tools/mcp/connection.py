@@ -71,7 +71,7 @@ class MCPConnectionManager:
             tools=caps.tools is not None if caps else False,
             resources=caps.resources is not None if caps else False,
             prompts=caps.prompts is not None if caps else False,
-            sampling=caps.sampling is not None if caps and hasattr(caps, "sampling") else False,
+            sampling=False,
         )
         conn.status = MCPServerStatus.CONNECTED
         self.connections[config.name] = conn

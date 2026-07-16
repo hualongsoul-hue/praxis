@@ -5,9 +5,6 @@
 """
 
 from pathlib import Path
-from typing import Any
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -17,14 +14,14 @@ from praxis.config.schemas import (
     PersistenceConfig,
     SessionConfig,
 )
+from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.guardrails.permissions import PermissionManager
 from praxis.guardrails.rules import RuleEngine
-from praxis.models.session import ContinuationPhase, SessionMetadata, SessionStatus
+from praxis.models.session import ContinuationPhase, SessionStatus
 from praxis.persistence.store import PersistenceStore, create_store
 from praxis.session.checkpoint import CheckpointManager
 from praxis.session.continuation import ContinuationManager
-from praxis.gateway.router import GatewayRouter
 from praxis.session.core import SessionFactory
 from praxis.session.resume import SessionResumer
 

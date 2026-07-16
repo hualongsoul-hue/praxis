@@ -3,7 +3,27 @@
 将 LiteLLM 异常映射到 Praxis 内部异常体系，供 S9 错误恢复进行分类和策略决策。
 """
 
-import litellm
+from litellm.exceptions import (
+    AuthenticationError as LiteLLMAuthenticationError,
+)
+from litellm.exceptions import (
+    BudgetExceededError as LiteLLMBudgetExceededError,
+)
+from litellm.exceptions import (
+    ContextWindowExceededError as LiteLLMContextWindowExceededError,
+)
+from litellm.exceptions import (
+    NotFoundError as LiteLLMNotFoundError,
+)
+from litellm.exceptions import (
+    RateLimitError as LiteLLMRateLimitError,
+)
+from litellm.exceptions import (
+    ServiceUnavailableError as LiteLLMServiceUnavailableError,
+)
+from litellm.exceptions import (
+    Timeout as LiteLLMTimeout,
+)
 
 from praxis.exceptions import (
     AuthenticationError,
@@ -17,13 +37,13 @@ from praxis.exceptions import (
 )
 
 EXCEPTION_MAP: dict[type[Exception], type[GatewayError]] = {
-    litellm.AuthenticationError: AuthenticationError,
-    litellm.RateLimitError: RateLimitError,
-    litellm.NotFoundError: ModelNotFoundError,
-    litellm.ContextWindowExceededError: ContextWindowExceededError,
-    litellm.BudgetExceededError: BudgetExceededError,
-    litellm.ServiceUnavailableError: ProviderUnavailableError,
-    litellm.Timeout: GatewayTimeoutError,
+    LiteLLMAuthenticationError: AuthenticationError,
+    LiteLLMRateLimitError: RateLimitError,
+    LiteLLMNotFoundError: ModelNotFoundError,
+    LiteLLMContextWindowExceededError: ContextWindowExceededError,
+    LiteLLMBudgetExceededError: BudgetExceededError,
+    LiteLLMServiceUnavailableError: ProviderUnavailableError,
+    LiteLLMTimeout: GatewayTimeoutError,
 }
 
 

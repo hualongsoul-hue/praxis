@@ -8,7 +8,7 @@
 import json
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +29,7 @@ class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         data: dict[str, Any] = {
             "timestamp": datetime.fromtimestamp(
-                record.created, tz=timezone.utc
+                record.created, tz=UTC
             ).isoformat(),
             "level": record.levelname,
             "component": getattr(record, "component", ""),
@@ -110,12 +110,8 @@ class StructuredLogger:
         self._logger.log(level, msg, extra=extra)
 
 
-initialized = False
-
-
 def configure_logging(config: TelemetryConfig) -> None:
-    """根据配置初始化日志系统。可重复调用以更新配置。"""
-    global initialized
+    """由 CLI 显式配置 Praxis 命名空间日志，不触碰宿主根日志器。"""
 
     root = logging.getLogger("praxis")
     root.handlers.clear()
@@ -141,17 +137,7 @@ def configure_logging(config: TelemetryConfig) -> None:
             getattr(logging, level_str.upper(), logging.INFO)
         )
 
-    initialized = True
-
-
 def get_logger(name: str) -> StructuredLogger:
-    """获取指定组件的结构化日志器。
-
-    首次调用时自动用默认配置初始化日志系统。
-    """
-    global initialized
-    if not initialized:
-        configure_logging(TelemetryConfig())
-
+    """获取日志器；SDK 不主动安装 Handler 或修改宿主日志配置。"""
     logger = logging.getLogger(f"praxis.{name}")
     return StructuredLogger(name, logger)

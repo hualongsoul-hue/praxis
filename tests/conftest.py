@@ -6,16 +6,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from praxis.gateway.router import GatewayRouter
-from praxis.telemetry import audit as audit_mod
-
-
-@pytest.fixture(autouse=True)
-async def _flush_audit_after_test():
-    """每个测试后冲刷 pending 审计任务，避免 event loop 关闭时的噪音。"""
-    yield
-    audit_mod.audit_store = None
-    if audit_mod.pending_tasks:
-        await audit_mod.flush_audit()
 
 
 @pytest.fixture

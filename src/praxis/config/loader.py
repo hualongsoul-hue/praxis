@@ -1,123 +1,104 @@
-"""配置加载与分发。
+"""纯函数配置加载器：默认值 → YAML → 环境变量 → 显式覆盖。"""
 
-提供 load_config / get_component_config / reload_config 三个核心接口。
-"""
-
+import os
+from collections.abc import Mapping
+from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import cast
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from praxis.config.settings import PraxisConfig, set_yaml_data
-from praxis.config.validation import notify_change, validate_config
+from praxis.config.settings import PraxisConfig
 from praxis.exceptions import ConfigError
 
-current_config: PraxisConfig | None = None
-loaded_path: Path | None = None
+_OBJECT_MAP = TypeAdapter(dict[str, object])
+
+
+def _deep_merge(base: dict[str, object], update: Mapping[str, object]) -> dict[str, object]:
+    result = deepcopy(base)
+    for key, value in update.items():
+        current = result.get(key)
+        if isinstance(current, dict) and isinstance(value, Mapping):
+            current_map = cast(dict[str, object], current)
+            result[key] = _deep_merge(current_map, cast(Mapping[str, object], value))
+        else:
+            result[key] = deepcopy(value)
+    return result
+
+
+def _environment_config(environ: Mapping[str, str]) -> dict[str, object]:
+    """将 PRAXIS_<SECTION>__<FIELD> 映射为嵌套配置。
+
+    ``PRAXIS_MODEL_API_KEY`` 被明确排除；它只由模型适配器在运行时读取。
+    """
+    result: dict[str, object] = {}
+    for env_name, raw_value in environ.items():
+        if not env_name.startswith("PRAXIS_") or env_name == "PRAXIS_MODEL_API_KEY":
+            continue
+        path = env_name.removeprefix("PRAXIS_").lower().split("__")
+        if len(path) < 2:
+            continue
+        parsed = yaml.safe_load(raw_value)
+        value: object = raw_value if parsed is None else parsed
+        cursor = result
+        for segment in path[:-1]:
+            child = cursor.setdefault(segment, {})
+            if not isinstance(child, dict):
+                child = {}
+                cursor[segment] = child
+            cursor = cast(dict[str, object], child)
+        cursor[path[-1]] = value
+    return result
+
+
+def _load_yaml(path: Path) -> dict[str, object]:
+    try:
+        raw: object = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ConfigError(f"读取配置文件失败: {path}") from exc
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"配置文件不是有效 YAML: {path}") from exc
+    if raw is None:
+        return {}
+    try:
+        return _OBJECT_MAP.validate_python(raw)
+    except ValidationError as exc:
+        raise ConfigError("配置文件根节点必须是映射") from exc
 
 
 def load_config(
     config_path: Path | str | None = None,
-    **overrides: Any,
+    *,
+    environ: Mapping[str, str] | None = None,
+    **overrides: object,
 ) -> PraxisConfig:
-    """加载 Praxis 配置。
-
-    配置来源优先级（从低到高）：默认值 → YAML 文件 → 环境变量 → overrides 参数。
-
-    Args:
-        config_path: YAML 配置文件路径，为 None 时仅使用默认值和环境变量。
-        **overrides: 最高优先级的配置覆盖，传递给 PraxisConfig 构造函数。
-
-    Returns:
-        加载并验证后的 PraxisConfig 实例。
-
-    Raises:
-        ConfigError: 配置文件不存在或验证失败。
-    """
-    global current_config, loaded_path
-
-    yaml_data: dict[str, Any] = {}
+    """加载一个独立、不可变的配置快照，不修改任何进程级状态。"""
+    data: dict[str, object] = {}
     if config_path is not None:
-        path = Path(config_path).resolve()
-        if not path.exists():
+        path = Path(config_path).expanduser().resolve()
+        if not path.is_file():
             raise ConfigError(f"配置文件不存在: {path}")
-        raw = path.read_text(encoding="utf-8")
-        yaml_data = yaml.safe_load(raw) or {}
-        loaded_path = path
-    else:
-        loaded_path = None
+        data = _load_yaml(path)
 
-    set_yaml_data(yaml_data)
-    current_config = PraxisConfig(**overrides)
-    validate_config(current_config)
-
-    return current_config
+    env_data = _environment_config(os.environ if environ is None else environ)
+    merged = _deep_merge(data, env_data)
+    merged = _deep_merge(merged, overrides)
+    return PraxisConfig.model_validate(merged)
 
 
-def get_component_config(name: str) -> BaseModel:
-    """获取指定组件的配置切片。
-
-    组件仅能通过此接口获取自身配置，实现命名空间隔离。
-
-    Args:
-        name: 组件配置字段名（如 ``"gateway"``、``"telemetry"``）。
-
-    Returns:
-        对应组件的配置模型实例。
-
-    Raises:
-        ConfigError: 配置未加载或组件名称无效。
-    """
-    if current_config is None:
-        raise ConfigError("配置未加载，请先调用 load_config()")
-    if not hasattr(current_config, name):
+def get_component_config[ModelT: BaseModel](
+    config: PraxisConfig,
+    name: str,
+    expected_type: type[ModelT] | None = None,
+) -> BaseModel | ModelT:
+    """从显式配置快照提取组件切片，不依赖全局“当前配置”。"""
+    component = getattr(config, name, None)
+    if not isinstance(component, BaseModel):
         raise ConfigError(
             f"未知的组件配置: {name}",
-            details={"available": list(PraxisConfig.model_fields.keys())},
+            details={"available": list(PraxisConfig.model_fields)},
         )
-    return getattr(current_config, name)
-
-
-def reload_config(**overrides: Any) -> PraxisConfig:
-    """热更新配置：重新读取配置文件和环境变量，验证后替换当前配置。
-
-    仅当配置发生变化时通知已注册的变更监听器。
-
-    Returns:
-        更新后的 PraxisConfig 实例。
-    """
-    old_config = current_config
-    new_config = load_config(loaded_path, **overrides)
-
-    if old_config is not None:
-        old_data = old_config.model_dump()
-        new_data = new_config.model_dump()
-        if old_data != new_data:
-            changes = diff_config(old_data, new_data)
-            notify_change(changes)
-
-    return new_config
-
-
-def diff_config(
-    old: dict[str, Any],
-    new: dict[str, Any],
-    prefix: str = "",
-) -> dict[str, tuple[Any, Any]]:
-    """检测两个配置字典之间的差异。
-
-    Returns:
-        ``{key_path: (old_value, new_value)}`` 字典。
-    """
-    changes: dict[str, tuple[Any, Any]] = {}
-    all_keys = set(old.keys()) | set(new.keys())
-    for key in all_keys:
-        path = f"{prefix}.{key}" if prefix else key
-        old_val = old.get(key)
-        new_val = new.get(key)
-        if isinstance(old_val, dict) and isinstance(new_val, dict):
-            changes.update(diff_config(old_val, new_val, path))
-        elif old_val != new_val:
-            changes[path] = (old_val, new_val)
-    return changes
+    if expected_type is not None and not isinstance(component, expected_type):
+        raise ConfigError(f"组件配置类型不匹配: {name}")
+    return component

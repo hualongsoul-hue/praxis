@@ -1,32 +1,26 @@
 """S5 MCP 完整集成单元测试。"""
 
-import asyncio
+import sys
 import time
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from anyio import ClosedResourceError
+from mcp.types import TextContent
 
 from praxis.models.mcp import (
     MCPElicitationRequest,
     MCPElicitationResponse,
-    MCPPromptInfo,
-    MCPPromptMessage,
-    MCPResourceContent,
-    MCPResourceInfo,
-    MCPSamplingRequest,
-    MCPServerCapabilities,
     MCPServerConfig,
     MCPServerStatus,
-    MCPTaskInfo,
     MCPTaskStatus,
-    MCPToolInfo,
-    MCPToolResult,
     MCPTransportType,
 )
 from praxis.tools.mcp.auth import MCPAuthManager, OAuthConfig, OAuthToken
+from praxis.tools.mcp.connection import MCPConnectionManager
 from praxis.tools.mcp.elicitation import ElicitationManager
-from praxis.tools.mcp.connection import MCPConnectionManager, MCPServerConnection
 from praxis.tools.mcp.prompts import MCPPromptsBridge
 from praxis.tools.mcp.resources import MCPResourcesBridge
 from praxis.tools.mcp.roots import RootsManager
@@ -35,6 +29,7 @@ from praxis.tools.mcp.tasks import MCPTaskManager
 from praxis.tools.mcp.tools import MCPToolsBridge
 from praxis.tools.registry import ToolRegistry
 
+STDIO_TEST_SERVER = Path(__file__).parent / "fixtures" / "mcp_stdio_server.py"
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -52,10 +47,8 @@ def make_mock_session() -> MagicMock:
     tools_result.tools = [mock_tool]
     session.list_tools = AsyncMock(return_value=tools_result)
 
-    mock_call_content = MagicMock()
-    mock_call_content.text = "hello"
     call_result = MagicMock()
-    call_result.content = [mock_call_content]
+    call_result.content = [TextContent(type="text", text="hello")]
     session.call_tool = AsyncMock(return_value=call_result)
 
     # resources
@@ -103,9 +96,7 @@ def make_mock_session() -> MagicMock:
 
     mock_msg = MagicMock()
     mock_msg.role = "user"
-    mock_msg_content = MagicMock()
-    mock_msg_content.text = "Hello World"
-    mock_msg.content = mock_msg_content
+    mock_msg.content = TextContent(type="text", text="Hello World")
     get_prompt_result = MagicMock()
     get_prompt_result.messages = [mock_msg]
     session.get_prompt = AsyncMock(return_value=get_prompt_result)
@@ -570,7 +561,6 @@ class TestMCPSamplingElicitationWiring:
             TextContent,
         )
 
-        from praxis.tools.mcp.sampling import SamplingManager
         from praxis.tools.mcp.wiring import make_sampling_callback
 
         gw = MagicMock()
@@ -596,6 +586,35 @@ class TestMCPSamplingElicitationWiring:
         req = manager.handle_sampling.await_args.args[0]
         assert req.server_name == "srv1"
         assert req.messages[0]["content"] == "你好"
+
+    async def test_sampling_cannot_override_runtime_default_model(self) -> None:
+        from praxis.models.mcp import MCPSamplingRequest
+        from praxis.models.responses import ModelResponse, Usage
+
+        gateway = MagicMock()
+        gateway.config.default_model = "runtime-default"
+        manager = SamplingManager(gateway)
+        request = MCPSamplingRequest(
+            server_name="srv1",
+            messages=[{"role": "user", "content": "hello"}],
+            model_preferences={"hints": [{"name": "untrusted-model"}]},
+            max_tokens=32,
+        )
+
+        with patch(
+            "praxis.tools.mcp.sampling.chat",
+            AsyncMock(return_value=ModelResponse(
+                id="sample-1",
+                content="ok",
+                usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+                model="runtime-default",
+                created=0,
+            )),
+        ) as model_call:
+            response = await manager.handle_sampling(request)
+
+        assert response["model"] == "runtime-default"
+        assert model_call.await_args.kwargs["model"] == "runtime-default"
 
     async def test_elicitation_callback_adapter_accept(self) -> None:
         from mcp.types import ElicitRequestFormParams, ElicitResult
@@ -726,3 +745,66 @@ class TestMCPAuthWiring:
         assert seen["headers"].get("Authorization") == "Bearer tok-123"
         # 原始 config 不被就地修改
         assert config.headers == {}
+
+
+class TestMCPStdioIntegration:
+    """Use a real Python MCP subprocess to exercise the full stdio lifecycle."""
+
+    async def test_stdio_tools_resources_prompts_sampling_and_elicitation(self) -> None:
+        from mcp.types import CreateMessageResult, ElicitResult, TextContent
+
+        from praxis.tools.mcp.transport import create_stdio_transport
+
+        sampling_requests: list[str] = []
+        elicitation_requests: list[str] = []
+
+        async def sample(_context: Any, params: Any) -> CreateMessageResult:
+            content = params.messages[0].content
+            sampling_requests.append(content.text)
+            return CreateMessageResult(
+                role="assistant",
+                content=TextContent(type="text", text="sampled response"),
+                model="test-model",
+            )
+
+        async def elicit(_context: Any, params: Any) -> ElicitResult:
+            elicitation_requests.append(params.message)
+            return ElicitResult(action="accept", content={"answer": "approved"})
+
+        config = MCPServerConfig(
+            name="stdio-integration",
+            transport=MCPTransportType.STDIO,
+            command=sys.executable,
+            args=[str(STDIO_TEST_SERVER)],
+        )
+        async with create_stdio_transport(config, sample, elicit) as session:
+            tools = await session.list_tools()
+            assert {tool.name for tool in tools.tools} == {
+                "echo",
+                "request_elicitation",
+                "request_sampling",
+            }
+
+            echoed = await session.call_tool("echo", {"message": "hello"})
+            assert echoed.content[0].text == "hello"
+
+            resources = await session.list_resources()
+            assert str(resources.resources[0].uri) == "test://fixture"
+            resource = await session.read_resource("test://fixture")
+            assert resource.contents[0].text == "fixture resource"
+
+            prompts = await session.list_prompts()
+            assert prompts.prompts[0].name == "greet"
+            prompt = await session.get_prompt("greet", {"name": "Praxis"})
+            assert prompt.messages[0].content.text == "Hello, Praxis!"
+
+            sampled = await session.call_tool("request_sampling", {})
+            assert sampled.content[0].text == "sampled response"
+            elicited = await session.call_tool("request_elicitation", {})
+            assert elicited.content[0].text == "approved"
+
+        assert sampling_requests == ["Please sample a response"]
+        assert elicitation_requests == ["Provide approval"]
+
+        with pytest.raises(ClosedResourceError):
+            await session.list_tools()

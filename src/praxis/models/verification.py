@@ -1,13 +1,13 @@
 """验证引擎数据模型——S10 跨组件共享类型。"""
 
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-class VerificationStatus(str, Enum):
+class VerificationStatus(StrEnum):
     """验证结果状态。"""
 
     PASS = "pass"
@@ -16,7 +16,7 @@ class VerificationStatus(str, Enum):
     SKIP = "skip"
 
 
-class VerificationType(str, Enum):
+class VerificationType(StrEnum):
     """验证类型。"""
 
     COMPUTATIONAL = "computational"
@@ -24,7 +24,7 @@ class VerificationType(str, Enum):
     VISUAL = "visual"
 
 
-class QualityPhase(str, Enum):
+class QualityPhase(StrEnum):
     """质量左移阶段。"""
 
     PRE_INTEGRATION = "pre_integration"
@@ -51,11 +51,11 @@ class VerificationResult(BaseModel):
     verification_type: VerificationType
     verifier_name: str = ""
     score: float | None = None
-    failures: list[FailureDetail] = Field(default_factory=list)
+    failures: list[FailureDetail] = Field(default_factory=lambda: [])
     feedback: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
     duration_ms: float = 0.0
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @property
     def passed(self) -> bool:

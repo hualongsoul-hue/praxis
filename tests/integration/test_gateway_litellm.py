@@ -7,20 +7,19 @@ GatewayRouter → chat/chat_stream → LiteLLM Router → 内部数据模型映�
 
 import pytest
 
-from praxis.config.schemas import GatewayConfig
+from praxis.config.schemas import GatewayConfig, ModelDeployment
 from praxis.gateway.chat import chat, chat_stream
 from praxis.gateway.router import GatewayRouter
+
+pytestmark = pytest.mark.asyncio(loop_scope="module")
 
 
 def _gateway() -> GatewayRouter:
     cfg = GatewayConfig(
-        model_list=[{
-            "model_name": "default",
-            "litellm_params": {"model": "gpt-4o-mini", "api_key": "sk-test"},
-        }],
+        deployments=[ModelDeployment(model="gpt-4o-mini")],
         default_model="default",
     )
-    return GatewayRouter(cfg)
+    return GatewayRouter(cfg, environ={"PRAXIS_MODEL_API_KEY": "unit-test-model-key"})
 
 
 class TestGatewayLiteLLMPath:

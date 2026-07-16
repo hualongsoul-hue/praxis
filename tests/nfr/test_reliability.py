@@ -7,12 +7,11 @@ PRD § 9.2:
 - 重试策略指数退避
 """
 
-import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -22,10 +21,10 @@ from praxis.config.schemas import (
     PersistenceConfig,
     SessionConfig,
 )
-from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.guardrails.permissions import PermissionManager
 from praxis.guardrails.rules import RuleEngine
+from praxis.models.guardrails import VerdictType
 from praxis.models.recovery import CircuitState
 from praxis.models.tools import ToolDefinition
 from praxis.orchestrator.parser import OutputParser
@@ -36,9 +35,8 @@ from praxis.session.checkpoint import CheckpointManager
 from praxis.session.core import SessionFactory
 from praxis.session.resume import SessionResumer
 from praxis.tools.executor import ToolExecutor
-from praxis.models.guardrails import VerdictType
+from praxis.tools.policy import ToolPolicy
 from praxis.tools.registry import ToolRegistry
-from praxis.tools.sandbox import Sandbox
 
 
 def make_raw_response(content: str = "ok") -> SimpleNamespace:
@@ -273,7 +271,7 @@ class TestSingleStepReliability:
         )
 
         from praxis.config.schemas import ToolsConfig
-        sandbox = Sandbox(ToolsConfig())
+        sandbox = ToolPolicy(ToolsConfig())
         executor = ToolExecutor(registry, sandbox)
 
         result = await executor.execute("crash_tool", {}, "tc-crash")

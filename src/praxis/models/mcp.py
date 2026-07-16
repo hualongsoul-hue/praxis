@@ -1,19 +1,19 @@
 """MCP 集成数据模型——S5 MCP 组件共享类型。"""
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-class MCPTransportType(str, Enum):
+class MCPTransportType(StrEnum):
     """MCP 传输类型。"""
 
     STDIO = "stdio"
     HTTP = "http"
 
 
-class MCPServerStatus(str, Enum):
+class MCPServerStatus(StrEnum):
     """MCP 服务器连接状态。"""
 
     DISCONNECTED = "disconnected"
@@ -61,7 +61,7 @@ class MCPPromptInfo(BaseModel):
 
     name: str
     description: str = ""
-    arguments: list[dict[str, Any]] = Field(default_factory=list)
+    arguments: list[dict[str, Any]] = Field(default_factory=lambda: [])
 
 
 class MCPPromptMessage(BaseModel):
@@ -83,7 +83,7 @@ class MCPToolInfo(BaseModel):
 class MCPToolResult(BaseModel):
     """MCP 工具调用结果。"""
 
-    content: list[dict[str, Any]] = Field(default_factory=list)
+    content: list[dict[str, Any]] = Field(default_factory=lambda: [])
     is_error: bool = False
 
 
@@ -116,13 +116,13 @@ class MCPSamplingRequest(BaseModel):
     """MCP Sampling 请求。"""
 
     server_name: str
-    messages: list[dict[str, Any]] = Field(default_factory=list)
+    messages: list[dict[str, Any]] = Field(default_factory=lambda: [])
     model_preferences: dict[str, Any] = Field(default_factory=dict)
     max_tokens: int = 4096
-    tools: list[dict[str, Any]] = Field(default_factory=list)
+    tools: list[dict[str, Any]] = Field(default_factory=lambda: [])
 
 
-class MCPTaskStatus(str, Enum):
+class MCPTaskStatus(StrEnum):
     """MCP Task 状态。"""
 
     PENDING = "pending"

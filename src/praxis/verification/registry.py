@@ -4,6 +4,7 @@ register_verifier 接口，支持自定义验证器扩展。
 质量左移策略（集成前/集成后/持续监控/运行时反馈）配置。
 """
 
+from importlib.util import find_spec
 from typing import Any
 
 from praxis.config.schemas import VerificationConfig
@@ -14,10 +15,9 @@ from praxis.models.verification import (
     VerificationStatus,
     VerificationType,
 )
+from praxis.telemetry.logger import get_logger
 from praxis.verification.computational import Verifier, run_computational
 from praxis.verification.inferential import run_inferential
-from praxis.verification.visual import run_visual
-from praxis.telemetry.logger import get_logger
 
 log = get_logger("verification.registry")
 
@@ -153,7 +153,6 @@ class VerifierRegistry:
         self,
         criteria: str,
         content: str,
-        model: str | None = None,
         dimensions: list[str] | None = None,
         pass_threshold: float = 0.7,
     ) -> VerificationResult:
@@ -180,7 +179,6 @@ class VerifierRegistry:
             self.gateway,
             criteria=criteria,
             content=content,
-            model=model,
             pass_threshold=pass_threshold,
             dimensions=dimensions,
         )
@@ -189,7 +187,6 @@ class VerifierRegistry:
         self,
         url: str,
         expectations: str,
-        model: str | None = None,
     ) -> VerificationResult:
         """执行视觉型验证（截图 + 多模态 LLM）。
 
@@ -210,11 +207,22 @@ class VerifierRegistry:
                 verifier_name="visual",
                 feedback="未配置网关，视觉型验证不可用",
             )
+        if not self.gateway.supports_vision():
+            return VerificationResult(
+                status=VerificationStatus.SKIP,
+                verification_type=VerificationType.VISUAL,
+                verifier_name="visual",
+                feedback="默认模型未声明视觉能力，视觉型验证不可用",
+            )
+        if find_spec("playwright") is None:
+            raise RuntimeError("视觉验证不可用，请安装 praxis[visual]")
+
+        from praxis.verification.visual import run_visual
+
         return await run_visual(
             self.gateway,
             url=url,
             expectations=expectations,
-            model=model,
         )
 
     def get_phase_config(self, phase: QualityPhase) -> list[str]:

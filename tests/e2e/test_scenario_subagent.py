@@ -13,17 +13,15 @@ from praxis.config.schemas import (
     ContextConfig,
     OrchestratorConfig,
     PersistenceConfig,
-    SessionConfig,
 )
+from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.guardrails.permissions import PermissionManager
 from praxis.guardrails.rules import RuleEngine
 from praxis.models.subagent import SubagentMode, SubagentSpec, SubagentStatus
 from praxis.persistence.store import PersistenceStore, create_store
-from praxis.gateway.router import GatewayRouter
 from praxis.subagent.isolation import IsolatedContext
 from praxis.tools.registry import ToolRegistry
-
 from tests.e2e.conftest import register_tool
 
 

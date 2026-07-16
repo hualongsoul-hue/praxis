@@ -6,10 +6,8 @@ spawn_agent_as_tool 创建专家子代理，
 """
 
 import asyncio
-from typing import Any
 
 from praxis.guardrails.engine import GuardrailEngine
-from praxis.models.orchestrator import TerminationReason
 from praxis.models.subagent import (
     SubagentMode,
     SubagentResult,
@@ -84,7 +82,18 @@ class SubagentSpawner:
         await self.resource_ctrl.acquire(spec.subagent_id)
 
         try:
-            result = await self.run_subagent(spec)
+            execution_task = self.resource_ctrl.create_task(
+                spec.subagent_id,
+                self.run_subagent(spec),
+            )
+            result = await execution_task
+        except asyncio.CancelledError:
+            result = SubagentResult(
+                subagent_id=spec.subagent_id,
+                mode=SubagentMode.AGENT_AS_TOOL,
+                status=SubagentStatus.CANCELLED,
+                summary="子代理执行已取消。",
+            )
         finally:
             self.resource_ctrl.release(spec.subagent_id)
 
@@ -124,7 +133,7 @@ class SubagentSpawner:
                     if e.event_type == "llm_request"
                 ),
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             session.abort()
             log.warning("子代理超时", subagent_id=spec.subagent_id)
             return SubagentResult(
@@ -141,3 +150,5 @@ class SubagentSpawner:
                 status=SubagentStatus.FAILED,
                 summary=f"执行失败: {exc}",
             )
+        finally:
+            await self.isolation.close_session(session)

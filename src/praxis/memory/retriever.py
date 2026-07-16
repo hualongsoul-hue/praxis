@@ -3,7 +3,7 @@
 三层检索架构：轻量索引 → 摘要 → 完整内容。
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from praxis.memory.store import ScopedMemoryStore
 from praxis.memory.vector import VectorStore
@@ -116,7 +116,7 @@ class MemoryRetriever:
         entry = await self.scoped_store.load(scope, memory_id)
         if entry is not None:
             entry.access_count += 1
-            entry.last_accessed_at = datetime.now(timezone.utc)
+            entry.last_accessed_at = datetime.now(UTC)
             await self.scoped_store.update(entry)
             emit_metric("memory_detail_loaded", 1.0, {}, "counter")
         return entry
@@ -126,7 +126,7 @@ class MemoryRetriever:
         candidates: list[tuple[MemoryEntry, float]],
     ) -> list[tuple[MemoryEntry, float]]:
         """综合重排：final = 0.6·semantic + 0.2·freshness + 0.1·popularity + 0.1·confidence。"""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         scored: list[tuple[MemoryEntry, float]] = []
 
         for entry, semantic_score in candidates:

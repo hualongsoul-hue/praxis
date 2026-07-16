@@ -5,7 +5,7 @@
 """
 
 import re
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from praxis.models.guardrails import GuardrailVerdict, VerdictType
 
 
-class RuleTarget(str, Enum):
+class RuleTarget(StrEnum):
     """规则适用目标。"""
 
     INPUT = "input"

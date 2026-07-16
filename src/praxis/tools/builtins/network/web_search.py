@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 
 from praxis.models.tools import ToolDefinition, ToolMetadata
-from praxis.tools.sandbox import Sandbox
+from praxis.tools.policy import ToolPolicy
 
 DEFINITION = ToolDefinition(
     name="web_search",
@@ -37,7 +37,7 @@ DEFINITION = ToolDefinition(
 )
 
 
-def create_handler(sandbox: Sandbox):
+def create_handler(sandbox: ToolPolicy):
     """创建绑定沙箱的处理函数。"""
 
     async def handle(args: dict[str, Any]) -> str:

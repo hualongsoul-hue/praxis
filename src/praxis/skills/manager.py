@@ -6,7 +6,7 @@ register_skill/unregister_skill 运行时热加载，
 索引缓存通过 S3 持久化。
 """
 
-from typing import Any
+from typing import Any, cast
 
 from praxis.config.schemas import SkillsConfig
 from praxis.models.skills import SkillDefinition, SkillIndexEntry
@@ -389,7 +389,10 @@ class SkillManager:
         data = await self.store.load(SKILLS_NAMESPACE, INDEX_KEY)
         if data is None or not isinstance(data, list):
             return []
-        return [SkillIndexEntry.model_validate(item) for item in data]
+        return [
+            SkillIndexEntry.model_validate(item)
+            for item in cast(list[object], data)
+        ]
 
 
 async def build_skill_manager(

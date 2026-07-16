@@ -5,7 +5,7 @@
 
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -13,7 +13,6 @@ from praxis.config.schemas import (
     ContextConfig,
     OrchestratorConfig,
     PersistenceConfig,
-    SessionConfig,
     ToolsConfig,
 )
 from praxis.context.assembler import PromptAssembler
@@ -24,7 +23,7 @@ from praxis.guardrails.permissions import PermissionManager
 from praxis.guardrails.rules import RuleEngine
 from praxis.memory.core import CognitiveMemory
 from praxis.models.responses import ModelResponse, Usage
-from praxis.models.tools import FunctionCall, ToolCall, ToolDefinition, ToolResult
+from praxis.models.tools import FunctionCall, ToolCall, ToolDefinition
 from praxis.orchestrator.events import EventEmitter
 from praxis.orchestrator.loop import OrchestrationLoop
 from praxis.orchestrator.parser import OutputParser
@@ -34,12 +33,9 @@ from praxis.orchestrator.tool_coordination import ToolCoordinator
 from praxis.persistence.store import PersistenceStore, create_store
 from praxis.recovery.circuit_breaker import CircuitBreakerRegistry
 from praxis.recovery.retry import RetryPolicy
-from praxis.session.checkpoint import CheckpointManager
-from praxis.session.core import Session, SessionFactory
 from praxis.tools.executor import ToolExecutor
+from praxis.tools.policy import ToolPolicy
 from praxis.tools.registry import ToolHandler, ToolRegistry
-from praxis.tools.sandbox import Sandbox
-
 
 # ── 通用辅助 ──────────────────────────────────────────────────────────────
 
@@ -164,7 +160,7 @@ def build_loop(
     memory: CognitiveMemory | None = None,
 ) -> OrchestrationLoop:
     """用真实组件组装完整 OrchestrationLoop。"""
-    sandbox = Sandbox(ToolsConfig())
+    sandbox = ToolPolicy(ToolsConfig())
     executor = ToolExecutor(registry, sandbox)
     injector = ToolInjector(registry)
     assembler = PromptAssembler(context_config, model="test-model")

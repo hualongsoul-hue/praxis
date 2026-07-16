@@ -4,7 +4,7 @@
 档案独立于集合模式的 SemanticMemory，不参与 search_memory 的语义检索。
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from praxis.memory.store import ProfileStore
@@ -40,7 +40,7 @@ class ProfileManager:
     ) -> SemanticProfile:
         """就地合并更新档案字段。不存在则创建。"""
         profile = await self.profile_store.load(scope, schema_name)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         if profile is None:
             profile = SemanticProfile(

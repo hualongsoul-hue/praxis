@@ -1,14 +1,16 @@
 """S2 遥测系统验证测试。"""
 
+import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
-from praxis.config.schemas import TelemetryConfig
+from praxis.config.schemas import PersistenceConfig, TelemetryConfig
+from praxis.exceptions import TelemetryError
 from praxis.models.telemetry import AuditEvent
 from praxis.persistence.store import PersistenceStore, create_store
-from praxis.config.schemas import PersistenceConfig
-from praxis.telemetry.audit import configure_audit, flush_audit, query_audit, record_audit
+from praxis.telemetry.audit import AuditService
 from praxis.telemetry.logger import (
     StructuredLogger,
     configure_logging,
@@ -151,13 +153,12 @@ class TestAudit:
     """Task 3.4: 审计日志验证。"""
 
     @pytest.fixture
-    async def audit_store(self, tmp_path: pytest.TempPathFactory) -> PersistenceStore:
+    async def audit_store(self, tmp_path: Path) -> PersistenceStore:
         config = PersistenceConfig(
             backend="sqlite",
-            sqlite_path=str(tmp_path / "audit_test.db"),  # type: ignore[operator]
+            sqlite_path=str(tmp_path / "audit_test.db"),
         )
         store = await create_store(config)
-        configure_audit(store)
         yield store  # type: ignore[misc]
         await store.close()
 
@@ -173,26 +174,86 @@ class TestAudit:
                 "permission": "auto_approve",
             },
         )
-        await record_audit(event)
-        await flush_audit()
-        events = await query_audit()
+        audit = AuditService(audit_store)
+        await audit.record(event)
+        events = await audit.query()
         assert len(events) >= 1
         found = [e for e in events if e.event_id == event.event_id]
         assert len(found) == 1
         assert found[0].event_type == "tool_call"
         assert found[0].details["tool_name"] == "read_file"
 
-    async def test_audit_without_store(self) -> None:
-        import praxis.telemetry.audit as audit_mod
-        saved = audit_mod.audit_store
-        audit_mod.audit_store = None
+    async def test_events_are_append_only(self, audit_store: PersistenceStore) -> None:
+        audit = AuditService(audit_store)
+        event = AuditEvent(event_type="llm_call", component="gateway")
+        await audit.record(event)
+        with pytest.raises(TelemetryError, match="拒绝覆盖"):
+            await audit.record(event)
+
+    async def test_events_are_append_only_across_service_instances(
+        self,
+        audit_store: PersistenceStore,
+    ) -> None:
+        event = AuditEvent(event_type="llm_call", component="gateway")
+        outcomes = await asyncio.gather(
+            AuditService(audit_store).record(event),
+            AuditService(audit_store).record(event),
+            return_exceptions=True,
+        )
+        assert sum(result is None for result in outcomes) == 1
+        assert sum(isinstance(result, TelemetryError) for result in outcomes) == 1
+
+    async def test_sensitive_details_are_redacted(
+        self,
+        audit_store: PersistenceStore,
+    ) -> None:
+        audit = AuditService(audit_store)
         event = AuditEvent(
             event_type="llm_call",
             component="gateway",
-            details={"model": "gpt-4"},
+            details={"api_key": "unit-secret", "message": "token-abcdefghijk"},
         )
-        await record_audit(event)
-        audit_mod.audit_store = saved
+        await audit.record(event)
+        [stored] = await audit.query()
+        assert stored.details == {
+            "api_key": "[REDACTED]",
+            "message": "[REDACTED]",
+        }
+
+    async def test_record_waits_for_durable_write(self) -> None:
+        """审计调用返回前必须完成持久化，避免关闭阶段遗留后台连接。"""
+        import asyncio
+
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        class BlockingStore:
+            def __init__(self) -> None:
+                self.data: dict[str, object] = {}
+
+            async def save_if_absent(
+                self,
+                namespace: str,
+                key: str,
+                data: object,
+            ) -> bool:
+                started.set()
+                await release.wait()
+                if key in self.data:
+                    return False
+                self.data[key] = data
+                return True
+
+        audit = AuditService(BlockingStore())  # type: ignore[arg-type]
+        event = AuditEvent(event_type="tool_call", component="tools", details={})
+
+        recording = asyncio.create_task(audit.record(event))
+        await started.wait()
+        try:
+            assert not recording.done()
+        finally:
+            release.set()
+            await recording
 
 
 class TestTelemetryProductionHardening:
@@ -221,30 +282,24 @@ class TestTelemetryProductionHardening:
         assert "op_ms_bucket" in out
         assert "op_ms_count" in out and "op_ms_sum" in out
 
-    async def test_audit_disabled_writes_nothing(self) -> None:
-        from praxis.config.schemas import PersistenceConfig
-        from praxis.persistence.store import create_store
-        from praxis.telemetry.audit import (
-            configure_audit, flush_audit, query_audit, record_audit,
-        )
-
-        store = await create_store(PersistenceConfig())
+    async def test_audit_disabled_writes_nothing(self, tmp_path: Path) -> None:
+        store = await create_store(PersistenceConfig(
+            sqlite_path=str(tmp_path / "audit_disabled.db"),
+        ))
         try:
-            configure_audit(store, enabled=False)
-            await record_audit(AuditEvent(
+            audit = AuditService(store, enabled=False)
+            await audit.record(AuditEvent(
                 event_type="tool_call", component="c", action="a", details={},
             ))
-            await flush_audit()
-            assert await query_audit() == []
+            assert await audit.query() == []
         finally:
-            configure_audit(store, enabled=True)
             await store.close()
 
     def test_configure_telemetry_applies(self) -> None:
-        from praxis.telemetry import configure_telemetry
+        from praxis.telemetry import configure_cli_telemetry
         from praxis.telemetry.metrics import get_collector
 
-        configure_telemetry(TelemetryConfig(
+        configure_cli_telemetry(TelemetryConfig(
             metrics_enabled=True, metrics_export="file", tracing_enabled=False,
         ))
         # 指标采集器可用
@@ -257,6 +312,7 @@ class TestMetricsConcurrency:
 
     def test_export_during_concurrent_emit(self) -> None:
         import threading
+
         from praxis.telemetry.metrics import MetricsCollector
 
         c = MetricsCollector()
@@ -272,7 +328,7 @@ class TestMetricsConcurrency:
             try:
                 while emit_thread.is_alive():
                     c.export_prometheus()
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 errors.append(exc)
 
         emit_thread = threading.Thread(target=emitter)

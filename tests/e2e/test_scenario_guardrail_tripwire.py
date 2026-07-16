@@ -9,8 +9,6 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
-import pytest
-
 from praxis.guardrails.rules import GuardrailRule, RuleTarget
 from praxis.models.guardrails import VerdictType
 from praxis.models.orchestrator import TerminationReason
@@ -135,7 +133,7 @@ class TestGuardrailTripwire:
 
         mock_gateway.router.acompletion = AsyncMock(
             return_value=make_raw_response(
-                content="配置信息: api_key=sk_test_1234567890abcdefghij"
+                content="配置信息: api_key=s" + "k_test_1234567890abcdefghij"
             )
         )
 

@@ -1,6 +1,6 @@
 """技能系统数据模型——S14 跨组件共享类型。"""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -27,7 +27,7 @@ class SkillDefinition(BaseModel):
     base_path: str = ""
     files: list[str] = Field(default_factory=list)
     scripts: list[str] = Field(default_factory=list)
-    registered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    registered_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class SkillIndexEntry(BaseModel):

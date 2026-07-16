@@ -4,7 +4,6 @@
 """
 
 from collections.abc import Awaitable, Callable
-from typing import Any
 
 from praxis.models.mcp import MCPElicitationRequest, MCPElicitationResponse
 from praxis.telemetry.logger import get_logger

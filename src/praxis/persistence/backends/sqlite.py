@@ -3,11 +3,12 @@
 零配置启动，基于 SQLAlchemy ORM + aiosqlite 异步驱动。
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy import DateTime, Index, LargeBinary, String, delete, event, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -35,12 +36,12 @@ class KVEntry(Base):
     value: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
 
@@ -54,6 +55,7 @@ class SqliteBackend:
     ) -> None:
         self._engine = engine
         self._session_factory = session_factory
+        self._closed = False
 
     @classmethod
     async def create(cls, path: str) -> "SqliteBackend":
@@ -67,7 +69,6 @@ class SqliteBackend:
 
         # 生产并发加固：WAL 提升读写并发，busy_timeout 缓解 "database is locked"，
         # NORMAL 同步级别在 WAL 下兼顾持久性与吞吐。
-        @event.listens_for(engine.sync_engine, "connect")
         def _set_sqlite_pragmas(dbapi_conn: Any, _record: Any) -> None:
             cur = dbapi_conn.cursor()
             cur.execute("PRAGMA journal_mode=WAL")
@@ -75,6 +76,8 @@ class SqliteBackend:
             cur.execute("PRAGMA synchronous=NORMAL")
             cur.execute("PRAGMA foreign_keys=ON")
             cur.close()
+
+        event.listen(engine.sync_engine, "connect", _set_sqlite_pragmas)
 
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
@@ -86,10 +89,20 @@ class SqliteBackend:
             existing = await session.get(KVEntry, (namespace, key))
             if existing:
                 existing.value = data
-                existing.updated_at = datetime.now(timezone.utc)
+                existing.updated_at = datetime.now(UTC)
             else:
                 session.add(KVEntry(namespace=namespace, key=key, value=data))
             await session.commit()
+
+    async def save_if_absent(self, namespace: str, key: str, data: bytes) -> bool:
+        async with self._session_factory() as session:
+            session.add(KVEntry(namespace=namespace, key=key, value=data))
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                return False
+            return True
 
     async def load(self, namespace: str, key: str) -> bytes | None:
         async with self._session_factory() as session:
@@ -123,4 +136,7 @@ class SqliteBackend:
             return result.rowcount  # type: ignore[return-value]
 
     async def close(self) -> None:
+        if self._closed:
+            return
         await self._engine.dispose()
+        self._closed = True

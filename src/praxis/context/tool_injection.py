@@ -14,13 +14,13 @@ log = get_logger("context.tool_injection")
 CORE_CATEGORIES = frozenset({"file_ops", "search", "shell", "system", "network", "general", "autonomy"})
 EXTENSION_CATEGORIES = frozenset({"mcp", "skill_script", "utility", "subagent", "memory"})
 
-STAGE_TOOL_MAP: dict[str, set[str]] = {
+STAGE_TOOL_MAP: dict[str, frozenset[str]] = {
     "general": CORE_CATEGORIES | EXTENSION_CATEGORIES,
-    "planning": {"system", "network", "general", "autonomy", "mcp", "subagent", "memory"},
+    "planning": frozenset({"system", "network", "general", "autonomy", "mcp", "subagent", "memory"}),
     "coding": CORE_CATEGORIES | EXTENSION_CATEGORIES,
     "testing": CORE_CATEGORIES | EXTENSION_CATEGORIES,
-    "debugging": {"file_ops", "search", "shell", "system", "network", "general", "autonomy", "mcp", "subagent", "memory"},
-    "review": {"file_ops", "search", "system", "network", "general", "autonomy", "mcp", "subagent", "memory"},
+    "debugging": frozenset({"file_ops", "search", "shell", "system", "network", "general", "autonomy", "mcp", "subagent", "memory"}),
+    "review": frozenset({"file_ops", "search", "system", "network", "general", "autonomy", "mcp", "subagent", "memory"}),
 }
 
 

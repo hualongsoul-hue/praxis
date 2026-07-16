@@ -1,6 +1,7 @@
 """S13 子代理协调单元测试。"""
 
 import asyncio
+import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,7 +10,6 @@ import pytest
 
 from praxis.config.schemas import (
     ContextConfig,
-    SessionConfig,
     OrchestratorConfig,
     PersistenceConfig,
     SubagentConfig,
@@ -17,9 +17,9 @@ from praxis.config.schemas import (
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.guardrails.permissions import PermissionManager
 from praxis.guardrails.rules import RuleEngine
+from praxis.lifecycle import TaskSupervisor
 from praxis.models.orchestrator import AgentResponse, TerminationReason
 from praxis.models.subagent import (
-    ConflictMarker,
     SubagentMode,
     SubagentResult,
     SubagentSpec,
@@ -32,8 +32,13 @@ from praxis.subagent.handoff import HandoffManager
 from praxis.subagent.isolation import IsolatedContext
 from praxis.subagent.resource_control import ResourceController
 from praxis.subagent.spawn import SubagentSpawner
+from praxis.subagent.tools import (
+    create_fork_handler,
+    create_handoff_handler,
+    create_spawn_handler,
+    register_subagent_tools,
+)
 from praxis.tools.registry import ToolRegistry
-
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -124,6 +129,44 @@ class TestResourceController:
         # 第三个应该会阻塞，用 wait_for 验证
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(ctrl.acquire("c"), timeout=0.1)
+
+    async def test_runtime_supervisor_cancels_registered_task(self) -> None:
+        supervisor = TaskSupervisor()
+        ctrl = ResourceController(SubagentConfig(max_concurrent=1), supervisor)
+        started = asyncio.Event()
+
+        async def slow() -> None:
+            started.set()
+            await asyncio.Event().wait()
+
+        task = ctrl.create_task("supervised", slow())
+        await started.wait()
+        await supervisor.close()
+        assert task.cancelled()
+        await asyncio.sleep(0)
+        assert ctrl.active_count == 0
+
+    async def test_task_supervisor_records_failures_and_rejects_new_work(self) -> None:
+        supervisor = TaskSupervisor()
+
+        async def fail() -> None:
+            raise ValueError("background failure")
+
+        task = supervisor.create_task(fail(), name="failing-task")
+        with pytest.raises(ValueError, match="background failure"):
+            await task
+        await asyncio.sleep(0)
+        assert not supervisor.healthy
+        assert len(supervisor.failures) == 1
+
+        await supervisor.close()
+        await supervisor.close()
+
+        async def never_started() -> None:
+            raise AssertionError("closed coroutine must not run")
+
+        with pytest.raises(RuntimeError, match="已关闭"):
+            supervisor.create_task(never_started(), name="rejected-task")
 
 
 # ── Task 14.4: 上下文隔离 ───────────────────────────────────────────────────
@@ -334,6 +377,7 @@ class TestSubagentSpawner:
 
         iso = MagicMock()
         iso.create_isolated_session = cap
+        iso.close_session = AsyncMock()
         spawner = SubagentSpawner(
             isolation=iso, resource_ctrl=resource_ctrl,
             guardrails=guardrails, parent_registry=registry,
@@ -382,6 +426,40 @@ class TestSubagentSpawner:
         result = await spawner.spawn_agent_as_tool(task="失败任务")
         assert result.status == SubagentStatus.FAILED
         assert "boom" in result.summary
+
+    async def test_external_cancellation_closes_child_session(
+        self,
+        resource_ctrl: ResourceController,
+        guardrails: GuardrailEngine,
+        registry: ToolRegistry,
+    ) -> None:
+        started = asyncio.Event()
+        child = MagicMock()
+
+        async def slow(*_args: Any, **_kwargs: Any) -> AgentResponse:
+            started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+        child.run_turn = slow
+        isolation = MagicMock()
+        isolation.create_isolated_session = AsyncMock(return_value=child)
+        isolation.close_session = AsyncMock()
+        spawner = SubagentSpawner(
+            isolation=isolation,
+            resource_ctrl=resource_ctrl,
+            guardrails=guardrails,
+            parent_registry=registry,
+        )
+
+        pending = asyncio.create_task(spawner.spawn_agent_as_tool("cancel me"))
+        await started.wait()
+        subagent_id = next(iter(resource_ctrl.running))
+        assert resource_ctrl.cancel_task(subagent_id)
+        result = await pending
+
+        assert result.status is SubagentStatus.CANCELLED
+        isolation.close_session.assert_awaited_once_with(child)
 
 
 # ── Task 14.2: Handoff ──────────────────────────────────────────────────────
@@ -522,3 +600,55 @@ class TestForkManager:
         statuses = {r.status for r in results}
         assert SubagentStatus.FAILED in statuses
         assert SubagentStatus.COMPLETED in statuses
+
+
+class TestSubagentToolHandlers:
+    async def test_handlers_delegate_and_serialize_results(self) -> None:
+        completed = SubagentResult(
+            subagent_id="sub-1",
+            mode=SubagentMode.AGENT_AS_TOOL,
+            status=SubagentStatus.COMPLETED,
+            summary="done",
+        )
+        spawner = MagicMock()
+        spawner.spawn_agent_as_tool = AsyncMock(return_value=completed)
+        spawned = json.loads(await create_spawn_handler(spawner)({
+            "task": "work",
+            "tool_names": ["read_file"],
+            "context_summary": "context",
+        }))
+        assert spawned["summary"] == "done"
+        spawner.spawn_agent_as_tool.assert_awaited_once_with(
+            task="work",
+            tool_names=["read_file"],
+            context_summary="context",
+        )
+
+        fork = MagicMock()
+        fork.fork_and_aggregate = AsyncMock(return_value={"subagent_count": 2})
+        aggregated = json.loads(await create_fork_handler(fork)({
+            "tasks": [{"task": "a"}, {"task": "b"}],
+        }))
+        assert aggregated["subagent_count"] == 2
+
+        handoff_result = completed.model_copy(update={"mode": SubagentMode.HANDOFF})
+        handoff = MagicMock()
+        handoff.handoff = AsyncMock(return_value=handoff_result)
+        handed = json.loads(await create_handoff_handler(handoff)({
+            "target_agent_type": "reviewer",
+            "context_summary": "summary",
+        }))
+        assert handed["mode"] == "handoff"
+
+    def test_registers_all_public_subagent_tools(self, registry: ToolRegistry) -> None:
+        register_subagent_tools(
+            registry,
+            MagicMock(),
+            MagicMock(),
+            MagicMock(),
+        )
+        assert {
+            "spawn_subagent",
+            "fork_subagents",
+            "handoff_to_expert",
+        }.issubset(registry.list_tools())

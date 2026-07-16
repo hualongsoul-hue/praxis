@@ -1,12 +1,12 @@
 """编排循环数据模型——S11 跨组件共享类型。"""
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-class LoopPhase(str, Enum):
+class LoopPhase(StrEnum):
     """循环阶段。"""
 
     IDLE = "idle"
@@ -19,7 +19,7 @@ class LoopPhase(str, Enum):
     TERMINATING = "terminating"
 
 
-class TerminationReason(str, Enum):
+class TerminationReason(StrEnum):
     """终止原因。"""
 
     NATURAL = "natural"
@@ -31,7 +31,7 @@ class TerminationReason(str, Enum):
     HANDOFF = "handoff"
 
 
-class StrategyMode(str, Enum):
+class StrategyMode(StrEnum):
     """循环策略模式。"""
 
     REACT = "react"
@@ -54,7 +54,7 @@ class AgentResponse(BaseModel):
     tool_calls_made: int = 0
     total_turns: int = 0
     termination_reason: TerminationReason = TerminationReason.NATURAL
-    events: list[AgentEvent] = Field(default_factory=list)
+    events: list[AgentEvent] = Field(default_factory=lambda: [])
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

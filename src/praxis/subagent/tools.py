@@ -14,13 +14,14 @@ from praxis.config.schemas import (
 )
 from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
+from praxis.lifecycle import TaskSupervisor
 from praxis.models.tools import ToolDefinition, ToolMetadata
 from praxis.persistence.store import PersistenceStore
 from praxis.session.core import Session
 from praxis.subagent.aggregation import ResultAggregator
 from praxis.subagent.fork import ForkManager
 from praxis.subagent.handoff import HandoffManager
-from praxis.subagent.isolation import IsolatedContext
+from praxis.subagent.isolation import IsolatedContext, RuntimeSubagentFactory
 from praxis.subagent.resource_control import ResourceController
 from praxis.subagent.spawn import SubagentSpawner
 from praxis.telemetry.logger import get_logger
@@ -210,6 +211,8 @@ def wire_subagent(
     context_config: ContextConfig,
     subagent_config: SubagentConfig,
     model: str = "default",
+    runtime: RuntimeSubagentFactory | None = None,
+    supervisor: TaskSupervisor | None = None,
 ) -> None:
     """将 S13 子代理三种执行模型注册到会话的工具注册表中。
 
@@ -231,8 +234,9 @@ def wire_subagent(
         gateway=gateway,
         orchestrator_config=orchestrator_config,
         context_config=context_config,
+        runtime=runtime,
     )
-    resource_ctrl = ResourceController(subagent_config)
+    resource_ctrl = ResourceController(subagent_config, supervisor=supervisor)
     aggregator = ResultAggregator()
 
     spawner = SubagentSpawner(

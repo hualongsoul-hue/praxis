@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 from json_repair import repair_json
-from playwright.async_api import async_playwright
 
 from praxis.gateway.chat import chat
 from praxis.gateway.router import GatewayRouter
@@ -45,11 +44,9 @@ class VisualVerifier:
     def __init__(
         self,
         gateway: GatewayRouter,
-        model: str | None = None,
         screenshot_dir: str = "data/screenshots",
     ) -> None:
         self.gateway = gateway
-        self.model = model
         self.screenshot_dir = Path(screenshot_dir)
 
     async def capture_screenshot(self, url: str, output_path: Path) -> Path:
@@ -62,6 +59,11 @@ class VisualVerifier:
         Returns:
             截图文件路径。
         """
+        try:
+            from playwright.async_api import async_playwright
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("视觉验证不可用，请安装 praxis[visual]") from exc
+
         self.screenshot_dir.mkdir(parents=True, exist_ok=True)
 
         async with async_playwright() as pw:
@@ -165,7 +167,11 @@ class VisualVerifier:
             },
         ]
 
-        response = await chat(self.gateway, messages, model=self.model)
+        response = await chat(
+            self.gateway,
+            messages,
+            model=self.gateway.config.default_model,
+        )
         raw_text = response.content or ""
 
         data = repair_json(raw_text, return_objects=True)
@@ -208,7 +214,6 @@ async def run_visual(
     gateway: GatewayRouter,
     url: str,
     expectations: str,
-    model: str | None = None,
 ) -> VerificationResult:
     """便捷函数：执行视觉验证。
 
@@ -216,10 +221,9 @@ async def run_visual(
         gateway: S4 网关路由器。
         url: 页面 URL。
         expectations: 预期描述。
-        model: 模型别名。
 
     Returns:
         验证结果。
     """
-    verifier = VisualVerifier(gateway, model=model)
+    verifier = VisualVerifier(gateway)
     return await verifier.verify(url, expectations)

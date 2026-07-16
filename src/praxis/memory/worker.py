@@ -5,7 +5,7 @@ message_id 游标、批量阈值、背压、失败重试。
 """
 
 import asyncio
-from collections.abc import Callable, Awaitable
+from collections.abc import Awaitable, Callable
 
 from praxis.models.memory import MemoryScope, WorkingMemoryMessage
 from praxis.telemetry.logger import get_logger
@@ -74,7 +74,7 @@ class BackgroundWorker:
             # 等待最多一次循环让当前批处理结束
             try:
                 await asyncio.wait_for(self.idle_event.wait(), timeout=30.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 log.warning("等待后台 Worker 空闲超时，强制取消")
             self.task.cancel()
             try:
@@ -93,7 +93,7 @@ class BackgroundWorker:
                     self.signal.wait(),
                     timeout=self.interval_seconds,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 pass
             self.signal.clear()
 

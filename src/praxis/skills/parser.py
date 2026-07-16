@@ -5,10 +5,12 @@
 """
 
 from pathlib import Path
+from typing import Any, cast
 
 import yaml
 
 from praxis.models.skills import SkillDefinition, SkillMetadata
+from praxis.skills.paths import resolve_skill_path
 from praxis.telemetry.logger import get_logger
 
 log = get_logger("skills.parser")
@@ -32,7 +34,8 @@ class SkillParser:
         Returns:
             技能定义，或 None（目录无效）。
         """
-        skill_file = skill_dir / SKILL_FILENAME
+        skill_dir = skill_dir.expanduser().resolve()
+        skill_file = resolve_skill_path(skill_dir, SKILL_FILENAME)
         if not skill_file.is_file():
             log.warning("目录中未找到 SKILL.md", path=str(skill_dir))
             return None
@@ -85,9 +88,10 @@ class SkillParser:
         content = stripped[end_index + 3:].strip()
 
         try:
-            data = yaml.safe_load(frontmatter_text)
-            if not isinstance(data, dict):
+            loaded = cast(object, yaml.safe_load(frontmatter_text))
+            if not isinstance(loaded, dict):
                 return None, raw_text
+            data = cast(dict[str, Any], loaded)
         except yaml.YAMLError:
             return None, raw_text
 
@@ -98,18 +102,16 @@ class SkillParser:
         tags = data.pop("tags", [])
         tools = data.pop("tools", [])
 
-        if not isinstance(tags, list):
-            tags = []
-        if not isinstance(tools, list):
-            tools = []
+        tag_values = cast(list[object], tags) if isinstance(tags, list) else []
+        tool_values = cast(list[object], tools) if isinstance(tools, list) else []
 
         metadata = SkillMetadata(
             name=str(name),
             description=str(description),
             version=str(version),
             author=str(author),
-            tags=[str(t) for t in tags],
-            tools=[str(t) for t in tools],
+            tags=[str(item) for item in tag_values],
+            tools=[str(item) for item in tool_values],
             extra=data,
         )
         return metadata, content
@@ -125,9 +127,11 @@ class SkillParser:
             相对路径列表（排除 SKILL.md 本身）。
         """
         files: list[str] = []
-        for path in skill_dir.rglob("*"):
+        root = skill_dir.expanduser().resolve()
+        for path in root.rglob("*"):
             if path.is_file() and path.name != SKILL_FILENAME:
-                rel = path.relative_to(skill_dir)
+                rel = path.relative_to(root)
+                resolve_skill_path(root, rel)
                 files.append(rel.as_posix())
         return sorted(files)
 
@@ -142,9 +146,11 @@ class SkillParser:
             脚本相对路径列表。
         """
         scripts: list[str] = []
-        for path in skill_dir.rglob("*"):
+        root = skill_dir.expanduser().resolve()
+        for path in root.rglob("*"):
             if path.is_file() and path.suffix in SCRIPT_EXTENSIONS:
-                rel = path.relative_to(skill_dir)
+                rel = path.relative_to(root)
+                resolve_skill_path(root, rel)
                 scripts.append(rel.as_posix())
         return sorted(scripts)
 

@@ -7,8 +7,7 @@
 from typing import Any
 
 from json_repair import repair_json
-
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from praxis.gateway.chat import chat
 from praxis.gateway.router import GatewayRouter

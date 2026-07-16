@@ -17,14 +17,12 @@ import pytest
 
 from praxis.config.schemas import (
     ContextConfig,
-    GatewayConfig,
     OrchestratorConfig,
     PersistenceConfig,
     SessionConfig,
     TelemetryConfig,
     ToolsConfig,
 )
-from praxis.config.loader import get_component_config, load_config, reload_config
 from praxis.context.assembler import AssembledPrompt, PromptAssembler
 from praxis.context.tool_injection import ToolInjector
 from praxis.gateway.router import GatewayRouter
@@ -36,30 +34,20 @@ from praxis.models.guardrails import GuardrailVerdict, VerdictType
 from praxis.models.memory import WorkingMemoryMessage
 from praxis.models.orchestrator import (
     AgentResponse,
-    LoopPhase,
-    LoopState,
     TerminationReason,
 )
-from praxis.models.responses import ModelResponse, Usage
 from praxis.models.session import SessionMetadata, SessionStatus
-from praxis.models.tools import FunctionCall, ToolCall, ToolDefinition, ToolMetadata, ToolResult
-from praxis.orchestrator.events import EventEmitter
-from praxis.orchestrator.loop import OrchestrationLoop
-from praxis.orchestrator.parser import OutputParser
-from praxis.orchestrator.strategy import LoopStrategy
-from praxis.orchestrator.termination import TerminationManager
-from praxis.orchestrator.tool_coordination import ToolCoordinator
+from praxis.models.tools import ToolDefinition, ToolMetadata, ToolResult
 from praxis.persistence.store import PersistenceStore, create_store
 from praxis.recovery.circuit_breaker import CircuitBreakerRegistry
 from praxis.recovery.retry import RetryPolicy
 from praxis.session.checkpoint import CheckpointManager
-from praxis.session.core import Session, SessionFactory
+from praxis.session.core import SessionFactory
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
 from praxis.tools.executor import ToolExecutor
+from praxis.tools.policy import ToolPolicy
 from praxis.tools.registry import ToolRegistry
-from praxis.tools.sandbox import Sandbox
-
 
 # ── 辅助 ──────────────────────────────────────────────────────────────────
 
@@ -111,7 +99,6 @@ class TestS1ConfigChain:
         session_cfg = SessionConfig()
         orch_cfg = OrchestratorConfig()
         ctx_cfg = ContextConfig()
-        tools_cfg = ToolsConfig()
         telemetry_cfg = TelemetryConfig()
 
         assert session_cfg.auto_checkpoint is True
@@ -232,7 +219,7 @@ class TestS5ToolChain:
             echo_handler,
         )
 
-        sandbox = Sandbox(ToolsConfig())
+        sandbox = ToolPolicy(ToolsConfig())
         executor = ToolExecutor(registry, sandbox)
         result = await executor.execute("echo", {"msg": "hello"}, "tc-test")
 

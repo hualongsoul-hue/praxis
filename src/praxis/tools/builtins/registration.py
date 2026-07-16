@@ -10,13 +10,13 @@ from praxis.tools.builtins.network import web_fetch, web_search
 from praxis.tools.builtins.search import code_search, find_by_name, grep_search
 from praxis.tools.builtins.shell import run_command
 from praxis.tools.builtins.system import get_system_info, sleep
+from praxis.tools.policy import ToolPolicy
 from praxis.tools.registry import ToolRegistry
-from praxis.tools.sandbox import Sandbox
 
 
 def register_builtins(
     registry: ToolRegistry,
-    sandbox: Sandbox,
+    sandbox: ToolPolicy,
     store: PersistenceStore | None = None,
 ) -> None:
     """注册所有内置工具到注册表。

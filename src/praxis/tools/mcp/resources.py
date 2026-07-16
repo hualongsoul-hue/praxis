@@ -6,6 +6,7 @@ resources/list 发现 + resources/read 读取 + 资源模板 + resources/subscri
 from typing import Any
 
 from mcp import ClientSession
+from pydantic import AnyUrl
 
 from praxis.models.mcp import MCPResourceContent, MCPResourceInfo
 from praxis.telemetry.logger import get_logger
@@ -96,7 +97,7 @@ class MCPResourcesBridge:
         if session is None:
             raise RuntimeError(f"MCP Server 未连接: {server_name}")
 
-        result = await session.read_resource(uri)
+        result = await session.read_resource(AnyUrl(uri))
 
         # 提取第一个内容块
         if result.contents:
@@ -124,7 +125,7 @@ class MCPResourcesBridge:
         if session is None:
             raise RuntimeError(f"MCP Server 未连接: {server_name}")
 
-        await session.subscribe_resource(uri)
+        await session.subscribe_resource(AnyUrl(uri))
         self.subscriptions.setdefault(server_name, set()).add(uri)
         log.info("已订阅资源", server=server_name, uri=uri)
 
@@ -134,7 +135,7 @@ class MCPResourcesBridge:
         if session is None:
             return
 
-        await session.unsubscribe_resource(uri)
+        await session.unsubscribe_resource(AnyUrl(uri))
         subs = self.subscriptions.get(server_name)
         if subs:
             subs.discard(uri)

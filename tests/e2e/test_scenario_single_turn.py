@@ -9,15 +9,10 @@ S8 输出护栏 → S12 自动检查点。
 import json
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
-import pytest
-
-from praxis.models.tools import ToolResult
 from tests.e2e.conftest import (
     build_loop,
-    make_model_response,
-    make_tool_call,
     register_tool,
 )
 

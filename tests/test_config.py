@@ -1,19 +1,17 @@
 """S1 配置系统验证测试。"""
 
-import os
 import textwrap
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from praxis.config import (
     PraxisConfig,
     get_component_config,
     load_config,
-    on_config_change,
-    register_validator,
-    reload_config,
 )
+from praxis.config.schemas import GatewayConfig, TelemetryConfig, ToolsConfig
 from praxis.exceptions import ConfigError
 
 
@@ -23,6 +21,8 @@ class TestPraxisConfig:
     def test_default_instantiation(self) -> None:
         config = PraxisConfig()
         assert config.gateway.default_model == "default"
+        assert config.gateway.deployments[0].model == "openai/glm-5.1-openai"
+        assert config.gateway.deployments[0].api_base == "http://172.24.23.192:3000/v1"
         assert config.telemetry.log_level == "INFO"
         assert config.persistence.backend == "sqlite"
         assert config.orchestrator.max_turns == 100
@@ -39,6 +39,46 @@ class TestPraxisConfig:
         ]
         for name in component_names:
             assert hasattr(config, name), f"缺少组件配置: {name}"
+
+    @pytest.mark.parametrize(
+        ("config_type", "values"),
+        [
+            (GatewayConfig, {"defualt_model": "typo"}),
+            (ToolsConfig, {"unknown_timeout": 1}),
+            (TelemetryConfig, {"unknown_exporter": "stdout"}),
+        ],
+    )
+    def test_component_configs_reject_unknown_fields(
+        self,
+        config_type: type,
+        values: dict[str, object],
+    ) -> None:
+        with pytest.raises(ValidationError):
+            config_type(**values)
+
+    @pytest.mark.parametrize(
+        ("config_type", "values"),
+        [
+            (ToolsConfig, {"default_timeout": 0}),
+            (ToolsConfig, {"shell_timeout": -1}),
+            (GatewayConfig, {"timeout": 0}),
+        ],
+    )
+    def test_timeouts_must_be_positive(
+        self,
+        config_type: type,
+        values: dict[str, object],
+    ) -> None:
+        with pytest.raises(ValidationError):
+            config_type(**values)
+
+    def test_log_level_must_be_known(self) -> None:
+        with pytest.raises(ValidationError):
+            TelemetryConfig(log_level="NOT_A_LEVEL")
+
+    def test_root_config_rejects_unknown_sections(self) -> None:
+        with pytest.raises(ValidationError):
+            PraxisConfig(unknown_section={})
 
 
 class TestConfigLoading:
@@ -65,12 +105,11 @@ class TestConfigLoading:
     def test_env_overrides_yaml(self, tmp_path: Path) -> None:
         yaml_file = tmp_path / "test.yaml"
         yaml_file.write_text("telemetry:\n  log_level: WARNING\n")
-        os.environ["PRAXIS_TELEMETRY__LOG_LEVEL"] = "ERROR"
-        try:
-            config = load_config(yaml_file)
-            assert config.telemetry.log_level == "ERROR"
-        finally:
-            del os.environ["PRAXIS_TELEMETRY__LOG_LEVEL"]
+        config = load_config(
+            yaml_file,
+            environ={"PRAXIS_TELEMETRY__LOG_LEVEL": "ERROR"},
+        )
+        assert config.telemetry.log_level == "ERROR"
 
     def test_overrides_highest_priority(self, tmp_path: Path) -> None:
         yaml_file = tmp_path / "test.yaml"
@@ -87,65 +126,37 @@ class TestComponentIsolation:
     """Task 2.3: 组件配置隔离验证。"""
 
     def test_get_component_config(self) -> None:
-        load_config()
-        gw = get_component_config("gateway")
+        config = load_config()
+        gw = get_component_config(config, "gateway")
         assert gw.timeout == 60.0
 
     def test_unknown_component_raises(self) -> None:
-        load_config()
+        config = load_config()
         with pytest.raises(ConfigError, match="未知的组件配置"):
-            get_component_config("nonexistent")
+            get_component_config(config, "nonexistent")
 
-    def test_config_not_loaded_raises(self) -> None:
-        import praxis.config.loader as loader_mod
-        saved = loader_mod.current_config
-        loader_mod.current_config = None
-        try:
-            with pytest.raises(ConfigError, match="配置未加载"):
-                get_component_config("gateway")
-        finally:
-            loader_mod.current_config = saved
-
-
-class TestValidationAndReload:
-    """Task 2.4: 配置验证与热更新验证。"""
-
-    def test_custom_validator(self) -> None:
-        def require_model_list(config: PraxisConfig) -> None:
-            if not config.gateway.model_list:
-                raise ConfigError("gateway.model_list 不能为空")
-
-        register_validator(require_model_list)
-        try:
-            with pytest.raises(ConfigError, match="model_list 不能为空"):
-                load_config()
-        finally:
-            import praxis.config.validation as val_mod
-            val_mod.validators.remove(require_model_list)
-
-    def test_reload_detects_changes(self, tmp_path: Path) -> None:
+    def test_loads_are_independent(self, tmp_path: Path) -> None:
         yaml_file = tmp_path / "test.yaml"
-        yaml_file.write_text("telemetry:\n  log_level: INFO\n")
-
-        load_config(yaml_file)
-
-        changes_received: list[dict] = []
-        on_config_change(lambda c: changes_received.append(c))
-
         yaml_file.write_text("telemetry:\n  log_level: DEBUG\n")
-        reload_config()
+        first = load_config(yaml_file)
+        second = load_config(environ={})
+        assert first.telemetry.log_level == "DEBUG"
+        assert second.telemetry.log_level == "INFO"
 
-        assert len(changes_received) == 1
-        assert "telemetry.log_level" in changes_received[0]
-        old_val, new_val = changes_received[0]["telemetry.log_level"]
-        assert old_val == "INFO"
-        assert new_val == "DEBUG"
+    def test_api_key_is_never_part_of_config(self) -> None:
+        config = load_config(
+            environ={"PRAXIS_MODEL_API_KEY": "secret-value-that-must-not-leak"},
+        )
+        serialized = config.model_dump_json()
+        assert "secret-value-that-must-not-leak" not in serialized
+        assert "api_key" not in config.gateway.deployments[0].model_fields_set
 
-        import praxis.config.validation as val_mod
-        val_mod.change_listeners.clear()
+
+class TestValidation:
+    """配置内容由 Pydantic 在加载边界严格验证。"""
 
     def test_invalid_config_rejected(self, tmp_path: Path) -> None:
         yaml_file = tmp_path / "test.yaml"
         yaml_file.write_text("persistence:\n  backend: invalid_backend\n")
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             load_config(yaml_file)

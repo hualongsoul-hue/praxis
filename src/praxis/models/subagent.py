@@ -1,13 +1,13 @@
 """子代理协调数据模型——S13 跨组件共享类型。"""
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
 
-class SubagentMode(str, Enum):
+class SubagentMode(StrEnum):
     """子代理执行模型。"""
 
     AGENT_AS_TOOL = "agent_as_tool"
@@ -15,13 +15,14 @@ class SubagentMode(str, Enum):
     FORK = "fork"
 
 
-class SubagentStatus(str, Enum):
+class SubagentStatus(StrEnum):
     """子代理状态。"""
 
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
     TIMEOUT = "timeout"
+    CANCELLED = "cancelled"
     FAILED = "failed"
 
 

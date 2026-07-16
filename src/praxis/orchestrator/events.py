@@ -40,7 +40,7 @@ class EventEmitter:
 
     def __init__(self) -> None:
         self.events: list[AgentEvent] = []
-        self.listeners: list["EventListener"] = []
+        self.listeners: list[EventListener] = []
 
     def emit(
         self,

@@ -4,11 +4,10 @@ import textwrap
 from pathlib import Path
 
 import pytest
-import pytest_asyncio
 
 from praxis.config.schemas import PersistenceConfig
+from praxis.exceptions import SkillError
 from praxis.models.skills import (
-    SkillAuditResult,
     SkillDefinition,
     SkillIndexEntry,
     SkillMetadata,
@@ -21,7 +20,6 @@ from praxis.skills.manager import SkillManager
 from praxis.skills.parser import SkillParser
 from praxis.skills.tools_bridge import SkillToolsBridge
 from praxis.tools.registry import ToolRegistry
-
 
 # ── 测试辅助 ────────────────────────────────────────────────────────────────
 
@@ -199,6 +197,17 @@ class TestSkillDisclosure:
         disc.register(make_skill_def("no-files"))
         assert disc.load_skill_file("no-files", "missing.txt") is None
 
+    def test_load_skill_file_rejects_declared_traversal(self, tmp_path: Path) -> None:
+        outside = tmp_path / "secret.txt"
+        outside.write_text("secret", encoding="utf-8")
+        skill = make_skill_def("unsafe")
+        skill.base_path = str(tmp_path / "skill")
+        skill.files = ["../secret.txt"]
+        disc = SkillDisclosure()
+        disc.register(skill)
+        with pytest.raises(SkillError, match="根目录"):
+            disc.load_skill_file("unsafe", "../secret.txt")
+
     def test_unregister(self) -> None:
         disc = SkillDisclosure()
         disc.register(make_skill_def("temp"))
@@ -343,7 +352,7 @@ class TestSkillToolsBridge:
 
     def test_check_dependencies_met(self) -> None:
         reg = ToolRegistry()
-        from praxis.models.tools import ToolDefinition, ToolMetadata
+        from praxis.models.tools import ToolDefinition
 
         reg.register(
             ToolDefinition(name="read_file", description="读取文件", parameters={}),
@@ -372,6 +381,15 @@ class TestSkillToolsBridge:
         tools = bridge.register_skill_scripts(skill)
         assert len(tools) == 1
         assert reg.has_tool(tools[0])
+
+    def test_register_skill_scripts_rejects_traversal(self, tmp_path: Path) -> None:
+        outside = tmp_path / "outside.py"
+        outside.write_text("print('unsafe')", encoding="utf-8")
+        skill = make_skill_def("unsafe")
+        skill.base_path = str(tmp_path / "skill")
+        skill.scripts = ["../outside.py"]
+        with pytest.raises(SkillError, match="根目录"):
+            SkillToolsBridge(ToolRegistry()).register_skill_scripts(skill)
 
     def test_unregister_skill_scripts(self, tmp_path: Path) -> None:
         make_skill_dir(tmp_path, "scripted", {"run.py": "print('hello')"})

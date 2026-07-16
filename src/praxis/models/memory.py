@@ -4,18 +4,17 @@
 程序记忆（行为准则）、工作记忆（消息序列）。
 """
 
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-
 # ── 枚举类型 ────────────────────────────────────────────────────────────────
 
 
-class MemoryType(str, Enum):
+class MemoryType(StrEnum):
     """认知记忆类型。"""
 
     SEMANTIC = "semantic"
@@ -24,7 +23,7 @@ class MemoryType(str, Enum):
     WORKING = "working"
 
 
-class MemoryStatus(str, Enum):
+class MemoryStatus(StrEnum):
     """记忆生命周期状态（不可变审计）。"""
 
     ACTIVE = "active"
@@ -32,7 +31,7 @@ class MemoryStatus(str, Enum):
     SUPERSEDED = "superseded"
 
 
-class ScopeType(str, Enum):
+class ScopeType(StrEnum):
     """记忆作用域类型。"""
 
     SESSION = "session"
@@ -41,7 +40,7 @@ class ScopeType(str, Enum):
     GLOBAL = "global"
 
 
-class ConsolidationAction(str, Enum):
+class ConsolidationAction(StrEnum):
     """记忆整合决策。"""
 
     ADD = "add"
@@ -95,8 +94,8 @@ class MemoryEntry(BaseModel):
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     version: int = 1
     superseded_by: str | None = None
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     last_accessed_at: datetime | None = None
     access_count: int = 0
     embedding: list[float] | None = None
@@ -153,7 +152,7 @@ class WorkingMemoryMessage(BaseModel):
     message_id: str = Field(default_factory=lambda: uuid4().hex)
     role: str
     content: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
     tool_call_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -165,7 +164,7 @@ class WorkingMemory(BaseModel):
     """
 
     session_id: str
-    messages: list[WorkingMemoryMessage] = Field(default_factory=list)
+    messages: list[WorkingMemoryMessage] = Field(default_factory=lambda: [])
     max_messages: int = 200
 
     def append(self, message: WorkingMemoryMessage) -> None:
@@ -200,8 +199,8 @@ class SemanticProfile(BaseModel):
     schema_name: str
     fields: dict[str, Any] = Field(default_factory=dict)
     version: int = 1
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 # ── 记忆索引（渐进式检索第一层） ────────────────────────────────────────────
@@ -216,7 +215,7 @@ class MemoryIndexEntry(BaseModel):
     summary: str
     tags: list[str] = Field(default_factory=list)
     confidence: float = 1.0
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 # ── 检索结果 ────────────────────────────────────────────────────────────────
@@ -240,5 +239,5 @@ class MemoryVersion(BaseModel):
     version: int
     content: str
     status: MemoryStatus
-    changed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    changed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     change_reason: str = ""

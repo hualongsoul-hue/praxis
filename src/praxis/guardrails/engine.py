@@ -12,7 +12,8 @@ from praxis.guardrails.rules import RuleEngine, RuleTarget
 from praxis.models.guardrails import GuardrailVerdict, VerdictType
 from praxis.models.telemetry import AuditEvent
 from praxis.models.tools import ToolMetadata
-from praxis.telemetry.audit import record_audit
+from praxis.protocols import AuditSink
+from praxis.telemetry.audit import NullAuditSink
 
 
 class GuardrailEngine:
@@ -27,11 +28,13 @@ class GuardrailEngine:
         permission_manager: PermissionManager,
         input_enabled: bool = True,
         output_enabled: bool = True,
+        audit_sink: AuditSink | None = None,
     ) -> None:
         self.rule_engine = rule_engine
         self.permission_manager = permission_manager
         self.input_enabled = input_enabled
         self.output_enabled = output_enabled
+        self.audit_sink = audit_sink or NullAuditSink()
 
     async def check_input(self, user_message: str) -> GuardrailVerdict:
         """输入护栏：检测提示注入、恶意指令。
@@ -113,8 +116,8 @@ class GuardrailEngine:
         """注册自定义护栏规则。"""
         self.rule_engine.register_rule(rule)
 
-    @staticmethod
     async def audit_verdict(
+        self,
         operation: str,
         verdict: GuardrailVerdict,
         tool_name: str | None = None,
@@ -131,7 +134,7 @@ class GuardrailEngine:
         if verdict.rule_name:
             details["rule_name"] = verdict.rule_name
 
-        await record_audit(AuditEvent(
+        await self.audit_sink.record(AuditEvent(
             event_type="guardrail_verdict",
             component="guardrails",
             action=operation,
@@ -139,7 +142,11 @@ class GuardrailEngine:
         ))
 
 
-def build_guardrail_engine(config: GuardrailsConfig) -> GuardrailEngine:
+def build_guardrail_engine(
+    config: GuardrailsConfig,
+    *,
+    audit_sink: AuditSink | None = None,
+) -> GuardrailEngine:
     """从 S8 配置装配护栏引擎（消费 default_permission / permissions_file / 启停开关）。
 
     - 注册内置规则集（提示注入/敏感信息）。
@@ -153,6 +160,8 @@ def build_guardrail_engine(config: GuardrailsConfig) -> GuardrailEngine:
     Returns:
         装配完毕的 GuardrailEngine。
     """
+    from typing import cast
+
     import yaml
 
     rule_engine = RuleEngine()
@@ -161,9 +170,12 @@ def build_guardrail_engine(config: GuardrailsConfig) -> GuardrailEngine:
     perm_dict: dict[str, Any] = {"default_permission": config.default_permission}
     if config.permissions_file:
         with open(config.permissions_file, encoding="utf-8") as fh:
-            loaded = yaml.safe_load(fh) or {}
+            loaded = cast(object, yaml.safe_load(fh) or {})
         if isinstance(loaded, dict):
-            perm_dict = {"default_permission": config.default_permission, **loaded}
+            perm_dict = {
+                "default_permission": config.default_permission,
+                **cast(dict[str, Any], loaded),
+            }
     permission_manager = PermissionManager.from_config_dict(perm_dict)
 
     return GuardrailEngine(
@@ -171,4 +183,5 @@ def build_guardrail_engine(config: GuardrailsConfig) -> GuardrailEngine:
         permission_manager=permission_manager,
         input_enabled=config.input_guardrails_enabled,
         output_enabled=config.output_guardrails_enabled,
+        audit_sink=audit_sink,
     )

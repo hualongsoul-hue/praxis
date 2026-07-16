@@ -6,20 +6,24 @@ S9.record_outcome → 失败时 S9.classify_error 决策。
 """
 
 import asyncio
+from collections.abc import Callable
 from typing import Any
 
 from json_repair import repair_json
 
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.models.guardrails import VerdictType
-from praxis.models.orchestrator import AgentEvent
 from praxis.models.recovery import CircuitState, ErrorCategory, ErrorClassification
-from praxis.models.tools import ToolCall, ToolResult
+from praxis.models.session import SessionStatus
+from praxis.models.telemetry import AuditEvent
+from praxis.models.tools import ApprovalRequest, ToolCall, ToolResult
 from praxis.orchestrator.events import EventEmitter
+from praxis.protocols import ApprovalHandler, AuditSink
 from praxis.recovery.circuit_breaker import CircuitBreakerRegistry
 from praxis.recovery.classifier import classify_by_type_name, classify_error
 from praxis.recovery.fallback import FallbackRegistry
 from praxis.recovery.retry import RetryPolicy
+from praxis.telemetry.audit import NullAuditSink
 from praxis.telemetry.logger import get_logger
 from praxis.tools.executor import ToolExecutor
 from praxis.tools.registry import ToolRegistry
@@ -31,11 +35,11 @@ class ToolCallOutcome:
     """单次工具调用结果。"""
 
     __slots__ = (
-        "tool_call",
-        "result",
-        "skipped",
-        "skip_reason",
         "needs_user_confirm",
+        "result",
+        "skip_reason",
+        "skipped",
+        "tool_call",
     )
 
     def __init__(
@@ -68,6 +72,11 @@ class ToolCoordinator:
         retry_policy: RetryPolicy,
         emitter: EventEmitter,
         fallback_registry: FallbackRegistry | None = None,
+        approval_handler: ApprovalHandler | None = None,
+        approval_timeout: float = 60.0,
+        audit_sink: AuditSink | None = None,
+        session_id: str | None = None,
+        status_callback: Callable[[SessionStatus], None] | None = None,
     ) -> None:
         self.executor = executor
         self.registry = registry
@@ -76,6 +85,11 @@ class ToolCoordinator:
         self.retry_policy = retry_policy
         self.emitter = emitter
         self.fallbacks = fallback_registry
+        self.approval_handler = approval_handler
+        self.approval_timeout = approval_timeout
+        self.audit_sink = audit_sink or NullAuditSink()
+        self.session_id = session_id
+        self.status_callback = status_callback
 
     async def execute_tool_calls(
         self,
@@ -143,21 +157,13 @@ class ToolCoordinator:
                     tool_call, turn, f"护栏拒绝: {verdict.reason}", tripwire=verdict.tripwire
                 )
             if verdict.verdict == VerdictType.CONFIRM:
-                self.emitter.emit(
-                    "tool_call_end",
-                    turn=turn,
-                    data={
-                        "tool_name": name,
-                        "tool_call_id": tool_call.id,
-                        "needs_user_confirm": True,
-                        "reason": verdict.reason,
-                    },
-                )
-                return ToolCallOutcome(
-                    tool_call=tool_call,
-                    needs_user_confirm=True,
-                    skip_reason=f"需要用户确认: {verdict.reason}",
-                )
+                approved, reason = await self.request_approval(name, arguments)
+                if not approved:
+                    return self.make_skipped(
+                        tool_call,
+                        turn,
+                        f"审批拒绝: {reason}",
+                    )
             if verdict.tripwire:
                 return self.make_skipped(tool_call, turn, "绊线触发", tripwire=True)
 
@@ -196,6 +202,51 @@ class ToolCoordinator:
         )
 
         return ToolCallOutcome(tool_call=tool_call, result=result)
+
+    async def request_approval(
+        self,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> tuple[bool, str]:
+        """调用异步审批处理器；缺失、超时和异常均失败关闭。"""
+        request = ApprovalRequest(
+            session_id=self.session_id,
+            tool_name=tool_name,
+            arguments=arguments,
+        )
+        approved = False
+        reason = "未配置 ApprovalHandler"
+        if self.approval_handler is None:
+            pass
+        elif self.status_callback is not None:
+            self.status_callback(SessionStatus.WAITING_APPROVAL)
+        if self.approval_handler is not None:
+            try:
+                decision = await asyncio.wait_for(
+                    self.approval_handler.request_approval(request),
+                    timeout=self.approval_timeout,
+                )
+            except TimeoutError:
+                approved, reason = False, "审批处理超时"
+            except Exception as exc:
+                approved, reason = False, f"审批处理异常: {type(exc).__name__}"
+            else:
+                approved, reason = decision.approved, decision.reason
+            finally:
+                if self.status_callback is not None:
+                    self.status_callback(SessionStatus.ACTIVE)
+        await self.audit_sink.record(AuditEvent(
+            event_type="permission_decision",
+            component="tools",
+            action="tool_approval",
+            session_id=self.session_id,
+            details={
+                "tool_name": tool_name,
+                "approved": approved,
+                "reason": reason,
+            },
+        ))
+        return approved, reason
 
     async def try_execute(
         self,
@@ -244,6 +295,12 @@ class ToolCoordinator:
             if classification.category != ErrorCategory.TRANSIENT:
                 if classification.category == ErrorCategory.MODEL_RECOVERABLE:
                     log.info("错误返回 LLM 自修正", tool_name=name)
+                self.retry_policy.reset(name)
+                return result
+
+            metadata = self.registry.get_metadata(name)
+            if not (metadata.readonly or metadata.idempotent):
+                log.info("非幂等写工具不自动重试", tool_name=name)
                 self.retry_policy.reset(name)
                 return result
 

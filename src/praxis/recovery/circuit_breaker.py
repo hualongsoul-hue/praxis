@@ -60,9 +60,7 @@ class CircuitBreaker:
         self.failure_count += 1
         self.last_failure_time = time.monotonic()
 
-        if self.state == CircuitState.HALF_OPEN:
-            self.transition_to(CircuitState.OPEN)
-        elif self.state == CircuitState.CLOSED and self.failure_count >= self.failure_threshold:
+        if self.state == CircuitState.HALF_OPEN or (self.state == CircuitState.CLOSED and self.failure_count >= self.failure_threshold):
             self.transition_to(CircuitState.OPEN)
 
     def transition_to(self, new_state: CircuitState) -> None:

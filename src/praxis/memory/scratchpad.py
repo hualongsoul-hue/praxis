@@ -4,7 +4,7 @@ Agent 主动维护的结构化笔记，持久化到 S3 键值存储。
 仅允许 KNOWN_KEYS 白名单中的键（progress/todos/features）。
 """
 
-from typing import Any
+from typing import Any, ClassVar
 
 from praxis.persistence.store import PersistenceStore
 
@@ -14,7 +14,7 @@ SCRATCHPAD_NAMESPACE = "scratchpad"
 class Scratchpad:
     """Scratchpad 存储管理。"""
 
-    KNOWN_KEYS: set[str] = {"progress.json", "todos.json", "features.json"}
+    KNOWN_KEYS: ClassVar[set[str]] = {"progress.json", "todos.json", "features.json"}
 
     def __init__(self, store: PersistenceStore, session_id: str) -> None:
         self.store = store

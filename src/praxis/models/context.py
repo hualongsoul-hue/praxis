@@ -19,8 +19,8 @@ class TurnContext(BaseModel):
 class AssembledPrompt(BaseModel):
     """组装后的完整 Prompt。"""
 
-    messages: list[dict[str, Any]] = Field(default_factory=list)
-    tools: list[dict[str, Any]] = Field(default_factory=list)
+    messages: list[dict[str, Any]] = Field(default_factory=lambda: [])
+    tools: list[dict[str, Any]] = Field(default_factory=lambda: [])
     token_count: int = 0
     max_tokens: int = 0
     layers_included: list[str] = Field(default_factory=list)
@@ -52,4 +52,4 @@ class RunContext(BaseModel):
     semantic_results: str = ""
     skill_index: str = ""
     identifier_index: str = ""
-    few_shot_messages: list[dict[str, Any]] = Field(default_factory=list)
+    few_shot_messages: list[dict[str, Any]] = Field(default_factory=lambda: [])

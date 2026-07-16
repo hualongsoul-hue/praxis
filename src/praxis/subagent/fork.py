@@ -75,14 +75,18 @@ class ForkManager:
 
         log.info("Fork 启动", fork_count=len(specs))
 
-        coros = [self.run_single_fork(spec) for spec in specs]
-        results = await asyncio.gather(*coros, return_exceptions=False)
+        execution_tasks = [
+            self.resource_ctrl.create_task(spec.subagent_id, self.run_single_fork(spec))
+            for spec in specs
+        ]
+        results = await asyncio.gather(*execution_tasks, return_exceptions=False)
         return list(results)
 
     async def run_single_fork(self, spec: SubagentSpec) -> SubagentResult:
         """运行单个 Fork 子代理。"""
         await self.resource_ctrl.acquire(spec.subagent_id)
 
+        session = None
         try:
             session = await self.isolation.create_isolated_session(
                 spec=spec,
@@ -108,12 +112,19 @@ class ForkManager:
                 summary=response.content,
                 total_turns=response.total_turns,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return SubagentResult(
                 subagent_id=spec.subagent_id,
                 mode=SubagentMode.FORK,
                 status=SubagentStatus.TIMEOUT,
                 summary="Fork 子代理超时。",
+            )
+        except asyncio.CancelledError:
+            return SubagentResult(
+                subagent_id=spec.subagent_id,
+                mode=SubagentMode.FORK,
+                status=SubagentStatus.CANCELLED,
+                summary="Fork 子代理已取消。",
             )
         except Exception as exc:
             log.error("Fork 子代理失败", subagent_id=spec.subagent_id, error=str(exc))
@@ -124,6 +135,8 @@ class ForkManager:
                 summary=f"执行失败: {exc}",
             )
         finally:
+            if session is not None:
+                await self.isolation.close_session(session)
             self.resource_ctrl.release(spec.subagent_id)
 
     async def fork_and_aggregate(

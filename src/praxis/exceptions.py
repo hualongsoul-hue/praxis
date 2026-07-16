@@ -17,7 +17,7 @@
     │   ├── ToolNotFoundError           #   工具未注册
     │   ├── ToolExecutionError          #   工具执行失败
     │   ├── ToolTimeoutError            #   工具执行超时
-    │   └── SandboxViolationError       #   沙箱规则违反
+    │   └── ToolPolicyViolationError    #   工具授权策略违反
     ├── CognitiveMemoryError            # S6 认知记忆系统
     ├── ContextError                    # S7 上下文引擎
     ├── GuardrailError                  # S8 护栏系统
@@ -30,7 +30,6 @@
 """
 
 from typing import Any
-
 
 # ── 基础异常 ─────────────────────────────────────────────────────────────────
 
@@ -76,6 +75,14 @@ class PersistenceError(PraxisError):
     """存储读写或检查点操作错误。"""
 
     component = "persistence"
+
+
+class CheckpointCorruptionError(PersistenceError):
+    """检查点校验和或结构损坏。"""
+
+
+class CheckpointVersionError(PersistenceError):
+    """检查点 schema 版本不受支持。"""
 
 
 # ── S4 模型网关 ──────────────────────────────────────────────────────────────
@@ -136,8 +143,8 @@ class ToolTimeoutError(ToolError):
     """工具执行超过配置的超时时间。"""
 
 
-class SandboxViolationError(ToolError):
-    """工具执行违反沙箱安全规则。"""
+class ToolPolicyViolationError(ToolError):
+    """工具执行违反显式授权策略。"""
 
 
 # ── S6 记忆系统 ──────────────────────────────────────────────────────────────
@@ -201,6 +208,16 @@ class SessionError(PraxisError):
     """会话管理错误。"""
 
     component = "session"
+
+
+class ConcurrentSessionRunError(SessionError):
+    """同一会话已在执行另一个轮次。"""
+
+
+class RuntimeStateError(PraxisError):
+    """Runtime 生命周期状态不允许当前操作。"""
+
+    component = "runtime"
 
 
 # ── S13 子代理协调 ───────────────────────────────────────────────────────────

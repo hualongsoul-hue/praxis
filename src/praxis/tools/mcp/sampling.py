@@ -5,7 +5,7 @@ MCP Server 请求由 Praxis 通过 S4 模型网关代理完成。
 """
 
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
 from praxis.gateway.chat import chat
 from praxis.gateway.router import GatewayRouter
@@ -50,11 +50,20 @@ class SamplingManager:
         # 构造消息列表
         messages: list[Message] = []
         for msg in request.messages:
-            role_str = msg.get("role", "user")
-            content = msg.get("content", "")
-            if isinstance(content, list):
-                texts = [c.get("text", "") for c in content if c.get("type") == "text"]
+            role_value = cast(object, msg.get("role", "user"))
+            role_str = role_value if isinstance(role_value, str) else "user"
+            content_value = cast(object, msg.get("content", ""))
+            if isinstance(content_value, list):
+                texts: list[str] = []
+                for raw_part in cast(list[object], content_value):
+                    if not isinstance(raw_part, dict):
+                        continue
+                    part = cast(dict[str, Any], raw_part)
+                    if part.get("type") == "text":
+                        texts.append(str(part.get("text", "")))
                 content = "\n".join(texts)
+            else:
+                content = str(content_value)
             messages.append(Message(role=Role(role_str), content=content))
 
         # Human-in-the-loop 审核
@@ -64,8 +73,8 @@ class SamplingManager:
                 log.info("Sampling 请求被用户拒绝", server=request.server_name)
                 return {"role": "assistant", "content": "用户拒绝了此请求。"}
 
-        # 解析模型偏好
-        model = self.resolve_model_preference(request.model_preferences)
+        # MCP Server 的偏好不能绕过 Runtime 的统一默认模型部署。
+        model = self.router.config.default_model
 
         # 通过 S4 调用 LLM
         msg_dicts = [{"role": m.role.value, "content": m.content} for m in messages]
@@ -88,24 +97,3 @@ class SamplingManager:
             "content": response.content,
             "model": model,
         }
-
-    @staticmethod
-    def resolve_model_preference(preferences: dict[str, Any]) -> str:
-        """根据偏好选择模型。
-
-        若 hints 中指定了具体名称则优先使用；否则回落到 ``default``。
-        intelligence/speed/cost 等优先级字段当前由 GatewayRouter 的
-        ``default_model`` 统一承接，无需在此映射。
-
-        Args:
-            preferences: 模型偏好（hints/intelligencePriority/speedPriority/costPriority）。
-
-        Returns:
-            模型名称。
-        """
-        hints = (preferences or {}).get("hints", [])
-        if hints:
-            for hint in hints:
-                if isinstance(hint, dict) and hint.get("name"):
-                    return hint["name"]
-        return "default"

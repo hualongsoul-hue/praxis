@@ -4,7 +4,6 @@ ReAct 模式（默认，交叉推理与行动）和
 Plan-and-Execute 模式（先规划后执行），运行时可切换。
 """
 
-from typing import Any
 
 from praxis.models.orchestrator import StrategyMode
 from praxis.telemetry.logger import get_logger
@@ -15,7 +14,7 @@ log = get_logger("orchestrator.strategy")
 class PlanStep:
     """Plan-and-Execute 模式下的计划步骤。"""
 
-    __slots__ = ("description", "tool_hint", "completed", "result")
+    __slots__ = ("completed", "description", "result", "tool_hint")
 
     def __init__(
         self,

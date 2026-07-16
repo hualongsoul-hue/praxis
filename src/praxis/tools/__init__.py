@@ -3,11 +3,11 @@
 from praxis.tools.builtins.registration import register_builtins
 from praxis.tools.executor import ToolExecutor
 from praxis.tools.override import override_tool
+from praxis.tools.policy import ToolPolicy
 from praxis.tools.registry import ToolHandler, ToolRegistry
-from praxis.tools.sandbox import Sandbox
 
 __all__ = [
-    "Sandbox",
+    "ToolPolicy",
     "ToolExecutor",
     "ToolHandler",
     "ToolRegistry",

@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from praxis.models.tools import ToolDefinition, ToolMetadata
-from praxis.tools.sandbox import Sandbox
+from praxis.tools.policy import ToolPolicy
 
 DEFINITION = ToolDefinition(
     name="code_search",
@@ -46,7 +46,7 @@ CODE_PATTERN = re.compile(
 MAX_RESULTS = 50
 
 
-def create_handler(sandbox: Sandbox):
+def create_handler(sandbox: ToolPolicy):
     """创建绑定沙箱的处理函数。"""
 
     async def handle(args: dict[str, Any]) -> str:

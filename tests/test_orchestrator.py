@@ -1,10 +1,7 @@
 """S11 编排循环单元测试。"""
 
-import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
 
 from praxis.config.schemas import OrchestratorConfig
 from praxis.models.context import TokenUsage
@@ -17,13 +14,13 @@ from praxis.models.orchestrator import (
     TerminationReason,
 )
 from praxis.models.responses import ModelResponse, Usage
-from praxis.models.tools import FunctionCall, ToolCall, ToolResult
+from praxis.models.tools import ApprovalDecision, FunctionCall, ToolCall, ToolResult
 from praxis.orchestrator.events import EventEmitter, EventListener, StreamCollector
+from praxis.orchestrator.loop import OrchestrationLoop
 from praxis.orchestrator.parser import OutputParser, ParsedOutput
 from praxis.orchestrator.strategy import LoopStrategy, PlanStep
 from praxis.orchestrator.termination import TerminationManager
 from praxis.orchestrator.tool_coordination import ToolCallOutcome
-
 
 # ── 公共辅助 ──────────────────────────────────────────────────────────────
 
@@ -315,6 +312,7 @@ class TestToolCoordination:
         self,
         guardrail_verdict: GuardrailVerdict | None = None,
         execute_result: ToolResult | None = None,
+        approval_handler: Any = None,
     ) -> tuple:
         """创建带 mock 的协调器。"""
         executor = AsyncMock()
@@ -354,6 +352,8 @@ class TestToolCoordination:
             circuit_registry=circuits,
             retry_policy=retry,
             emitter=emitter,
+            approval_handler=approval_handler,
+            approval_timeout=0.05,
         )
         return coordinator, executor, emitter
 
@@ -374,12 +374,41 @@ class TestToolCoordination:
         assert outcomes[0].skipped is True
         assert "护栏拒绝" in outcomes[0].skip_reason
 
-    async def test_guardrail_confirm(self) -> None:
+    async def test_guardrail_confirm_without_handler_denies(self) -> None:
         verdict = GuardrailVerdict(verdict=VerdictType.CONFIRM, reason="需确认")
         coordinator, executor, emitter = self.make_coordinator(guardrail_verdict=verdict)
         tc = make_tool_call()
         outcomes = await coordinator.execute_tool_calls([tc], turn=1)
-        assert outcomes[0].needs_user_confirm is True
+        assert outcomes[0].skipped is True
+        assert "未配置 ApprovalHandler" in outcomes[0].skip_reason
+
+    async def test_guardrail_confirm_uses_async_handler(self) -> None:
+        class Approver:
+            async def request_approval(self, request: Any) -> ApprovalDecision:
+                return ApprovalDecision(approved=True, reason="operator approved")
+
+        verdict = GuardrailVerdict(verdict=VerdictType.CONFIRM, reason="需确认")
+        coordinator, executor, _ = self.make_coordinator(
+            guardrail_verdict=verdict,
+            approval_handler=Approver(),
+        )
+        outcomes = await coordinator.execute_tool_calls([make_tool_call()], turn=1)
+        assert outcomes[0].result is not None
+        executor.execute.assert_awaited_once()
+
+    async def test_guardrail_confirm_handler_error_denies(self) -> None:
+        class BrokenApprover:
+            async def request_approval(self, request: Any) -> ApprovalDecision:
+                raise RuntimeError("approval unavailable")
+
+        verdict = GuardrailVerdict(verdict=VerdictType.CONFIRM, reason="需确认")
+        coordinator, executor, _ = self.make_coordinator(
+            guardrail_verdict=verdict,
+            approval_handler=BrokenApprover(),
+        )
+        outcomes = await coordinator.execute_tool_calls([make_tool_call()], turn=1)
+        assert outcomes[0].skipped is True
+        executor.execute.assert_not_awaited()
 
     async def test_circuit_open(self) -> None:
         coordinator, executor, emitter = self.make_coordinator()
@@ -427,12 +456,10 @@ class TestOrchestrationLoop:
     def make_loop(
         self,
         responses: list[ModelResponse] | None = None,
-    ) -> "OrchestrationLoop":
+    ) -> OrchestrationLoop:
         """创建带 mock 依赖的循环引擎。"""
         from praxis.context.assembler import PromptAssembler
         from praxis.models.context import AssembledPrompt
-        from praxis.orchestrator.loop import OrchestrationLoop
-
         config = OrchestratorConfig(max_turns=10)
         gateway = MagicMock()
         emitter = EventEmitter()
@@ -488,9 +515,9 @@ class TestOrchestrationLoop:
     @patch("praxis.orchestrator.loop.chat")
     async def test_plan_and_execute_generates_plan(self, mock_chat: Any) -> None:
         """plan-and-execute 模式应在 prepare_run 生成并设置计划（否则退化为 ReAct）。"""
+        from praxis.models.context import RunContext, TurnContext
         from praxis.models.orchestrator import StrategyMode
         from praxis.orchestrator.strategy import LoopStrategy
-        from praxis.models.context import RunContext, TurnContext
 
         loop = self.make_loop()
         loop.strategy = LoopStrategy(StrategyMode.PLAN_AND_EXECUTE)
@@ -507,9 +534,9 @@ class TestOrchestrationLoop:
     @patch("praxis.orchestrator.loop.chat")
     async def test_plan_generation_failure_degrades_to_react(self, mock_chat: Any) -> None:
         """规划 LLM 调用失败时应退化为 ReAct（plan 留空），不中断。"""
+        from praxis.models.context import RunContext, TurnContext
         from praxis.models.orchestrator import StrategyMode
         from praxis.orchestrator.strategy import LoopStrategy
-        from praxis.models.context import RunContext, TurnContext
 
         loop = self.make_loop()
         loop.strategy = LoopStrategy(StrategyMode.PLAN_AND_EXECUTE)
@@ -522,9 +549,10 @@ class TestOrchestrationLoop:
     async def test_gav_feedback_injected_on_verification_failure(self) -> None:
         """验证失败时，GAV 应把结构化反馈注入上下文并发 gav_feedback 事件。"""
         from praxis.models.verification import (
-            VerificationResult, VerificationStatus, VerificationType,
+            VerificationResult,
+            VerificationStatus,
+            VerificationType,
         )
-        from praxis.orchestrator.parser import ParsedOutput
 
         loop = self.make_loop()
         loop.verifier_registry = AsyncMock()
@@ -551,9 +579,10 @@ class TestOrchestrationLoop:
     async def test_gav_no_feedback_on_skip_or_error(self) -> None:
         """验证结果仅为 SKIP/ERROR（非 FAIL）时不应注入自我修正反馈。"""
         from praxis.models.verification import (
-            VerificationResult, VerificationStatus, VerificationType,
+            VerificationResult,
+            VerificationStatus,
+            VerificationType,
         )
-        from praxis.orchestrator.parser import ParsedOutput
 
         loop = self.make_loop()
         loop.verifier_registry = AsyncMock()

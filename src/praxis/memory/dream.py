@@ -6,8 +6,8 @@
 
 import asyncio
 from collections.abc import Callable
-from datetime import datetime, timezone
-from typing import Any
+from datetime import UTC, datetime
+from typing import Any, cast
 
 from json_repair import repair_json
 from pydantic import BaseModel, Field
@@ -47,7 +47,7 @@ DREAM_SYSTEM_PROMPT = (
 class DreamReport(BaseModel):
     """梦境整理报告。"""
 
-    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     completed_at: datetime | None = None
     total_reviewed: int = 0
     anchored_count: int = 0
@@ -93,16 +93,18 @@ class DreamConsolidator:
         if meta is None:
             return True
 
-        last_run_str = meta.get("completed_at", "") if isinstance(meta, dict) else ""
-        if not last_run_str:
+        raw_completed_at: object = ""
+        if isinstance(meta, dict):
+            raw_completed_at = cast(dict[str, Any], meta).get("completed_at", "")
+        if not isinstance(raw_completed_at, str) or not raw_completed_at:
             return True
 
         try:
-            last_run = datetime.fromisoformat(last_run_str)
+            last_run = datetime.fromisoformat(raw_completed_at)
         except ValueError:
             return True
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         hours_since = (now - last_run).total_seconds() / 3600.0
         return hours_since >= self.min_hours_since_last
 
@@ -118,7 +120,7 @@ class DreamConsolidator:
         report.total_reviewed = len(all_entries)
 
         if not all_entries:
-            report.completed_at = datetime.now(timezone.utc)
+            report.completed_at = datetime.now(UTC)
             report.summary = "无记忆条目需要整理"
             await self.save_run_meta(report)
             return report
@@ -138,7 +140,7 @@ class DreamConsolidator:
             raw_text = response.content or "{}"
         except Exception as exc:
             log.warning("梦境整理 LLM 调用失败", error=str(exc))
-            report.completed_at = datetime.now(timezone.utc)
+            report.completed_at = datetime.now(UTC)
             report.summary = f"LLM 调用失败: {exc}"
             await self.save_run_meta(report)
             return report
@@ -147,14 +149,14 @@ class DreamConsolidator:
         entry_map = {e.memory_id: e for e in all_entries}
 
         report.anchored_count = await self.apply_anchoring(
-            actions.get("anchored", []), entry_map,
+            self.dict_list(actions.get("anchored")), entry_map,
         )
         report.stale_marked = await self.apply_stale_marking(
-            actions.get("stale", []), entry_map,
+            self.string_list(actions.get("stale")), entry_map,
         )
         report.conflicts_resolved = len(actions.get("conflicts", []) or [])
         report.merged_count = await self.apply_merges(
-            actions.get("merge_suggestions", []), entry_map,
+            self.dict_list(actions.get("merge_suggestions")), entry_map,
         )
         # 基于时间/不活跃度的相关性衰减遗忘（配置开关 decay_enabled）
         if self.decay_enabled:
@@ -167,7 +169,7 @@ class DreamConsolidator:
                     scope, self.max_memories
                 )
         report.summary = str(actions.get("summary", ""))
-        report.completed_at = datetime.now(timezone.utc)
+        report.completed_at = datetime.now(UTC)
 
         await self.save_run_meta(report)
 
@@ -188,23 +190,19 @@ class DreamConsolidator:
 
     async def apply_anchoring(
         self,
-        anchored: list[dict[str, str]],
+        anchored: list[dict[str, Any]],
         entry_map: dict[str, MemoryEntry],
     ) -> int:
         """应用时间锚定更新。"""
         count = 0
-        if not isinstance(anchored, list):
-            return 0
         for item in anchored:
-            if not isinstance(item, dict):
-                continue
             mid = str(item.get("memory_id", ""))
             new_content = str(item.get("updated_content", ""))
             entry = entry_map.get(mid)
             if entry and new_content:
                 entry.content = new_content
                 entry.summary = new_content[:150]
-                entry.updated_at = datetime.now(timezone.utc)
+                entry.updated_at = datetime.now(UTC)
                 await self.scoped_store.update(entry)
                 count += 1
         return count
@@ -216,8 +214,6 @@ class DreamConsolidator:
     ) -> int:
         """标记陈旧记忆为 INACTIVE。"""
         count = 0
-        if not isinstance(stale_ids, list):
-            return 0
         for mid in stale_ids:
             entry = entry_map.get(str(mid))
             if entry:
@@ -232,14 +228,10 @@ class DreamConsolidator:
     ) -> int:
         """应用合并建议。"""
         count = 0
-        if not isinstance(merge_suggestions, list):
-            return 0
         for suggestion in merge_suggestions:
-            if not isinstance(suggestion, dict):
-                continue
-            ids = suggestion.get("ids") or []
+            ids = self.string_list(suggestion.get("ids"))
             merged_content = str(suggestion.get("merged_content", ""))
-            if not isinstance(ids, list) or len(ids) < 2 or not merged_content:
+            if len(ids) < 2 or not merged_content:
                 continue
 
             primary = entry_map.get(str(ids[0]))
@@ -285,11 +277,27 @@ class DreamConsolidator:
     @staticmethod
     def parse_response(raw_text: str) -> dict[str, Any]:
         """容错解析 JSON 对象。"""
-        data = repair_json(raw_text, return_objects=True)
+        data = cast(object, repair_json(raw_text, return_objects=True))
         if isinstance(data, dict):
-            return data
+            return cast(dict[str, Any], data)
         log.warning("梦境整理响应解析失败", raw_preview=raw_text[:200])
         return {}
+
+    @staticmethod
+    def string_list(value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in cast(list[object], value)]
+
+    @staticmethod
+    def dict_list(value: object) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
+        return [
+            cast(dict[str, Any], item)
+            for item in cast(list[object], value)
+            if isinstance(item, dict)
+        ]
 
 
 class DreamScheduler:

@@ -6,7 +6,7 @@ prompts/list 发现 + prompts/get 获取 + 参数补全（Completion）。
 from typing import Any
 
 from mcp import ClientSession
-from mcp.types import PromptReference
+from mcp.types import PromptReference, TextContent
 
 from praxis.models.mcp import MCPPromptInfo, MCPPromptMessage
 from praxis.telemetry.logger import get_logger
@@ -86,11 +86,11 @@ class MCPPromptsBridge:
         messages: list[MCPPromptMessage] = []
         for msg in result.messages:
             # 提取文本内容
-            content_text = ""
-            if hasattr(msg.content, "text"):
-                content_text = msg.content.text
-            elif isinstance(msg.content, str):
-                content_text = msg.content
+            content_text = (
+                msg.content.text
+                if isinstance(msg.content, TextContent)
+                else ""
+            )
             messages.append(MCPPromptMessage(
                 role=msg.role,
                 content=content_text,

@@ -4,12 +4,11 @@
 支持并发策略（只读并发、写串行），可配置超时。
 
 注意：沙箱（文件白名单/网络出站/Shell 超时）由各工具处理器在执行时
-通过共享的 Sandbox 实例自行强制，执行管线本身不做通用路径/网络拦截
+通过共享的 ToolPolicy 实例自行强制，执行管线本身不做通用路径/网络拦截
 （参数无统一的路径语义，无法在此层泛化检查）。
 """
 
 import asyncio
-import json
 import time
 from typing import Any
 
@@ -17,14 +16,14 @@ import jsonschema
 
 from praxis.exceptions import ToolExecutionError, ToolTimeoutError
 from praxis.models.tools import ToolResult
+from praxis.tools.policy import ToolPolicy
 from praxis.tools.registry import ToolRegistry
-from praxis.tools.sandbox import Sandbox
 
 
 class ToolExecutor:
     """工具执行管线。"""
 
-    def __init__(self, registry: ToolRegistry, sandbox: Sandbox) -> None:
+    def __init__(self, registry: ToolRegistry, sandbox: ToolPolicy) -> None:
         self._registry = registry
         self._sandbox = sandbox
         self._write_lock = asyncio.Lock()
@@ -78,7 +77,7 @@ class ToolExecutor:
                         entry.handler(arguments),
                         timeout=timeout,
                     )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise ToolTimeoutError(
                 f"工具 '{name}' 执行超时（{timeout}s）",
                 details={"tool": name, "timeout": timeout},

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from praxis.models.skills import SkillAuditResult, SkillDefinition
 from praxis.skills.parser import SCRIPT_EXTENSIONS, SkillParser
+from praxis.skills.paths import resolve_skill_path
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
 
@@ -84,9 +85,14 @@ class SkillDiscovery:
 
         for rel_path in skill.files + [""]:
             if rel_path:
-                file_path = base / rel_path
+                try:
+                    file_path = resolve_skill_path(base, rel_path)
+                except Exception:
+                    has_sensitive = True
+                    warnings.append(f"检测到越界资源路径: {rel_path}")
+                    continue
             else:
-                file_path = base / "SKILL.md"
+                file_path = resolve_skill_path(base, "SKILL.md")
 
             if not file_path.is_file():
                 continue

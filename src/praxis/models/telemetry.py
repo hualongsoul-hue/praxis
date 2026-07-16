@@ -1,6 +1,6 @@
 """遥测相关数据模型——S2 审计日志事件。"""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -20,7 +20,7 @@ class AuditEvent(BaseModel):
 
     event_id: str = Field(default_factory=lambda: uuid4().hex)
     timestamp: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc),
+        default_factory=lambda: datetime.now(UTC),
     )
     event_type: Literal[
         "tool_call",

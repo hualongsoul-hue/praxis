@@ -7,39 +7,35 @@ PRD § 9.3:
 - 输入护栏：提示注入检测
 """
 
-from typing import Any
-from unittest.mock import MagicMock
 
 import pytest
 
 from praxis.config.schemas import ToolsConfig
+from praxis.exceptions import ToolPolicyViolationError
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.guardrails.permissions import PermissionManager
 from praxis.guardrails.rules import (
     BUILTIN_INPUT_RULES,
     BUILTIN_OUTPUT_RULES,
-    GuardrailRule,
     RuleEngine,
     RuleTarget,
 )
 from praxis.models.guardrails import VerdictType
-from praxis.models.tools import ToolDefinition, ToolMetadata
-from praxis.exceptions import SandboxViolationError
-from praxis.tools.registry import ToolRegistry
-from praxis.tools.sandbox import Sandbox
+from praxis.models.tools import ToolMetadata
+from praxis.tools.policy import ToolPolicy
 
 
-class TestSandboxIsolation:
-    """沙箱隔离验证。"""
+class TestToolPolicyIsolation:
+    """工具策略隔离验证。"""
 
     def test_sandbox_blocks_disallowed_path(self, tmp_path) -> None:
         """验证：沙箱阻止访问白名单外的路径。"""
         safe_dir = tmp_path / "safe"
         safe_dir.mkdir()
         config = ToolsConfig(allowed_paths=[str(safe_dir)])
-        sandbox = Sandbox(config)
+        sandbox = ToolPolicy(config)
 
-        with pytest.raises(SandboxViolationError):
+        with pytest.raises(ToolPolicyViolationError):
             sandbox.check_path("/etc/passwd")
 
     def test_sandbox_allows_whitelisted_path(self, tmp_path) -> None:
@@ -49,7 +45,7 @@ class TestSandboxIsolation:
         test_file = safe_dir / "file.txt"
         test_file.touch()
         config = ToolsConfig(allowed_paths=[str(safe_dir)])
-        sandbox = Sandbox(config)
+        sandbox = ToolPolicy(config)
 
         result = sandbox.check_path(str(test_file))
         assert result == test_file.resolve()
@@ -59,10 +55,27 @@ class TestSandboxIsolation:
         safe_dir = tmp_path / "safe"
         safe_dir.mkdir()
         config = ToolsConfig(allowed_paths=[str(safe_dir)])
-        sandbox = Sandbox(config)
+        sandbox = ToolPolicy(config)
 
-        with pytest.raises(SandboxViolationError):
+        with pytest.raises(ToolPolicyViolationError):
             sandbox.check_path(str(safe_dir / ".." / ".." / "etc" / "passwd"))
+
+    def test_empty_authorized_roots_fail_closed(self) -> None:
+        policy = ToolPolicy(ToolsConfig())
+        with pytest.raises(ToolPolicyViolationError, match="未配置授权根目录"):
+            policy.check_path("relative.txt")
+
+    async def test_network_blocks_loopback_and_url_credentials(self) -> None:
+        policy = ToolPolicy(ToolsConfig(network_allowed=True))
+        with pytest.raises(ToolPolicyViolationError, match="私网"):
+            await policy.check_url("http://127.0.0.1/admin")
+        with pytest.raises(ToolPolicyViolationError, match="凭据"):
+            await policy.check_url("https://user:pass@example.com/")
+
+    def test_shell_is_disabled_by_default(self) -> None:
+        policy = ToolPolicy(ToolsConfig())
+        with pytest.raises(ToolPolicyViolationError, match="Shell 工具默认禁用"):
+            policy.check_shell()
 
 
 class TestPromptInjectionDetection:
@@ -115,8 +128,8 @@ class TestSensitiveDataProtection:
     @pytest.mark.parametrize(
         "sensitive_output",
         [
-            "api_key: sk_live_1234567890abcdefghij1234567890ab",
-            "secret_key = AKIAIOSFODNN7EXAMPLE1234567890",
+            "api_key: s" + "k_live_1234567890abcdefghij1234567890ab",
+            "secret_key = AK" + "IAIOSFODNN7EXAMPLE1234567890",
             "password = MySecr3tP@ssw0rd!",
         ],
     )

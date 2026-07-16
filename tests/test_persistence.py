@@ -1,9 +1,15 @@
 """S3 持久化引擎验证测试。"""
 
+import asyncio
+
 import pytest
 
 from praxis.config.schemas import PersistenceConfig
-from praxis.models.persistence import Checkpoint
+from praxis.exceptions import (
+    CheckpointCorruptionError,
+    CheckpointVersionError,
+    PersistenceError,
+)
 from praxis.persistence.checkpoint import CheckpointManager
 from praxis.persistence.namespace import NamespaceManager
 from praxis.persistence.store import PersistenceStore, create_store
@@ -26,6 +32,14 @@ class TestSqliteBackend:
         await store.save("test_ns", "key1", {"name": "praxis", "version": 1})
         result = await store.load("test_ns", "key1")
         assert result == {"name": "praxis", "version": 1}
+
+    async def test_save_if_absent_is_atomic(self, store: PersistenceStore) -> None:
+        outcomes = await asyncio.gather(*(
+            store.save_if_absent("locks", "same", {"winner": index})
+            for index in range(20)
+        ))
+        assert outcomes.count(True) == 1
+        assert outcomes.count(False) == 19
 
     async def test_load_nonexistent(self, store: PersistenceStore) -> None:
         result = await store.load("test_ns", "nonexistent")
@@ -58,6 +72,19 @@ class TestSqliteBackend:
         assert await store.load("ns_a", "key") == "value_a"
         assert await store.load("ns_b", "key") == "value_b"
 
+    async def test_concurrent_writes_and_idempotent_close(self, tmp_path) -> None:
+        store = await create_store(PersistenceConfig(
+            sqlite_path=str(tmp_path / "concurrent.db"),
+        ))
+        await asyncio.gather(*(
+            store.save("parallel", f"key-{index}", {"index": index})
+            for index in range(20)
+        ))
+        assert len(await store.list_keys("parallel")) == 20
+        await asyncio.gather(store.close(), store.close())
+        with pytest.raises(PersistenceError, match="已关闭"):
+            await store.load("parallel", "key-0")
+
 
 class TestFilesystemBackend:
     """Task 3.5: 文件系统后端测试。"""
@@ -77,6 +104,14 @@ class TestFilesystemBackend:
         result = await store.load("test_ns", "key1")
         assert result == {"data": "hello"}
 
+    async def test_save_if_absent_is_atomic(self, store: PersistenceStore) -> None:
+        outcomes = await asyncio.gather(*(
+            store.save_if_absent("locks", "same", {"winner": index})
+            for index in range(20)
+        ))
+        assert outcomes.count(True) == 1
+        assert outcomes.count(False) == 19
+
     async def test_delete(self, store: PersistenceStore) -> None:
         await store.save("test_ns", "key1", "val")
         await store.delete("test_ns", "key1")
@@ -87,6 +122,35 @@ class TestFilesystemBackend:
         await store.save("ns", "b", 2)
         keys = await store.list_keys("ns")
         assert sorted(keys) == ["a", "b"]
+
+    async def test_keys_round_trip_without_filename_collisions(
+        self,
+        store: PersistenceStore,
+    ) -> None:
+        await store.save("ns", "scope/item", "slash")
+        await store.save("ns", "scope__item", "underscores")
+
+        assert await store.load("ns", "scope/item") == "slash"
+        assert await store.load("ns", "scope__item") == "underscores"
+        assert await store.list_keys("ns") == ["scope/item", "scope__item"]
+
+    @pytest.mark.parametrize("namespace", ["../escape", "..\\escape", "/absolute"])
+    async def test_rejects_unsafe_namespace(
+        self,
+        store: PersistenceStore,
+        namespace: str,
+    ) -> None:
+        with pytest.raises(PersistenceError, match="命名空间"):
+            await store.save(namespace, "proof", {"unsafe": True})
+
+    @pytest.mark.parametrize("key", ["../escape", "..\\escape", "/absolute"])
+    async def test_rejects_unsafe_key(
+        self,
+        store: PersistenceStore,
+        key: str,
+    ) -> None:
+        with pytest.raises(PersistenceError, match="键"):
+            await store.save("safe", key, {"unsafe": True})
 
 
 class TestCheckpoint:
@@ -116,6 +180,26 @@ class TestCheckpoint:
         cps = await manager.list_checkpoints("sess-1")
         assert len(cps) == 2
         assert all(cp.session_id == "sess-1" for cp in cps)
+
+    async def test_corrupted_checkpoint_is_rejected(self, manager: CheckpointManager) -> None:
+        checkpoint_id = await manager.save_checkpoint("sess-1", {"turn": 1})
+        key = f"sess-1:{checkpoint_id}"
+        raw = await manager._store.load("checkpoints", key)
+        assert isinstance(raw, dict)
+        raw["state"] = {"turn": 999}
+        await manager._store.save("checkpoints", key, raw)
+        with pytest.raises(CheckpointCorruptionError):
+            await manager.load_checkpoint(key)
+
+    async def test_legacy_checkpoint_is_rejected(self, manager: CheckpointManager) -> None:
+        key = "sess-1:legacy"
+        await manager._store.save(
+            "checkpoints",
+            key,
+            {"checkpoint_id": "legacy", "session_id": "sess-1", "state": {}},
+        )
+        with pytest.raises(CheckpointVersionError):
+            await manager.load_checkpoint(key)
 
 
 class TestNamespace:

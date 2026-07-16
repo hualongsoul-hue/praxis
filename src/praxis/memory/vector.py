@@ -4,8 +4,11 @@
 嵌入通过 Hugging Face Text Embeddings Inference (TEI) 服务获取。
 """
 
+import hashlib
 import math
+import re
 from collections.abc import Awaitable, Callable
+from typing import cast
 
 import httpx
 
@@ -18,12 +21,21 @@ log = get_logger("memory.vector")
 EmbeddingFunc = Callable[[str], Awaitable[list[float]]]
 
 
-DEFAULT_EMBEDDING_API_BASE = "http://localhost:8080"
+async def local_lexical_embed(text: str, dimensions: int = 256) -> list[float]:
+    """生成确定性的本地词法向量，不访问网络且不需要模型凭据。"""
+    vector = [0.0] * dimensions
+    for token in re.findall(r"[\w\u4e00-\u9fff]+", text.casefold()):
+        digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
+        bucket = int.from_bytes(digest[:4], "big") % dimensions
+        sign = 1.0 if digest[4] & 1 else -1.0
+        vector[bucket] += sign
+    norm = math.sqrt(sum(value * value for value in vector))
+    return [value / norm for value in vector] if norm else vector
 
 
 async def tei_embed(
     text: str,
-    api_base: str = DEFAULT_EMBEDDING_API_BASE,
+    api_base: str,
     api_key: str = "",
     timeout: float = 30.0,
     client: httpx.AsyncClient | None = None,
@@ -45,21 +57,29 @@ async def tei_embed(
     if client is not None:
         response = await client.post(url, json=payload, headers=headers)
         response.raise_for_status()
-        embeddings = response.json()
+        embeddings = cast(object, response.json())
     else:
         async with httpx.AsyncClient(timeout=timeout) as tmp_client:
             response = await tmp_client.post(url, json=payload, headers=headers)
             response.raise_for_status()
-            embeddings = response.json()
+            embeddings = cast(object, response.json())
 
-    if not isinstance(embeddings, list) or len(embeddings) == 0:
+    if not isinstance(embeddings, list):
         raise RuntimeError(f"TEI 返回异常结果: {str(embeddings)[:200]}")
-    return embeddings[0]
+    embedding_rows = cast(list[object], embeddings)
+    if not embedding_rows:
+        raise RuntimeError("TEI 返回了空嵌入结果")
+    first = embedding_rows[0]
+    if not isinstance(first, list) or not all(
+        isinstance(value, (int, float)) for value in cast(list[object], first)
+    ):
+        raise RuntimeError("TEI 返回的嵌入向量格式无效")
+    return [float(value) for value in cast(list[int | float], first)]
 
 
 def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     """计算两个向量的余弦相似度。"""
-    dot = sum(a * b for a, b in zip(vec_a, vec_b))
+    dot = sum(a * b for a, b in zip(vec_a, vec_b, strict=False))
     norm_a = math.sqrt(sum(a * a for a in vec_a))
     norm_b = math.sqrt(sum(b * b for b in vec_b))
     if norm_a == 0.0 or norm_b == 0.0:
@@ -78,7 +98,7 @@ class VectorStore:
         self,
         scoped_store: ScopedMemoryStore,
         embed_func: EmbeddingFunc | None = None,
-        api_base: str = DEFAULT_EMBEDDING_API_BASE,
+        api_base: str | None = None,
         api_key: str = "",
         timeout: float = 30.0,
         dimensions: int = 0,
@@ -88,7 +108,9 @@ class VectorStore:
         self.api_key = api_key
         self.timeout = timeout
         self.dimensions = dimensions  # 期望嵌入维度；>0 时校验，0 表示不校验
-        self.embed_func: EmbeddingFunc = embed_func or self.default_embed
+        self.embed_func: EmbeddingFunc = embed_func or (
+            self.default_embed if api_base else self.local_embed
+        )
         self.index: dict[str, tuple[MemoryEntry, list[float]]] = {}
         self._client: httpx.AsyncClient | None = None
 
@@ -99,6 +121,8 @@ class VectorStore:
         return self._client
 
     async def default_embed(self, text: str) -> list[float]:
+        if self.api_base is None:
+            return await self.local_embed(text)
         return await tei_embed(
             text,
             api_base=self.api_base,
@@ -106,6 +130,10 @@ class VectorStore:
             timeout=self.timeout,
             client=self._get_client(),
         )
+
+    async def local_embed(self, text: str) -> list[float]:
+        dimensions = self.dimensions if self.dimensions > 0 else 256
+        return await local_lexical_embed(text, dimensions)
 
     async def aclose(self) -> None:
         """关闭共享 httpx 客户端。"""

@@ -6,14 +6,14 @@
 """
 
 import time
-from typing import Any
+from typing import Any, cast
 
+from praxis.models.persistence import Checkpoint
 from praxis.models.session import (
     CheckpointInfo,
     SessionMetadata,
     SessionSnapshot,
 )
-from praxis.models.persistence import Checkpoint
 from praxis.persistence.store import PersistenceStore
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
@@ -115,7 +115,7 @@ class CheckpointManager:
         data = await self.store.load(CHECKPOINT_NAMESPACE, key)
         if data is None or not isinstance(data, dict):
             return None
-        return Checkpoint.model_validate(data)
+        return Checkpoint.from_storage(cast(object, data))
 
     async def load_latest(self, session_id: str) -> Checkpoint | None:
         """加载最新检查点。"""
@@ -148,7 +148,7 @@ class CheckpointManager:
             data = await self.store.load(CHECKPOINT_NAMESPACE, key)
             if data is None or not isinstance(data, dict):
                 continue
-            cp = Checkpoint.model_validate(data)
+            cp = Checkpoint.from_storage(cast(object, data))
             state = cp.state or {}
             meta = state.get("metadata", {})
             infos.append(CheckpointInfo(

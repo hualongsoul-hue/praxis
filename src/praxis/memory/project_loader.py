@@ -8,7 +8,7 @@
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import yaml
 
@@ -65,9 +65,12 @@ class ProjectMemoryLoader:
 
         frontmatter, body = self.split_frontmatter(text)
         project_name = frontmatter.get("project") or default_project_name
-        common_tags = frontmatter.get("tags") or []
-        if not isinstance(common_tags, list):
-            common_tags = []
+        raw_tags = cast(object, frontmatter.get("tags"))
+        common_tags = (
+            [str(item) for item in cast(list[object], raw_tags)]
+            if isinstance(raw_tags, list)
+            else []
+        )
 
         scope = MemoryScope(scope_type=ScopeType.PROJECT, scope_id=str(project_name))
 
@@ -88,7 +91,7 @@ class ProjectMemoryLoader:
                 scope=scope,
                 content=content,
                 summary=heading[:150],
-                tags=[str(t) for t in common_tags],
+                tags=common_tags,
                 metadata={
                     "source": PRELOAD_SOURCE,
                     "heading": heading,
@@ -114,12 +117,12 @@ class ProjectMemoryLoader:
         if match is None:
             return {}, text
         try:
-            data = yaml.safe_load(match.group(1)) or {}
+            data = cast(object, yaml.safe_load(match.group(1)) or {})
         except yaml.YAMLError:
             return {}, text
         if not isinstance(data, dict):
             return {}, text
-        return data, match.group(2)
+        return cast(dict[str, Any], data), match.group(2)
 
     @staticmethod
     def split_sections(body: str) -> list[tuple[str, str]]:

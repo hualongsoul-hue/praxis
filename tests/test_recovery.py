@@ -2,15 +2,13 @@
 
 import time
 
-import pytest
-
 from praxis.exceptions import (
     AuthenticationError,
     GatewayTimeoutError,
     RateLimitError,
-    SandboxViolationError,
     ToolExecutionError,
     ToolNotFoundError,
+    ToolPolicyViolationError,
     ToolTimeoutError,
 )
 from praxis.models.recovery import CircuitState, ErrorCategory, RecoveryStrategy
@@ -18,7 +16,6 @@ from praxis.recovery.circuit_breaker import CircuitBreaker, CircuitBreakerRegist
 from praxis.recovery.classifier import classify_error
 from praxis.recovery.fallback import FallbackRegistry
 from praxis.recovery.retry import RetryPolicy
-
 
 # ── Task 6.4: 错误分类 ─────────────────────────────────────────────────────
 
@@ -60,7 +57,7 @@ class TestErrorClassifier:
         assert result.strategy == RecoveryStrategy.ASK_USER
 
     def test_user_fixable_sandbox(self) -> None:
-        exc = SandboxViolationError("path blocked")
+        exc = ToolPolicyViolationError("path blocked")
         result = classify_error(exc)
         assert result.category == ErrorCategory.USER_FIXABLE
 

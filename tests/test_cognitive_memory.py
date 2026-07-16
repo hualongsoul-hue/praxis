@@ -19,8 +19,7 @@
 
 import asyncio
 import json
-from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -28,6 +27,7 @@ import pytest
 from praxis.config.schemas import MemoryConfig, PersistenceConfig
 from praxis.gateway.router import GatewayRouter
 from praxis.memory.consolidator import MemoryConsolidator
+from praxis.memory.core import CognitiveMemory
 from praxis.memory.dream import DreamConsolidator, DreamReport, DreamScheduler
 from praxis.memory.extractor import MemoryExtractor
 from praxis.memory.profile import ProfileManager
@@ -36,13 +36,11 @@ from praxis.memory.retention import RetentionManager
 from praxis.memory.retriever import MemoryRetriever
 from praxis.memory.scratchpad import Scratchpad
 from praxis.memory.store import ProfileStore, ScopedMemoryStore, entry_from_dict
-from praxis.memory.core import CognitiveMemory
 from praxis.memory.vector import VectorStore, cosine_similarity
 from praxis.memory.worker import BackgroundWorker
 from praxis.models.memory import (
     ConsolidationAction,
     EpisodicMemory,
-    MemoryEntry,
     MemoryScope,
     MemoryStatus,
     MemoryType,
@@ -54,7 +52,6 @@ from praxis.models.memory import (
     WorkingMemoryMessage,
 )
 from praxis.persistence.store import PersistenceStore, create_store
-
 
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
@@ -311,7 +308,7 @@ class TestRetriever:
         assert loaded is not None and loaded.access_count == 1
 
     def test_rerank_prefers_fresh_and_popular(self) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         recent = SemanticMemory(
             scope=MemoryScope(scope_type=ScopeType.GLOBAL),
             content="recent", updated_at=now, access_count=5, confidence=0.9,
@@ -372,7 +369,7 @@ class TestRetention:
         old = SemanticMemory(
             scope=MemoryScope(scope_type=ScopeType.GLOBAL),
             content="o",
-            updated_at=datetime.now(timezone.utc) - timedelta(days=30),
+            updated_at=datetime.now(UTC) - timedelta(days=30),
         )
         assert rm.compute_decay(old) == pytest.approx(0.5, abs=0.05)
 
@@ -387,9 +384,9 @@ class TestRetention:
         entry = SemanticMemory(
             scope=scope, content="极旧",
             access_count=0, confidence=0.01,
-            created_at=datetime.now(timezone.utc) - timedelta(days=365),
-            updated_at=datetime.now(timezone.utc) - timedelta(days=365),
-            last_accessed_at=datetime.now(timezone.utc) - timedelta(days=365),
+            created_at=datetime.now(UTC) - timedelta(days=365),
+            updated_at=datetime.now(UTC) - timedelta(days=365),
+            last_accessed_at=datetime.now(UTC) - timedelta(days=365),
         )
         await scoped.save(entry)
         assert await rm.run_decay_sweep(scope) == 1
@@ -400,7 +397,7 @@ class TestRetention:
         scoped = ScopedMemoryStore(store)
         rm = RetentionManager(scoped, store)
         scope = MemoryScope(scope_type=ScopeType.GLOBAL)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         # 高相关性（新、高置信、高访问）
         keep = SemanticMemory(
             scope=scope, content="高相关", confidence=0.95, access_count=20,
@@ -741,9 +738,9 @@ class TestDream:
         old = SemanticMemory(
             scope=scope, content="极旧记忆",
             access_count=0, confidence=0.01,
-            created_at=datetime.now(timezone.utc) - timedelta(days=365),
-            updated_at=datetime.now(timezone.utc) - timedelta(days=365),
-            last_accessed_at=datetime.now(timezone.utc) - timedelta(days=365),
+            created_at=datetime.now(UTC) - timedelta(days=365),
+            updated_at=datetime.now(UTC) - timedelta(days=365),
+            last_accessed_at=datetime.now(UTC) - timedelta(days=365),
         )
         await scoped.save(old)
 
@@ -768,9 +765,9 @@ class TestDream:
         scope = MemoryScope(scope_type=ScopeType.GLOBAL)
         old = SemanticMemory(
             scope=scope, content="极旧记忆", access_count=0, confidence=0.01,
-            created_at=datetime.now(timezone.utc) - timedelta(days=365),
-            updated_at=datetime.now(timezone.utc) - timedelta(days=365),
-            last_accessed_at=datetime.now(timezone.utc) - timedelta(days=365),
+            created_at=datetime.now(UTC) - timedelta(days=365),
+            updated_at=datetime.now(UTC) - timedelta(days=365),
+            last_accessed_at=datetime.now(UTC) - timedelta(days=365),
         )
         await scoped.save(old)
         response = make_chat_response(json.dumps({
@@ -1131,7 +1128,9 @@ class TestMemoryTools:
     ) -> None:
         """记忆工具应出现在会话的 general 阶段注入工具集中。"""
         from praxis.config.schemas import (
-            ContextConfig, OrchestratorConfig, SessionConfig,
+            ContextConfig,
+            OrchestratorConfig,
+            SessionConfig,
         )
         from praxis.guardrails.engine import GuardrailEngine
         from praxis.guardrails.permissions import PermissionManager

@@ -6,7 +6,7 @@
 from typing import Any
 
 from praxis.models.tools import ToolDefinition, ToolMetadata
-from praxis.tools.sandbox import Sandbox
+from praxis.tools.policy import ToolPolicy
 
 DEFINITION = ToolDefinition(
     name="read_file",
@@ -38,7 +38,7 @@ DEFINITION = ToolDefinition(
 )
 
 
-def create_handler(sandbox: Sandbox):
+def create_handler(sandbox: ToolPolicy):
     """创建绑定沙箱的处理函数。"""
 
     async def handle(args: dict[str, Any]) -> str:
@@ -59,7 +59,7 @@ def create_handler(sandbox: Sandbox):
         end = start + limit if limit else len(lines)
         selected = lines[start:end]
 
-        numbered = []
+        numbered: list[str] = []
         for i, line in enumerate(selected, start=start + 1):
             numbered.append(f"{i:>6}\t{line.rstrip()}")
         return "\n".join(numbered)

@@ -59,7 +59,7 @@ class CheckpointManager:
         data = await self._store.load(CHECKPOINT_NAMESPACE, checkpoint_id)
         if data is None:
             return None
-        cp = Checkpoint.model_validate(data)
+        cp = Checkpoint.from_storage(data)
         return cp.state
 
     async def list_checkpoints(self, session_id: str) -> list[Checkpoint]:
@@ -78,5 +78,5 @@ class CheckpointManager:
         for key in keys:
             data = await self._store.load(CHECKPOINT_NAMESPACE, key)
             if data is not None:
-                checkpoints.append(Checkpoint.model_validate(data))
+                checkpoints.append(Checkpoint.from_storage(data))
         return sorted(checkpoints, key=lambda c: c.created_at)

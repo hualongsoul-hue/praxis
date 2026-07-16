@@ -7,9 +7,10 @@ MCP 工具与内置工具在注册表中统一管理。
 from typing import Any
 
 from mcp import ClientSession
+from mcp.types import TextContent
 
-from praxis.models.mcp import MCPToolInfo, MCPToolResult
-from praxis.models.tools import ToolDefinition, ToolMetadata, ToolResult
+from praxis.models.mcp import MCPToolInfo
+from praxis.models.tools import ToolDefinition, ToolMetadata
 from praxis.telemetry.logger import get_logger
 from praxis.tools.registry import ToolRegistry
 
@@ -118,10 +119,10 @@ class MCPToolsBridge:
         # 提取文本内容
         texts: list[str] = []
         for content in result.content:
-            if hasattr(content, "text"):
+            if isinstance(content, TextContent):
                 texts.append(content.text)
-            elif hasattr(content, "data"):
-                texts.append(f"[binary data: {content.mimeType}]")
+            else:
+                texts.append(f"[{content.type} content]")
         return "\n".join(texts) if texts else ""
 
     async def refresh_tools(self, server_name: str) -> list[MCPToolInfo]:

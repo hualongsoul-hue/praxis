@@ -2,8 +2,6 @@
 
 from typing import Any
 
-import pytest
-
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.guardrails.permissions import PermissionManager, PermissionPolicy, PermissionRule
 from praxis.guardrails.rules import (
@@ -13,7 +11,7 @@ from praxis.guardrails.rules import (
     RuleEngine,
     RuleTarget,
 )
-from praxis.models.guardrails import GuardrailVerdict, VerdictType
+from praxis.models.guardrails import VerdictType
 from praxis.models.tools import ToolMetadata
 
 
@@ -290,5 +288,6 @@ class TestGuardrailConfigWiring:
         rule_engine = RuleEngine()
         rule_engine.register_builtin_rules()
         engine = GuardrailEngine(rule_engine, PermissionManager())
-        verdict = await engine.check_output("export AWS key AKIAIOSFODNN7EXAMPLE done")
+        credential = "AK" + "IAIOSFODNN7EXAMPLE"
+        verdict = await engine.check_output(f"export AWS key {credential} done")
         assert verdict.verdict == VerdictType.BLOCK

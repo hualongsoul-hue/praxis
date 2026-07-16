@@ -9,6 +9,7 @@ from typing import Any
 
 from praxis.models.skills import SkillDefinition
 from praxis.models.tools import ToolDefinition, ToolMetadata
+from praxis.skills.paths import resolve_skill_path
 from praxis.telemetry.logger import get_logger
 from praxis.tools.registry import ToolHandler, ToolRegistry
 
@@ -61,7 +62,7 @@ class SkillToolsBridge:
         base = Path(skill.base_path)
 
         for script_rel in skill.scripts:
-            script_path = base / script_rel
+            script_path = resolve_skill_path(base, script_rel)
             if not script_path.is_file():
                 continue
 

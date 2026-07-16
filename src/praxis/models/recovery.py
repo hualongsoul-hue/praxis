@@ -1,11 +1,11 @@
 """错误恢复数据模型——S9 内部及跨组件共享。"""
 
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel
 
 
-class ErrorCategory(str, Enum):
+class ErrorCategory(StrEnum):
     """错误分类类别。"""
 
     TRANSIENT = "transient"
@@ -14,7 +14,7 @@ class ErrorCategory(str, Enum):
     UNEXPECTED = "unexpected"
 
 
-class RecoveryStrategy(str, Enum):
+class RecoveryStrategy(StrEnum):
     """恢复策略建议。"""
 
     RETRY = "retry"
@@ -40,7 +40,7 @@ class RetryDecision(BaseModel):
     reason: str = ""
 
 
-class CircuitState(str, Enum):
+class CircuitState(StrEnum):
     """熔断器状态。"""
 
     CLOSED = "closed"

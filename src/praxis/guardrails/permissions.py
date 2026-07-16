@@ -24,7 +24,7 @@ class PermissionPolicy(BaseModel):
     """权限策略配置。"""
 
     default_permission: VerdictType = VerdictType.CONFIRM
-    rules: list[PermissionRule] = Field(default_factory=list)
+    rules: list[PermissionRule] = Field(default_factory=lambda: [])
 
 
 class PermissionManager:

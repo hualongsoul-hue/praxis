@@ -3,6 +3,8 @@
 允许同名自定义工具覆盖内置工具，覆盖后必须保持兼容的 Schema 接口契约。
 """
 
+from typing import Any, cast
+
 from praxis.exceptions import ToolError
 from praxis.models.tools import ToolDefinition
 from praxis.tools.registry import ToolHandler, ToolRegistry
@@ -39,8 +41,8 @@ def override_tool(
 
 
 def check_schema_compatibility(
-    original: dict,
-    override: dict,
+    original: dict[str, Any],
+    override: dict[str, Any],
 ) -> None:
     """检查覆盖 Schema 与原始 Schema 的兼容性。
 
@@ -49,8 +51,18 @@ def check_schema_compatibility(
     Raises:
         ToolError: Schema 不兼容。
     """
-    original_required = set(original.get("required", []))
-    override_props = set(override.get("properties", {}).keys())
+    raw_required = cast(object, original.get("required", []))
+    original_required: set[str] = (
+        {str(item) for item in cast(list[object], raw_required)}
+        if isinstance(raw_required, list)
+        else set()
+    )
+    raw_properties = cast(object, override.get("properties", {}))
+    override_props: set[str] = (
+        set(cast(dict[str, Any], raw_properties))
+        if isinstance(raw_properties, dict)
+        else set()
+    )
 
     missing = original_required - override_props
     if missing:

@@ -4,24 +4,18 @@ Agent 通过 MCP Server 执行外部任务 →
 Server 需要 LLM 分析（Sampling） → 用户确认（Elicitation）。
 """
 
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
+from mcp.types import TextContent
 
+from praxis.gateway.router import GatewayRouter
 from praxis.models.mcp import (
     MCPElicitationRequest,
     MCPElicitationResponse,
     MCPSamplingRequest,
-    MCPServerCapabilities,
-    MCPServerConfig,
     MCPServerStatus,
-    MCPToolInfo,
-    MCPToolResult,
-    MCPTransportType,
 )
-from praxis.gateway.router import GatewayRouter
-from praxis.tools.mcp.connection import MCPConnectionManager, MCPServerConnection
+from praxis.tools.mcp.connection import MCPConnectionManager
 from praxis.tools.mcp.elicitation import ElicitationManager
 from praxis.tools.mcp.sampling import SamplingManager
 from praxis.tools.mcp.tools import MCPToolsBridge
@@ -46,10 +40,10 @@ def make_mock_session() -> MagicMock:
     tools_result.tools = [mock_tool]
     session.list_tools = AsyncMock(return_value=tools_result)
 
-    mock_call_content = MagicMock()
-    mock_call_content.text = "航班已预订: NYC → BCN, 确认号 FL-2025"
     call_result = MagicMock()
-    call_result.content = [mock_call_content]
+    call_result.content = [
+        TextContent(type="text", text="航班已预订: NYC → BCN, 确认号 FL-2025")
+    ]
     session.call_tool = AsyncMock(return_value=call_result)
 
     return session

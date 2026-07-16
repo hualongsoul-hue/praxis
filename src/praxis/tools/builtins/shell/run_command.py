@@ -1,32 +1,23 @@
-"""内置工具：run_command。
+"""内置 Shell 工具；仅适用于可信命令，非 OS 沙箱。"""
 
-在子进程中执行 Shell 命令，支持超时和工作目录。
-"""
-
-import asyncio
 from typing import Any
 
 from praxis.models.tools import ToolDefinition, ToolMetadata
-from praxis.tools.sandbox import Sandbox
+from praxis.tools.policy import ToolPolicy
+from praxis.tools.process import ProcessRunner
 
 DEFINITION = ToolDefinition(
     name="run_command",
-    description="在子进程中执行 Shell 命令。返回 stdout、stderr 和退出码。",
+    description=(
+        "在受限工作目录和环境变量下执行可信 Shell 命令。"
+        "不可信命令必须放入容器或操作系统沙箱。"
+    ),
     parameters={
         "type": "object",
         "properties": {
-            "command": {
-                "type": "string",
-                "description": "要执行的 Shell 命令",
-            },
-            "cwd": {
-                "type": "string",
-                "description": "工作目录（绝对路径），默认当前目录",
-            },
-            "timeout": {
-                "type": "number",
-                "description": "超时秒数，默认使用沙箱配置",
-            },
+            "command": {"type": "string", "minLength": 1},
+            "cwd": {"type": "string"},
+            "timeout": {"type": "number", "exclusiveMinimum": 0},
         },
         "required": ["command"],
     },
@@ -34,47 +25,32 @@ DEFINITION = ToolDefinition(
         category="shell",
         permission_level="confirm",
         readonly=False,
+        idempotent=False,
         timeout_seconds=120.0,
         tags=["shell", "command"],
     ),
 )
 
 
-def create_handler(sandbox: Sandbox):
-    """创建绑定沙箱的处理函数。"""
+def create_handler(policy: ToolPolicy, runner: ProcessRunner | None = None):
+    process_runner = runner or ProcessRunner()
 
     async def handle(args: dict[str, Any]) -> str:
-        command = args["command"]
-        cwd = args.get("cwd")
-        timeout = args.get("timeout", sandbox.shell_timeout)
-
-        if cwd:
-            sandbox.check_path(cwd)
-
-        proc = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+        policy.check_shell()
+        cwd_arg = args.get("cwd")
+        cwd = policy.check_path(cwd_arg) if cwd_arg else policy.default_working_directory
+        timeout = min(float(args.get("timeout", policy.shell_timeout)), policy.shell_timeout)
+        result = await process_runner.run_shell(
+            str(args["command"]),
             cwd=cwd,
+            timeout=timeout,
+            environment=policy.shell_environment(),
         )
-
-        try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout
-            )
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            return f"命令超时（{timeout}s）: {command}"
-
-        stdout = stdout_bytes.decode("utf-8", errors="replace").rstrip()
-        stderr = stderr_bytes.decode("utf-8", errors="replace").rstrip()
-
-        parts: list[str] = [f"Exit code: {proc.returncode}"]
-        if stdout:
-            parts.append(f"stdout:\n{stdout}")
-        if stderr:
-            parts.append(f"stderr:\n{stderr}")
+        parts = [f"Exit code: {result.returncode}"]
+        if result.stdout:
+            parts.append(f"stdout:\n{result.stdout}")
+        if result.stderr:
+            parts.append(f"stderr:\n{result.stderr}")
         return "\n".join(parts)
 
     return handle

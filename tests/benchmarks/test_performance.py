@@ -8,7 +8,6 @@
 - 护栏裁决: <10ms
 """
 
-import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,13 +30,12 @@ from praxis.guardrails.permissions import PermissionManager
 from praxis.guardrails.rules import GuardrailRule, RuleEngine, RuleTarget
 from praxis.models.context import TurnContext
 from praxis.models.guardrails import VerdictType
-from praxis.models.tools import ToolDefinition, ToolMetadata
+from praxis.models.tools import ToolDefinition
 from praxis.persistence.store import PersistenceStore, create_store
 from praxis.session.core import SessionFactory
 from praxis.tools.executor import ToolExecutor
+from praxis.tools.policy import ToolPolicy
 from praxis.tools.registry import ToolRegistry
-from praxis.tools.sandbox import Sandbox
-
 
 # ── 辅助 ──────────────────────────────────────────────────────────────────
 
@@ -209,7 +207,7 @@ class TestToolExecutionPerformance:
             fast_handler,
         )
 
-        sandbox = Sandbox(ToolsConfig())
+        sandbox = ToolPolicy(ToolsConfig())
         executor = ToolExecutor(registry, sandbox)
 
         # 预热

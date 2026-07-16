@@ -4,6 +4,9 @@
 键格式：``praxis:{namespace}:{key}``。
 """
 
+from collections.abc import AsyncIterator, Awaitable
+from typing import cast
+
 import redis.asyncio as aioredis
 
 from praxis.exceptions import PersistenceError
@@ -23,7 +26,10 @@ class RedisBackend:
         if not url:
             raise PersistenceError("Redis 后端需要配置 redis_url")
         client = aioredis.from_url(url, decode_responses=False)
-        await client.ping()
+        await cast(
+            Awaitable[bool],
+            client.ping(),  # pyright: ignore[reportUnknownMemberType]
+        )
         return cls(client)
 
     def _full_key(self, namespace: str, key: str) -> str:
@@ -31,6 +37,10 @@ class RedisBackend:
 
     async def save(self, namespace: str, key: str, data: bytes) -> None:
         await self._client.set(self._full_key(namespace, key), data)
+
+    async def save_if_absent(self, namespace: str, key: str, data: bytes) -> bool:
+        created = await self._client.set(self._full_key(namespace, key), data, nx=True)
+        return bool(created)
 
     async def load(self, namespace: str, key: str) -> bytes | None:
         result = await self._client.get(self._full_key(namespace, key))
@@ -48,7 +58,11 @@ class RedisBackend:
             pattern = f"{KEY_PREFIX}:{namespace}:*"
         strip_prefix = f"{KEY_PREFIX}:{namespace}:"
         keys: list[str] = []
-        async for raw_key in self._client.scan_iter(match=pattern):
+        iterator = cast(
+            AsyncIterator[bytes | str],
+            self._client.scan_iter(match=pattern),  # pyright: ignore[reportUnknownMemberType]
+        )
+        async for raw_key in iterator:
             decoded = raw_key.decode("utf-8") if isinstance(raw_key, bytes) else raw_key
             keys.append(decoded.removeprefix(strip_prefix))
         return sorted(keys)
@@ -56,9 +70,18 @@ class RedisBackend:
     async def clear_namespace(self, namespace: str) -> int:
         pattern = f"{KEY_PREFIX}:{namespace}:*"
         count = 0
-        async for raw_key in self._client.scan_iter(match=pattern):
-            await self._client.delete(raw_key)
-            count += 1
+        batch: list[bytes | str] = []
+        iterator = cast(
+            AsyncIterator[bytes | str],
+            self._client.scan_iter(match=pattern),  # pyright: ignore[reportUnknownMemberType]
+        )
+        async for raw_key in iterator:
+            batch.append(raw_key)
+            if len(batch) >= 500:
+                count += int(await self._client.delete(*batch))
+                batch.clear()
+        if batch:
+            count += int(await self._client.delete(*batch))
         return count
 
     async def close(self) -> None:

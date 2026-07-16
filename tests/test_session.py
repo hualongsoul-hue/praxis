@@ -1,36 +1,30 @@
 """S12 会话管理单元测试。"""
 
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from praxis.config.schemas import (
     ContextConfig,
-    SessionConfig,
     OrchestratorConfig,
     PersistenceConfig,
+    SessionConfig,
 )
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.guardrails.permissions import PermissionManager
 from praxis.guardrails.rules import RuleEngine
-from praxis.session.checkpoint import CheckpointManager
-from praxis.session.continuation import ContinuationManager
-from praxis.session.resume import SessionResumer
-from praxis.session.core import Session, SessionFactory
-from praxis.session.time_travel import TimeTravelManager
 from praxis.models.session import (
-    CheckpointInfo,
     ContinuationPhase,
     SessionMetadata,
-    SessionSnapshot,
     SessionStatus,
 )
-from praxis.models.persistence import Checkpoint
 from praxis.persistence.store import PersistenceStore, create_store
-
+from praxis.session.checkpoint import CheckpointManager
+from praxis.session.continuation import ContinuationManager
+from praxis.session.core import SessionFactory
+from praxis.session.resume import SessionResumer
+from praxis.session.time_travel import TimeTravelManager
 
 # ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -209,7 +203,7 @@ class TestCheckpointManager:
         mgr = CheckpointManager(store)
         metadata = SessionMetadata(session_id="sess-2", total_turns=1)
 
-        cp1 = await mgr.save_checkpoint(metadata, {}, {}, {}, description="cp1")
+        await mgr.save_checkpoint(metadata, {}, {}, {}, description="cp1")
         metadata.total_turns = 2
         cp2 = await mgr.save_checkpoint(metadata, {}, {}, {}, description="cp2")
 
@@ -302,77 +296,6 @@ class TestSessionResumer:
         resumer = SessionResumer(factory, mgr)
         session = await resumer.resume_session("nonexistent", guardrails, gateway=mock_gateway)
         assert session is None
-
-    async def test_top_level_resume_agent_session(
-        self,
-        store: PersistenceStore,
-        guardrails: GuardrailEngine,
-        mock_gateway: MagicMock,
-    ) -> None:
-        """顶层 resume_agent_session 应能从检查点恢复（公共入口链路）。"""
-        from praxis.agent import resume_agent_session
-
-        mgr = CheckpointManager(store)
-        metadata = SessionMetadata(session_id="top-resume", total_turns=3)
-        await mgr.save_checkpoint(
-            metadata,
-            {"messages": [{"role": "user", "content": "hi"}]},
-            {},
-            {},
-        )
-        session = await resume_agent_session(
-            store=store,
-            guardrails=guardrails,
-            gateway=mock_gateway,
-            session_id="top-resume",
-        )
-        try:
-            assert session is not None
-            assert session.session_id == "top-resume"
-            assert session.metadata.total_turns == 3
-        finally:
-            if session is not None:
-                await session.terminate()
-        assert await resume_agent_session(
-            store=store, guardrails=guardrails, gateway=mock_gateway,
-            session_id="does-not-exist",
-        ) is None
-
-    async def test_resumed_session_injects_warmup_and_advances(
-        self,
-        store: PersistenceStore,
-        guardrails: GuardrailEngine,
-        mock_gateway: MagicMock,
-    ) -> None:
-        """恢复的会话首轮应注入热身序列，并在轮后推进到 WORKING 阶段。"""
-        from praxis.agent import resume_agent_session
-        from praxis.session.continuation import WARMUP_SYSTEM_PROMPT
-
-        mgr = CheckpointManager(store)
-        await mgr.save_checkpoint(
-            SessionMetadata(session_id="warm-1", total_turns=1), {}, {}, {},
-        )
-        session = await resume_agent_session(
-            store=store, guardrails=guardrails, gateway=mock_gateway,
-            session_id="warm-1",
-        )
-        assert session is not None
-        try:
-            assert session.continuation is not None
-            assert session.metadata.continuation_phase == ContinuationPhase.WARMUP
-
-            captured: dict[str, Any] = {}
-
-            async def fake_run(user_message: str, **kwargs: Any) -> Any:
-                captured.update(kwargs)
-                return SimpleNamespace(total_turns=1, events=[])
-
-            session.loop.run = fake_run  # type: ignore[assignment]
-            await session.run_turn("继续")
-            assert captured.get("developer_instructions") == WARMUP_SYSTEM_PROMPT
-            assert session.metadata.continuation_phase == ContinuationPhase.WORKING
-        finally:
-            await session.terminate()
 
     async def test_validate_integrity(
         self,

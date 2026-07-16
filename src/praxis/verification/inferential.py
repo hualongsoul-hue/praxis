@@ -5,7 +5,6 @@
 """
 
 import time
-from typing import Any
 
 from praxis.gateway.router import GatewayRouter
 from praxis.gateway.tasks import judge
@@ -30,11 +29,9 @@ class InferentialVerifier:
     def __init__(
         self,
         gateway: GatewayRouter,
-        model: str | None = None,
         pass_threshold: float = 0.7,
     ) -> None:
         self.gateway = gateway
-        self.model = model
         self.pass_threshold = pass_threshold
 
     async def verify(
@@ -65,7 +62,7 @@ class InferentialVerifier:
                 self.gateway,
                 criteria=full_criteria,
                 content=content,
-                model=self.model,
+                model=self.gateway.config.default_model,
             )
         except Exception as exc:
             elapsed = (time.perf_counter() - start) * 1000
@@ -115,7 +112,6 @@ async def run_inferential(
     gateway: GatewayRouter,
     criteria: str,
     content: str,
-    model: str | None = None,
     pass_threshold: float = 0.7,
     dimensions: list[str] | None = None,
 ) -> VerificationResult:
@@ -125,12 +121,11 @@ async def run_inferential(
         gateway: S4 网关路由器。
         criteria: 评估标准。
         content: 待评估内容。
-        model: 模型别名。
         pass_threshold: 通过阈值。
         dimensions: 评估维度列表。
 
     Returns:
         验证结果。
     """
-    verifier = InferentialVerifier(gateway, model=model, pass_threshold=pass_threshold)
+    verifier = InferentialVerifier(gateway, pass_threshold=pass_threshold)
     return await verifier.verify(criteria, content, dimensions=dimensions)

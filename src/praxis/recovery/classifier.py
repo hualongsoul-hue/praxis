@@ -14,9 +14,9 @@ from praxis.exceptions import (
     PraxisError,
     ProviderUnavailableError,
     RateLimitError,
-    SandboxViolationError,
     ToolExecutionError,
     ToolNotFoundError,
+    ToolPolicyViolationError,
     ToolTimeoutError,
 )
 from praxis.models.recovery import (
@@ -42,7 +42,7 @@ MODEL_RECOVERABLE_TYPES: set[type] = {
 USER_FIXABLE_TYPES: set[type] = {
     AuthenticationError,
     BudgetExceededError,
-    SandboxViolationError,
+    ToolPolicyViolationError,
     GuardrailError,
 }
 

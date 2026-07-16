@@ -5,6 +5,7 @@
 """
 
 from praxis.memory.consolidator import ConsolidationResult, MemoryConsolidator
+from praxis.memory.core import CognitiveMemory
 from praxis.memory.dream import DreamConsolidator, DreamReport, DreamScheduler
 from praxis.memory.extractor import MemoryExtractor
 from praxis.memory.profile import ProfileManager
@@ -13,12 +14,12 @@ from praxis.memory.retention import RetentionManager
 from praxis.memory.retriever import MemoryRetriever
 from praxis.memory.scratchpad import Scratchpad
 from praxis.memory.store import ProfileStore, ScopedMemoryStore, entry_from_dict
-from praxis.memory.core import CognitiveMemory
 from praxis.memory.vector import VectorStore, cosine_similarity, tei_embed
 from praxis.memory.worker import BackgroundWorker
 
 __all__ = [
     "BackgroundWorker",
+    "CognitiveMemory",
     "ConsolidationResult",
     "DreamConsolidator",
     "DreamReport",
@@ -26,7 +27,6 @@ __all__ = [
     "MemoryConsolidator",
     "MemoryExtractor",
     "MemoryRetriever",
-    "CognitiveMemory",
     "ProfileManager",
     "ProfileStore",
     "ProjectMemoryLoader",

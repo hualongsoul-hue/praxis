@@ -4,7 +4,7 @@
 """
 
 import math
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from praxis.memory.store import ScopedMemoryStore
@@ -42,7 +42,7 @@ class RetentionManager:
 
     def compute_decay(self, entry: MemoryEntry) -> float:
         """指数衰减：factor = 0.5 ^ (age_days / half_life)。"""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         age_days = (now - entry.updated_at).total_seconds() / 86400.0
         return math.pow(0.5, age_days / self.decay_half_life_days)
 
@@ -59,7 +59,7 @@ class RetentionManager:
         """将记忆标记为 INACTIVE（动态遗忘）。不物理删除。"""
         await self.save_version(entry, reason or "标记为 INACTIVE（动态遗忘）")
         entry.status = MemoryStatus.INACTIVE
-        entry.updated_at = datetime.now(timezone.utc)
+        entry.updated_at = datetime.now(UTC)
         await self.scoped_store.update(entry)
 
         log.info("记忆标记为 INACTIVE", memory_id=entry.memory_id, reason=reason)
@@ -85,7 +85,7 @@ class RetentionManager:
 
         old_entry.status = MemoryStatus.SUPERSEDED
         old_entry.superseded_by = new_entry.memory_id
-        old_entry.updated_at = datetime.now(timezone.utc)
+        old_entry.updated_at = datetime.now(UTC)
         await self.scoped_store.update(old_entry)
 
         new_entry.version = old_entry.version + 1
@@ -137,7 +137,7 @@ class RetentionManager:
         """执行衰减扫描，将低相关性记忆标记为 INACTIVE。"""
         entries = await self.scoped_store.list_scope(scope)
         count = 0
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         for entry in entries:
             last_access = entry.last_accessed_at or entry.created_at

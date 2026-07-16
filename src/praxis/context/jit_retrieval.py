@@ -15,7 +15,7 @@ log = get_logger("context.jit_retrieval")
 class IdentifierEntry:
     """轻量级标识符条目。"""
 
-    __slots__ = ("identifier", "kind", "source", "metadata")
+    __slots__ = ("identifier", "kind", "metadata", "source")
 
     def __init__(
         self,
@@ -33,7 +33,7 @@ class IdentifierEntry:
 class FewShotExample:
     """Few-shot 示例。"""
 
-    __slots__ = ("task_type", "user_message", "assistant_response", "tags")
+    __slots__ = ("assistant_response", "tags", "task_type", "user_message")
 
     def __init__(
         self,

@@ -1,30 +1,70 @@
-"""Praxis 通用接口协议。
+"""Runtime 依赖倒置边界的公共 Protocol。"""
 
-定义跨组件共享的 Protocol，用于类型检查和依赖注入。
-"""
-
+from collections.abc import AsyncIterator
 from typing import Any, Protocol, runtime_checkable
 
-
-@runtime_checkable
-class Exportable(Protocol):
-    """可导出/导入状态的组件协议。
-
-    实现者：S6（记忆系统）、S7（上下文引擎）。
-    消费者：S12（生命周期管理）在检查点保存/恢复时调用。
-    """
-
-    async def export_state(self) -> dict[str, Any]: ...
-
-    async def import_state(self, state: dict[str, Any]) -> None: ...
+from praxis.config.schemas import GatewayConfig
+from praxis.models.responses import ModelResponse, ModelResponseChunk
+from praxis.models.telemetry import AuditEvent
+from praxis.models.tools import ApprovalDecision, ApprovalRequest
+from praxis.persistence.store import StorageBackend
 
 
 @runtime_checkable
-class SessionAware(Protocol):
-    """感知会话生命周期的组件协议。
+class ModelGateway(Protocol):
+    @property
+    def config(self) -> GatewayConfig: ...
 
-    实现者：S6（记忆系统）。
-    消费者：S12（生命周期管理）在会话终止时调用。
-    """
+    async def complete(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> ModelResponse: ...
 
-    async def clear_session(self) -> None: ...
+    def stream(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        model: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ModelResponseChunk]: ...
+
+    async def health(self) -> bool: ...
+
+    def supports_vision(self, model_name: str | None = None) -> bool: ...
+
+    async def close(self) -> None: ...
+
+
+@runtime_checkable
+class AuditSink(Protocol):
+    async def record(self, event: AuditEvent) -> None: ...
+
+    async def flush(self) -> None: ...
+
+    async def close(self) -> None: ...
+
+
+@runtime_checkable
+class ApprovalHandler(Protocol):
+    async def request_approval(self, request: ApprovalRequest) -> ApprovalDecision: ...
+
+
+@runtime_checkable
+class EmbeddingProvider(Protocol):
+    async def embed(self, text: str) -> list[float]: ...
+
+    async def close(self) -> None: ...
+
+
+__all__ = [
+    "ApprovalHandler",
+    "AuditSink",
+    "EmbeddingProvider",
+    "ModelGateway",
+    "StorageBackend",
+]

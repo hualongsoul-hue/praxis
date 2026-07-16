@@ -89,7 +89,18 @@ class HandoffManager:
         await self.resource_ctrl.acquire(spec.subagent_id)
 
         try:
-            result = await self.run_handoff(spec)
+            task = self.resource_ctrl.create_task(
+                spec.subagent_id,
+                self.run_handoff(spec),
+            )
+            result = await task
+        except asyncio.CancelledError:
+            result = SubagentResult(
+                subagent_id=spec.subagent_id,
+                mode=SubagentMode.HANDOFF,
+                status=SubagentStatus.CANCELLED,
+                summary="Handoff 已取消。",
+            )
         finally:
             self.resource_ctrl.release(spec.subagent_id)
 
@@ -126,7 +137,7 @@ class HandoffManager:
                 summary=response.content,
                 total_turns=response.total_turns,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             session.abort()
             return SubagentResult(
                 subagent_id=spec.subagent_id,
@@ -142,3 +153,5 @@ class HandoffManager:
                 status=SubagentStatus.FAILED,
                 summary=f"执行失败: {exc}",
             )
+        finally:
+            await self.isolation.close_session(session)

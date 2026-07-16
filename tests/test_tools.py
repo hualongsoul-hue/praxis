@@ -1,5 +1,8 @@
 """S5 工具系统验证测试。"""
 
+import asyncio
+import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -7,31 +10,33 @@ import pytest
 
 from praxis.config.schemas import ToolsConfig
 from praxis.exceptions import (
-    SandboxViolationError,
     ToolError,
     ToolNotFoundError,
+    ToolPolicyViolationError,
     ToolTimeoutError,
 )
 from praxis.models.tools import ToolDefinition, ToolMetadata
+from praxis.tools.builtins.network import web_fetch
 from praxis.tools.builtins.registration import register_builtins
 from praxis.tools.executor import ToolExecutor, validate_arguments
 from praxis.tools.override import override_tool
+from praxis.tools.policy import ToolPolicy
+from praxis.tools.process import ProcessRunner
 from praxis.tools.registry import ToolRegistry
-from praxis.tools.sandbox import Sandbox
 
 
-def make_sandbox(tmp_path: Path) -> Sandbox:
+def make_sandbox(tmp_path: Path) -> ToolPolicy:
     config = ToolsConfig(
         allowed_paths=[str(tmp_path)],
         default_timeout=5.0,
         shell_timeout=10.0,
     )
-    return Sandbox(config)
+    return ToolPolicy(config.model_copy(update={"shell_enabled": True}))
 
 
-def make_sandbox_open() -> Sandbox:
-    """无路径限制的沙箱（测试用）。"""
-    return Sandbox(ToolsConfig())
+def make_sandbox_open() -> ToolPolicy:
+    """启用非文件能力的测试策略。"""
+    return ToolPolicy(ToolsConfig(network_allowed=True))
 
 
 # ── Task 5.1: 工具注册表 ─────────────────────────────────────────────────────
@@ -357,8 +362,8 @@ class TestExecutor:
 # ── Task 5.6: 沙箱与工具覆盖 ────────────────────────────────────────────────
 
 
-class TestSandbox:
-    """Task 5.6: 沙箱执行环境验证。"""
+class TestToolPolicy:
+    """Task 5.6: 工具授权策略验证。"""
 
     def test_path_in_whitelist(self, tmp_path: Path) -> None:
         sandbox = make_sandbox(tmp_path)
@@ -367,22 +372,108 @@ class TestSandbox:
 
     def test_path_outside_whitelist_raises(self, tmp_path: Path) -> None:
         sandbox = make_sandbox(tmp_path)
-        with pytest.raises(SandboxViolationError, match="不在沙箱白名单内"):
+        with pytest.raises(ToolPolicyViolationError, match="不在工具授权根目录内"):
             sandbox.check_path("/etc/passwd")
 
-    def test_empty_whitelist_allows_all(self) -> None:
-        sandbox = Sandbox(ToolsConfig(allowed_paths=[]))
-        result = sandbox.check_path("/any/path")
-        assert result is not None
+    def test_empty_roots_deny_all(self) -> None:
+        policy = ToolPolicy(ToolsConfig(allowed_paths=[]))
+        with pytest.raises(ToolPolicyViolationError, match="未配置授权根目录"):
+            policy.check_path("/any/path")
 
     def test_network_allowed(self) -> None:
-        sandbox = Sandbox(ToolsConfig(network_allowed=True))
+        sandbox = ToolPolicy(ToolsConfig(network_allowed=True))
         sandbox.check_network()
 
     def test_network_blocked_raises(self) -> None:
-        sandbox = Sandbox(ToolsConfig(network_allowed=False))
-        with pytest.raises(SandboxViolationError, match="网络出站访问被沙箱策略禁止"):
+        sandbox = ToolPolicy(ToolsConfig(network_allowed=False))
+        with pytest.raises(ToolPolicyViolationError, match="网络出站访问被工具策略禁止"):
             sandbox.check_network()
+
+    async def test_rejects_invalid_url_port(self) -> None:
+        policy = ToolPolicy(ToolsConfig(network_allowed=True))
+        with pytest.raises(ToolPolicyViolationError, match="端口"):
+            await policy.check_url("https://example.com:invalid/")
+
+
+class TestProcessRunner:
+    async def test_timeout_terminates_process_tree(self, tmp_path: Path) -> None:
+        runner = ProcessRunner()
+        command = f'"{sys.executable}" -c "import time; time.sleep(30)"'
+        with pytest.raises(ToolTimeoutError, match="超时"):
+            await runner.run_shell(
+                command,
+                cwd=tmp_path,
+                timeout=0.1,
+                environment=dict(os.environ),
+            )
+
+    async def test_cancellation_terminates_process_tree(self, tmp_path: Path) -> None:
+        runner = ProcessRunner()
+        command = f'"{sys.executable}" -c "import time; time.sleep(30)"'
+        task = asyncio.create_task(runner.run_shell(
+            command,
+            cwd=tmp_path,
+            timeout=30,
+            environment=dict(os.environ),
+        ))
+        await asyncio.sleep(0.1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=5)
+
+
+class TestWebFetchSecurity:
+    async def test_validates_every_redirect_and_blocks_private_target(self) -> None:
+        import httpx
+
+        policy = ToolPolicy(ToolsConfig(
+            network_allowed=True,
+            allow_private_networks=True,
+        ))
+        checked: list[str] = []
+
+        async def check_url(url: str) -> str:
+            checked.append(url)
+            if "127.0.0.1" in url:
+                raise ToolPolicyViolationError("private redirect")
+            return url
+
+        policy.check_url = check_url  # type: ignore[method-assign]
+        client = httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                302,
+                headers={"location": "http://127.0.0.1/x"},
+            )
+        ))
+        try:
+            handler = web_fetch.create_handler(policy, client)
+            with pytest.raises(ToolPolicyViolationError, match="private redirect"):
+                await handler({"url": "https://example.com/start"})
+        finally:
+            await client.aclose()
+        assert checked == ["https://example.com/start", "http://127.0.0.1/x"]
+
+    async def test_enforces_streamed_byte_limit(self) -> None:
+        import httpx
+
+        policy = ToolPolicy(ToolsConfig(
+            network_allowed=True,
+            allow_private_networks=True,
+            network_max_response_bytes=5,
+        ))
+        client = httpx.AsyncClient(transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, content=b"0123456789")
+        ))
+        try:
+            result = await web_fetch.create_handler(policy, client)({
+                "url": "https://example.com/data",
+                "max_bytes": 999,
+            })
+        finally:
+            await client.aclose()
+        assert "01234" in result
+        assert "012345" not in result
+        assert "已截断" in result
 
 
 class TestOverride:

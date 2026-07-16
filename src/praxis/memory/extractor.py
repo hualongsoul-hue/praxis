@@ -4,7 +4,7 @@
 按类型实例化 SemanticMemory/EpisodicMemory/ProceduralMemory 保留结构化字段。
 """
 
-from typing import Any
+from typing import Any, cast
 
 from json_repair import repair_json
 
@@ -181,9 +181,13 @@ class MemoryExtractor:
     @staticmethod
     def parse_response(raw_text: str) -> list[dict[str, Any]]:
         """容错解析 JSON 数组。"""
-        data = repair_json(raw_text, return_objects=True)
+        data = cast(object, repair_json(raw_text, return_objects=True))
         if isinstance(data, list):
-            return data
+            return [
+                cast(dict[str, Any], item)
+                for item in cast(list[object], data)
+                if isinstance(item, dict)
+            ]
         log.warning("记忆提取响应解析失败", raw_preview=raw_text[:200])
         return []
 
@@ -192,6 +196,12 @@ class MemoryExtractor:
         if not isinstance(raw, (int, float)):
             return 0.8
         return max(0.0, min(1.0, float(raw)))
+
+    @staticmethod
+    def string_list(raw: object) -> list[str]:
+        if not isinstance(raw, list):
+            return []
+        return [str(item) for item in cast(list[object], raw)]
 
     @staticmethod
     def build_entry(
@@ -204,38 +214,47 @@ class MemoryExtractor:
         if not content:
             return None
 
-        tags = item.get("tags") or []
-        if not isinstance(tags, list):
-            tags = []
+        tags = MemoryExtractor.string_list(cast(object, item.get("tags")))
 
         confidence = MemoryExtractor.clamp_confidence(item.get("confidence", 0.8))
-        base_fields = dict(
-            scope=scope,
-            content=content,
-            summary=content[:150],
-            tags=tags,
-            confidence=confidence,
-            metadata={"source": "extraction", "extraction_type": memory_type.value},
-        )
+        metadata: dict[str, Any] = {
+            "source": "extraction",
+            "extraction_type": memory_type.value,
+        }
 
         if memory_type == MemoryType.EPISODIC:
             return EpisodicMemory(
-                **base_fields,
+                scope=scope,
+                content=content,
+                summary=content[:150],
+                tags=tags,
+                confidence=confidence,
+                metadata=metadata,
                 context_description=str(item.get("context_description", "")),
                 reasoning=str(item.get("reasoning", "")),
                 action_taken=str(item.get("action_taken", "")),
                 outcome=str(item.get("outcome", "")),
             )
         if memory_type == MemoryType.PROCEDURAL:
-            steps = item.get("steps") or []
-            scenarios = item.get("applicable_scenarios") or []
-            if not isinstance(steps, list):
-                steps = []
-            if not isinstance(scenarios, list):
-                scenarios = []
-            return ProceduralMemory(
-                **base_fields,
-                steps=[str(s) for s in steps],
-                applicable_scenarios=[str(s) for s in scenarios],
+            steps = MemoryExtractor.string_list(cast(object, item.get("steps")))
+            scenarios = MemoryExtractor.string_list(
+                cast(object, item.get("applicable_scenarios")),
             )
-        return SemanticMemory(**base_fields)
+            return ProceduralMemory(
+                scope=scope,
+                content=content,
+                summary=content[:150],
+                tags=tags,
+                confidence=confidence,
+                metadata=metadata,
+                steps=steps,
+                applicable_scenarios=scenarios,
+            )
+        return SemanticMemory(
+            scope=scope,
+            content=content,
+            summary=content[:150],
+            tags=tags,
+            confidence=confidence,
+            metadata=metadata,
+        )
