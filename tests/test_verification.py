@@ -407,19 +407,23 @@ class TestVerifierRegistry:
         assert result.status == VerificationStatus.SKIP
 
     async def test_run_visual_skips_when_default_model_lacks_vision(self) -> None:
+        from praxis.config.schemas import ModelCapabilities
+
         gateway = MagicMock()
-        gateway.supports_vision.return_value = False
+        gateway.capabilities.return_value = ModelCapabilities()
         reg = VerifierRegistry(gateway=gateway, visual_enabled=True)
 
         result = await reg.run_visual(url="https://example.com", expectations="ok")
 
         assert result.status is VerificationStatus.SKIP
         assert "视觉能力" in result.feedback
-        gateway.supports_vision.assert_called_once_with()
+        gateway.capabilities.assert_called_once_with()
 
     async def test_run_visual_reports_missing_optional_dependency(self) -> None:
+        from praxis.config.schemas import ModelCapabilities
+
         gateway = MagicMock()
-        gateway.supports_vision.return_value = True
+        gateway.capabilities.return_value = ModelCapabilities(image=True)
         reg = VerifierRegistry(gateway=gateway, visual_enabled=True)
 
         with (

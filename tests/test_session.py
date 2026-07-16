@@ -1,19 +1,28 @@
 """S12 会话管理单元测试。"""
 
+from collections.abc import AsyncIterator
 from pathlib import Path
-from unittest.mock import MagicMock
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from praxis.config.schemas import (
     ContextConfig,
+    InputConfig,
+    ModelCapabilities,
     OrchestratorConfig,
     PersistenceConfig,
     SessionConfig,
 )
+from praxis.exceptions import UnsupportedInputModalityError
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.guardrails.permissions import PermissionManager
 from praxis.guardrails.rules import RuleEngine
+from praxis.models.inputs import ImageInput, UserInput
+from praxis.models.messages import ResolvedUserInput
+from praxis.models.orchestrator import AgentEvent
+from praxis.models.responses import ModelResponse, Usage
 from praxis.models.session import (
     ContinuationPhase,
     SessionMetadata,
@@ -72,6 +81,155 @@ class TestSessionFactory:
             assert session.loop is not None
             assert session.assembler is not None
             assert session.registry is not None
+        finally:
+            await session.terminate()
+
+    async def test_unsupported_modality_is_rejected_before_orchestration(
+        self,
+        store: PersistenceStore,
+        guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
+    ) -> None:
+        mock_gateway.capabilities.return_value = ModelCapabilities()
+        factory = SessionFactory(
+            store=store,
+            session_config=SessionConfig(auto_checkpoint=False),
+            orchestrator_config=OrchestratorConfig(),
+            context_config=ContextConfig(),
+            input_config=InputConfig(),
+        )
+        session = await factory.create_session(
+            guardrails=guardrails,
+            gateway=mock_gateway,
+        )
+        user_input = UserInput(
+            text="describe",
+            parts=(ImageInput.from_bytes(b"png", media_type="image/png"),),
+        )
+        try:
+            with pytest.raises(UnsupportedInputModalityError):
+                await session.run_turn(user_input)
+            assert session.assembler.conversation_history == []
+            assert session.loop.state.current_turn == 0
+        finally:
+            await session.terminate()
+
+    async def test_run_and_stream_each_resolve_input_exactly_once(
+        self,
+        store: PersistenceStore,
+        guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
+    ) -> None:
+        mock_gateway.capabilities.return_value = ModelCapabilities(image=True)
+        factory = SessionFactory(
+            store=store,
+            session_config=SessionConfig(auto_checkpoint=False),
+            orchestrator_config=OrchestratorConfig(),
+            context_config=ContextConfig(),
+            input_config=InputConfig(),
+        )
+        session = await factory.create_session(
+            guardrails=guardrails,
+            gateway=mock_gateway,
+        )
+        user_input = UserInput(
+            text="describe",
+            parts=(ImageInput.from_bytes(b"png", media_type="image/png"),),
+        )
+        resolved = ResolvedUserInput(content="resolved", text_projection="safe")
+        resolver = MagicMock()
+        resolver.resolve = AsyncMock(return_value=resolved)
+
+        async def stream_events(
+            resolved_input: ResolvedUserInput,
+            **kwargs: Any,
+        ) -> AsyncIterator[AgentEvent]:
+            assert resolved_input is resolved
+            yield session.loop.emitter.emit("stream_test", turn=0)
+
+        try:
+            session.input_resolver = resolver
+            regular_response = MagicMock(total_turns=1, events=[])
+            with patch.object(session.loop, "run", AsyncMock(return_value=regular_response)):
+                await session.run_turn(user_input)
+            resolver.resolve.assert_awaited_once_with(
+                user_input,
+                session.model_capabilities,
+            )
+
+            resolver.resolve.reset_mock()
+            with patch.object(session.loop, "run_stream", stream_events):
+                events = [event async for event in session.run_turn_stream(user_input)]
+            assert events
+            resolver.resolve.assert_awaited_once_with(
+                user_input,
+                session.model_capabilities,
+            )
+        finally:
+            await session.terminate()
+
+    async def test_auto_checkpoint_runs_after_multimodal_history_sanitation(
+        self,
+        store: PersistenceStore,
+        guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
+    ) -> None:
+        mock_gateway.capabilities.return_value = ModelCapabilities(image=True)
+        factory = SessionFactory(
+            store=store,
+            session_config=SessionConfig(auto_checkpoint=True),
+            orchestrator_config=OrchestratorConfig(),
+            context_config=ContextConfig(),
+            input_config=InputConfig(),
+        )
+        session = await factory.create_session(
+            guardrails=guardrails,
+            gateway=mock_gateway,
+        )
+        user_input = UserInput(
+            text="describe",
+            parts=(ImageInput.from_bytes(b"png", media_type="image/png"),),
+        )
+        response = ModelResponse(
+            id="response-1",
+            content="ok",
+            usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            model="test-model",
+            finish_reason="stop",
+            created=1,
+        )
+        checkpoint_history: list[list[dict[str, Any]]] = []
+
+        async def capture_checkpoint() -> str:
+            checkpoint_history.append([
+                dict(message) for message in session.assembler.conversation_history
+            ])
+            return "checkpoint-1"
+
+        try:
+            with (
+                patch("praxis.orchestrator.loop.chat", AsyncMock(return_value=response)),
+                patch.object(
+                    session,
+                    "save_auto_checkpoint",
+                    AsyncMock(side_effect=capture_checkpoint),
+                ),
+            ):
+                result = await session.run_turn(user_input)
+
+            assert result.content == "ok"
+            assert checkpoint_history == [[
+                {
+                    "role": "user",
+                    "content": (
+                        "describe\n"
+                        "[attachment kind=image filename=image.bin "
+                        "media_type=image/png size_bytes=3]"
+                    ),
+                },
+                {"role": "assistant", "content": "ok"},
+            ]]
+            assert "data:" not in str(checkpoint_history)
         finally:
             await session.terminate()
 

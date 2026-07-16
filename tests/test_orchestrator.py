@@ -1,11 +1,23 @@
 """S11 编排循环单元测试。"""
 
+import asyncio
+from copy import deepcopy
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from praxis.config.schemas import OrchestratorConfig
+import pytest
+
+from praxis.config.schemas import ContextConfig, OrchestratorConfig
+from praxis.context.assembler import PromptAssembler
+from praxis.context.compaction import ContextCompactor
 from praxis.models.context import TokenUsage
 from praxis.models.guardrails import GuardrailVerdict, VerdictType
+from praxis.models.messages import (
+    ImageContent,
+    ImageUrl,
+    ResolvedUserInput,
+    TextContent,
+)
 from praxis.models.orchestrator import (
     AgentEvent,
     LoopPhase,
@@ -13,7 +25,7 @@ from praxis.models.orchestrator import (
     StrategyMode,
     TerminationReason,
 )
-from praxis.models.responses import ModelResponse, Usage
+from praxis.models.responses import ModelResponse, ModelResponseChunk, Usage
 from praxis.models.tools import ApprovalDecision, FunctionCall, ToolCall, ToolResult
 from praxis.orchestrator.events import EventEmitter, EventListener, StreamCollector
 from praxis.orchestrator.loop import OrchestrationLoop
@@ -51,6 +63,22 @@ def make_tool_call(
         type="function",
         function=FunctionCall(name=name, arguments=arguments),
     )
+
+
+def resolved_image_input() -> ResolvedUserInput:
+    return ResolvedUserInput(
+        content=[
+            TextContent(text="describe"),
+            ImageContent(
+                image_url=ImageUrl(url="data:image/png;base64,cG5n")
+            ),
+        ],
+        text_projection="describe\n\n[image: image.png, image/png, 3 bytes]",
+    )
+
+
+def resolved_text_input(text: str) -> ResolvedUserInput:
+    return ResolvedUserInput(content=text, text_projection=text)
 
 
 # ── Task 12.2: 输出解析 ─────────────────────────────────────────────────────
@@ -512,6 +540,259 @@ class TestOrchestrationLoop:
         )
         return loop
 
+    def make_history_loop(self) -> OrchestrationLoop:
+        loop = self.make_loop()
+        loop.assembler = PromptAssembler(ContextConfig())
+        return loop
+
+    async def test_safe_projection_is_the_only_input_for_text_consumers(self) -> None:
+        loop = self.make_history_loop()
+        memory = MagicMock()
+        memory.append_message = MagicMock()
+        memory.get_memory_index = AsyncMock(return_value=[])
+        memory.search_memory = AsyncMock(return_value=[])
+        loop.memory = memory
+
+        skill_entry = MagicMock()
+        skill_entry.name = "safe-skill"
+        skill_entry.description = "safe"
+        skill_manager = MagicMock()
+        skill_manager.get_skill_index.return_value = [skill_entry]
+        loop.skill_manager = skill_manager
+
+        jit_retriever = MagicMock()
+        jit_retriever.get_examples_for_task.return_value = []
+        jit_retriever.get_identifier_index.return_value = []
+        loop.jit_retriever = jit_retriever
+        loop.strategy = LoopStrategy(StrategyMode.PLAN_AND_EXECUTE)
+
+        resolved = resolved_image_input()
+        ctx = loop.init_run(resolved)
+        with patch.object(loop, "generate_plan", AsyncMock()) as generate_plan:
+            early = await loop.prepare_run(ctx)
+
+        safe_text = resolved.text_projection
+        assert early is None
+        loop.guardrails.check_input.assert_awaited_once_with(safe_text)
+        memory_message = memory.append_message.call_args.args[0]
+        assert memory_message.content == safe_text
+        memory.search_memory.assert_awaited_once_with(safe_text, top_k=5)
+        skill_manager.auto_activate_for_task.assert_called_once_with(safe_text)
+        generate_plan.assert_awaited_once_with(safe_text)
+        jit_retriever.get_examples_for_task.assert_called_once_with("general")
+        consumer_calls = (
+            loop.guardrails.check_input.call_args_list
+            + memory.search_memory.call_args_list
+            + skill_manager.auto_activate_for_task.call_args_list
+            + generate_plan.call_args_list
+            + jit_retriever.get_examples_for_task.call_args_list
+        )
+        assert "data:" not in str(consumer_calls)
+        assert "cG5n" not in str(consumer_calls)
+
+    @patch("praxis.orchestrator.loop.chat")
+    async def test_tool_rounds_retain_structured_input_until_sanitized(
+        self,
+        mock_chat: Any,
+    ) -> None:
+        captured_messages: list[list[dict[str, Any]]] = []
+        responses = [
+            make_model_response(tool_calls=[make_tool_call()]),
+            make_model_response(content="ok"),
+        ]
+
+        async def capture_chat(
+            gateway: Any,
+            messages: list[dict[str, Any]],
+            **kwargs: Any,
+        ) -> ModelResponse:
+            captured_messages.append(deepcopy(messages))
+            return responses.pop(0)
+
+        mock_chat.side_effect = capture_chat
+        loop = self.make_history_loop()
+
+        response = await loop.run(resolved_image_input())
+
+        assert response.content == "ok"
+        assert len(captured_messages) == 2
+        for messages in captured_messages:
+            user_messages = [item for item in messages if item["role"] == "user"]
+            assert len(user_messages) == 1
+            content = user_messages[0]["content"]
+            assert isinstance(content, list)
+            assert content[1]["type"] == "image_url"
+        assert loop.assembler.conversation_history[0] == {
+            "role": "user",
+            "content": "describe\n\n[image: image.png, image/png, 3 bytes]",
+        }
+        assert "data:" not in str(loop.assembler.conversation_history)
+        assert "cG5n" not in str(loop.assembler.conversation_history)
+
+    @patch("praxis.orchestrator.loop.chat")
+    async def test_gateway_error_sanitizes_structured_history(
+        self,
+        mock_chat: Any,
+    ) -> None:
+        mock_chat.side_effect = RuntimeError("provider unavailable")
+        loop = self.make_history_loop()
+
+        with pytest.raises(RuntimeError, match="provider unavailable"):
+            await loop.run(resolved_image_input())
+
+        assert loop.assembler.conversation_history == [{
+            "role": "user",
+            "content": "describe\n\n[image: image.png, image/png, 3 bytes]",
+        }]
+
+    @patch("praxis.orchestrator.loop.chat")
+    async def test_tool_error_sanitizes_structured_history(
+        self,
+        mock_chat: Any,
+    ) -> None:
+        mock_chat.return_value = make_model_response(tool_calls=[make_tool_call()])
+        loop = self.make_history_loop()
+        loop.coordinator.execute_tool_calls.side_effect = RuntimeError("tool failed")
+
+        with pytest.raises(RuntimeError, match="tool failed"):
+            await loop.run(resolved_image_input())
+
+        assert loop.assembler.conversation_history[0] == {
+            "role": "user",
+            "content": "describe\n\n[image: image.png, image/png, 3 bytes]",
+        }
+        assert "data:" not in str(loop.assembler.conversation_history)
+
+    async def test_input_tripwire_never_persists_structured_history(self) -> None:
+        loop = self.make_history_loop()
+        loop.guardrails.check_input = AsyncMock(return_value=GuardrailVerdict(
+            verdict=VerdictType.BLOCK,
+            reason="blocked",
+            tripwire=True,
+        ))
+
+        response = await loop.run(resolved_image_input())
+
+        assert response.termination_reason is TerminationReason.TRIPWIRE
+        assert loop.assembler.conversation_history == []
+
+    async def test_stream_cancellation_sanitizes_structured_history(self) -> None:
+        stream_started = asyncio.Event()
+
+        async def blocking_stream(
+            gateway: Any,
+            messages: list[dict[str, Any]],
+            **kwargs: Any,
+        ) -> Any:
+            stream_started.set()
+            await asyncio.Event().wait()
+            yield ModelResponseChunk(id="unreachable")
+
+        loop = self.make_history_loop()
+        with patch("praxis.orchestrator.loop.chat_stream", new=blocking_stream):
+            event_stream = loop.run_stream(resolved_image_input())
+            assert (await anext(event_stream)).event_type == "turn_start"
+            assert (await anext(event_stream)).event_type == "llm_request"
+            pending = asyncio.create_task(anext(event_stream))
+            await stream_started.wait()
+            pending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+
+        assert loop.assembler.conversation_history == [{
+            "role": "user",
+            "content": "describe\n\n[image: image.png, image/png, 3 bytes]",
+        }]
+
+    async def test_stream_generator_close_sanitizes_structured_history(self) -> None:
+        loop = self.make_history_loop()
+        event_stream = loop.run_stream(resolved_image_input())
+
+        assert (await anext(event_stream)).event_type == "turn_start"
+        await event_stream.aclose()
+
+        assert loop.assembler.conversation_history == [{
+            "role": "user",
+            "content": "describe\n\n[image: image.png, image/png, 3 bytes]",
+        }]
+
+    @patch("praxis.orchestrator.loop.chat")
+    async def test_max_turn_termination_sanitizes_structured_history(
+        self,
+        mock_chat: Any,
+    ) -> None:
+        mock_chat.return_value = make_model_response(tool_calls=[make_tool_call()])
+        loop = self.make_history_loop()
+        loop.termination.max_turns = 1
+
+        response = await loop.run(resolved_image_input())
+
+        assert response.termination_reason is TerminationReason.MAX_TURNS
+        assert loop.assembler.conversation_history[0] == {
+            "role": "user",
+            "content": "describe\n\n[image: image.png, image/png, 3 bytes]",
+        }
+        assert "data:" not in str(loop.assembler.conversation_history)
+
+    @patch("praxis.context.compaction.summarize", new_callable=AsyncMock)
+    @patch("praxis.orchestrator.loop.chat")
+    async def test_compaction_retains_active_attachment_and_refreshes_cleanup_index(
+        self,
+        mock_chat: Any,
+        mock_summarize: AsyncMock,
+    ) -> None:
+        captured_messages: list[list[dict[str, Any]]] = []
+        active_history_message: dict[str, Any] | None = None
+        responses = [
+            make_model_response(tool_calls=[make_tool_call()]),
+            make_model_response(content="ok"),
+        ]
+
+        async def capture_chat(
+            gateway: Any,
+            messages: list[dict[str, Any]],
+            **kwargs: Any,
+        ) -> ModelResponse:
+            nonlocal active_history_message
+            if active_history_message is None:
+                active_history_message = loop.assembler.conversation_history[0]
+            else:
+                assert any(
+                    message is active_history_message
+                    for message in loop.assembler.conversation_history
+                )
+            captured_messages.append(deepcopy(messages))
+            return responses.pop(0)
+
+        mock_chat.side_effect = capture_chat
+        mock_summarize.return_value = "compacted"
+        loop = self.make_loop()
+        context_config = ContextConfig(compaction_threshold=0.000001)
+        loop.assembler = PromptAssembler(context_config)
+        loop.compactor = ContextCompactor(context_config, loop.gateway)
+        loop.compaction_min_history = 1
+
+        response = await loop.run(resolved_image_input())
+
+        assert response.content == "ok"
+        mock_summarize.assert_awaited_once()
+        second_user = [
+            message
+            for message in captured_messages[1]
+            if message["role"] == "user"
+        ]
+        assert second_user[0]["content"][1]["type"] == "image_url"
+        assert active_history_message is not None
+        assert any(
+            message is active_history_message
+            for message in loop.assembler.conversation_history
+        )
+        assert active_history_message == {
+            "role": "user",
+            "content": "describe\n\n[image: image.png, image/png, 3 bytes]",
+        }
+        assert "data:" not in str(loop.assembler.conversation_history)
+
     @patch("praxis.orchestrator.loop.chat")
     async def test_plan_and_execute_generates_plan(self, mock_chat: Any) -> None:
         """plan-and-execute 模式应在 prepare_run 生成并设置计划（否则退化为 ReAct）。"""
@@ -524,8 +805,11 @@ class TestOrchestrationLoop:
         mock_chat.return_value = make_model_response(
             content='[{"description":"分析需求"},{"description":"编写代码"},{"description":"运行测试"}]'
         )
-        ctx = RunContext(turn_context=TurnContext(user_message="实现功能X"))
-        early = await loop.prepare_run("实现功能X", ctx)
+        ctx = RunContext(turn_context=TurnContext(
+            user_content="实现功能X",
+            user_text="实现功能X",
+        ))
+        early = await loop.prepare_run(ctx)
         assert early is None
         assert len(loop.strategy.plan) == 3
         assert loop.strategy.plan[0].description == "分析需求"
@@ -541,8 +825,11 @@ class TestOrchestrationLoop:
         loop = self.make_loop()
         loop.strategy = LoopStrategy(StrategyMode.PLAN_AND_EXECUTE)
         mock_chat.side_effect = RuntimeError("LLM 不可用")
-        ctx = RunContext(turn_context=TurnContext(user_message="任务"))
-        early = await loop.prepare_run("任务", ctx)
+        ctx = RunContext(turn_context=TurnContext(
+            user_content="任务",
+            user_text="任务",
+        ))
+        early = await loop.prepare_run(ctx)
         assert early is None
         assert loop.strategy.plan == []
 
@@ -616,14 +903,14 @@ class TestOrchestrationLoop:
         mock_chat.return_value = make_model_response(content="ok")
         loop = self.make_loop()
         loop.model = "fast-model"
-        await loop.run("你好")
+        await loop.run(resolved_text_input("你好"))
         assert mock_chat.await_args.kwargs.get("model") == "fast-model"
 
     @patch("praxis.orchestrator.loop.chat")
     async def test_natural_termination(self, mock_chat: Any) -> None:
         mock_chat.return_value = make_model_response(content="最终回答")
         loop = self.make_loop()
-        resp = await loop.run("你好")
+        resp = await loop.run(resolved_text_input("你好"))
         assert resp.content == "最终回答"
         assert resp.termination_reason == TerminationReason.NATURAL
         assert resp.total_turns == 1
@@ -635,7 +922,7 @@ class TestOrchestrationLoop:
             make_model_response(content="处理完成"),
         ]
         loop = self.make_loop()
-        resp = await loop.run("读取文件")
+        resp = await loop.run(resolved_text_input("读取文件"))
         assert resp.content == "处理完成"
         assert resp.termination_reason == TerminationReason.NATURAL
         assert resp.total_turns == 2
@@ -646,7 +933,7 @@ class TestOrchestrationLoop:
         loop.guardrails.check_input = AsyncMock(return_value=GuardrailVerdict(
             verdict=VerdictType.BLOCK, reason="恶意输入", tripwire=True
         ))
-        resp = await loop.run("恶意消息")
+        resp = await loop.run(resolved_text_input("恶意消息"))
         assert resp.termination_reason == TerminationReason.TRIPWIRE
         assert "拒绝" in resp.content
 
@@ -655,7 +942,7 @@ class TestOrchestrationLoop:
         mock_chat.return_value = make_model_response(tool_calls=[make_tool_call()])
         loop = self.make_loop()
         loop.termination.max_turns = 2
-        resp = await loop.run("无限循环")
+        resp = await loop.run(resolved_text_input("无限循环"))
         assert resp.termination_reason == TerminationReason.MAX_TURNS
 
     @patch("praxis.orchestrator.loop.chat")
@@ -672,14 +959,14 @@ class TestOrchestrationLoop:
 
         mock_chat.side_effect = side_effect
         loop = self.make_loop()
-        resp = await loop.run("测试中断")
+        resp = await loop.run(resolved_text_input("测试中断"))
         assert resp.termination_reason == TerminationReason.USER_ABORT
 
     @patch("praxis.orchestrator.loop.chat")
     async def test_events_emitted(self, mock_chat: Any) -> None:
         mock_chat.return_value = make_model_response(content="回复")
         loop = self.make_loop()
-        resp = await loop.run("测试事件")
+        resp = await loop.run(resolved_text_input("测试事件"))
         event_types = [e.event_type for e in resp.events]
         assert "turn_start" in event_types
         assert "llm_request" in event_types
@@ -692,6 +979,6 @@ class TestOrchestrationLoop:
         loop = self.make_loop()
         state_before = loop.get_state()
         assert state_before.phase == LoopPhase.IDLE
-        await loop.run("test")
+        await loop.run(resolved_text_input("test"))
         state_after = loop.get_state()
         assert state_after.current_turn == 1

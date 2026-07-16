@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from praxis.config.schemas import ModelCapabilities
 from praxis.gateway.router import GatewayRouter
 
 
@@ -24,6 +25,7 @@ def build_mock_gateway(default_model: str = "default") -> MagicMock:
     gw.config.default_model = default_model
     gw.router = MagicMock()
     gw.router.acompletion = AsyncMock()
+    gw.capabilities.return_value = ModelCapabilities()
     return gw
 
 

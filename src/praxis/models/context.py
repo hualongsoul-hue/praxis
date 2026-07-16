@@ -4,11 +4,14 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from praxis.models.messages import ContentPart
+
 
 class TurnContext(BaseModel):
     """单轮上下文输入。"""
 
-    user_message: str
+    user_content: str | list[ContentPart] | None
+    user_text: str
     system_prompt_override: str | None = None
     developer_instructions: str = ""
     user_instructions: str = ""
@@ -53,3 +56,6 @@ class RunContext(BaseModel):
     skill_index: str = ""
     identifier_index: str = ""
     few_shot_messages: list[dict[str, Any]] = Field(default_factory=lambda: [])
+    input_history_index: int | None = None
+    input_history_message: dict[str, Any] | None = None
+    safe_input_projection: str = ""

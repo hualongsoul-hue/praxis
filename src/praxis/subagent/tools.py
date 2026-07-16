@@ -9,6 +9,7 @@ from typing import Any
 
 from praxis.config.schemas import (
     ContextConfig,
+    InputConfig,
     OrchestratorConfig,
     SubagentConfig,
 )
@@ -209,6 +210,7 @@ def wire_subagent(
     gateway: GatewayRouter,
     orchestrator_config: OrchestratorConfig,
     context_config: ContextConfig,
+    input_config: InputConfig,
     subagent_config: SubagentConfig,
     model: str = "default",
     runtime: RuntimeSubagentFactory | None = None,
@@ -234,6 +236,7 @@ def wire_subagent(
         gateway=gateway,
         orchestrator_config=orchestrator_config,
         context_config=context_config,
+        input_config=input_config,
         runtime=runtime,
     )
     resource_ctrl = ResourceController(subagent_config, supervisor=supervisor)

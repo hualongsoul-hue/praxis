@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from pydantic.warnings import PydanticDeprecatedSince211
 
-from praxis.config.schemas import GatewayConfig, ModelDeployment
+from praxis.config.schemas import GatewayConfig, ModelCapabilities, ModelDeployment
 from praxis.exceptions import (
     AuthenticationError,
     BudgetExceededError,
@@ -49,11 +49,21 @@ def make_config(**overrides: object) -> GatewayConfig:
 def test_model_capability_probe_uses_typed_deployment() -> None:
     gateway = GatewayRouter(
         GatewayConfig(
-            deployments=[ModelDeployment(supports_vision=True)],
+            deployments=[
+                ModelDeployment(
+                    capabilities=ModelCapabilities(
+                        image=True,
+                        audio=False,
+                        video=False,
+                        file=True,
+                    )
+                )
+            ],
         )
     )
-    assert gateway.supports_vision()
-    assert gateway.supports_vision("default")
+    expected = ModelCapabilities(image=True, file=True)
+    assert gateway.capabilities() == expected
+    assert gateway.capabilities("default") == expected
 
 
 @pytest.fixture(autouse=True)

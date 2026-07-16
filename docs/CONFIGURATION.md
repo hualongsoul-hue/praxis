@@ -13,7 +13,11 @@ gateway:
       api_base: http://172.24.23.192:3000/v1
       api_key_env: PRAXIS_MODEL_API_KEY
       default_max_output_tokens: 4096
-      supports_vision: false
+      capabilities:
+        image: false
+        audio: false
+        video: false
+        file: false
   default_model: default
   max_concurrent_requests: 8
   max_total_tokens: 1000000
@@ -79,6 +83,6 @@ mcp:
 ```
 
 视觉验证必须同时安装 `praxis[visual]`、安装 Playwright 浏览器，并由默认部署声明
-`supports_vision: true`。未满足条件时返回明确不可用状态。
+`capabilities.image: true`。未满足条件时返回明确不可用状态。
 
 完整、可直接校验的示例见 [config.example.yaml](../config.example.yaml)。

@@ -2,8 +2,10 @@
 
 import asyncio
 from collections.abc import AsyncIterator
+from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,10 +13,15 @@ import pytest
 from praxis.config import PraxisConfig
 from praxis.config.schemas import (
     GatewayConfig,
+    InputConfig,
+    ModelCapabilities,
+    ModelDeployment,
     PersistenceConfig,
     VerificationConfig,
 )
 from praxis.exceptions import ConcurrentSessionRunError, RuntimeStateError, SessionError
+from praxis.gateway.router import GatewayRouter
+from praxis.models.inputs import ImageInput, UserInput
 from praxis.models.orchestrator import AgentEvent, AgentResponse
 from praxis.models.responses import ModelResponse, ModelResponseChunk
 from praxis.models.session import SessionStatus
@@ -28,6 +35,7 @@ class FakeGateway:
     def __init__(self) -> None:
         self.config = GatewayConfig()
         self.closed = False
+        self.model_capabilities = ModelCapabilities()
 
     async def complete(
         self,
@@ -53,8 +61,8 @@ class FakeGateway:
     async def health(self) -> bool:
         return not self.closed
 
-    def supports_vision(self, model_name: str | None = None) -> bool:
-        return False
+    def capabilities(self, model_name: str | None = None) -> ModelCapabilities:
+        return self.model_capabilities
 
     async def close(self) -> None:
         self.closed = True
@@ -91,6 +99,81 @@ class FakeRunner:
         self.status = SessionStatus.TERMINATED
 
 
+class RecordingLiteLLMRouter:
+    def __init__(self) -> None:
+        self.messages: list[list[dict[str, Any]]] = []
+
+    async def acompletion(self, **kwargs: Any) -> Any:
+        messages = kwargs.get("messages")
+        if not isinstance(messages, list):
+            raise TypeError("messages must be a list")
+        self.messages.append(deepcopy(messages))
+        if kwargs.get("stream"):
+            return self.stream_response()
+        return self.regular_response()
+
+    @staticmethod
+    def usage() -> SimpleNamespace:
+        return SimpleNamespace(
+            prompt_tokens=10,
+            completion_tokens=2,
+            total_tokens=12,
+            completion_tokens_details=SimpleNamespace(reasoning_tokens=0),
+            prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+        )
+
+    @classmethod
+    def regular_response(cls) -> SimpleNamespace:
+        message = SimpleNamespace(
+            content="ok",
+            tool_calls=None,
+            reasoning_content=None,
+            refusal=None,
+        )
+        return SimpleNamespace(
+            id="response-1",
+            choices=[SimpleNamespace(message=message, finish_reason="stop")],
+            usage=cls.usage(),
+            model="test-model",
+            created=1,
+            system_fingerprint=None,
+        )
+
+    @classmethod
+    async def stream_response(cls) -> AsyncIterator[SimpleNamespace]:
+        delta = SimpleNamespace(
+            content="ok",
+            tool_calls=None,
+            reasoning_content=None,
+            refusal=None,
+        )
+        yield SimpleNamespace(
+            id="response-1",
+            choices=[SimpleNamespace(delta=delta, finish_reason="stop")],
+            usage=cls.usage(),
+            model="test-model",
+            system_fingerprint=None,
+        )
+
+
+class RecordingGateway(GatewayRouter):
+    def __init__(self) -> None:
+        config = GatewayConfig(
+            deployments=[
+                ModelDeployment(
+                    model="openai/test-model",
+                    capabilities=ModelCapabilities(image=True),
+                )
+            ]
+        )
+        super().__init__(
+            config,
+            environ={"PRAXIS_MODEL_API_KEY": "test-key"},
+        )
+        self.recording_router = RecordingLiteLLMRouter()
+        self.litellm_router = cast(Any, self.recording_router)
+
+
 def runtime_config(tmp_path: Path) -> PraxisConfig:
     return PraxisConfig(
         persistence=PersistenceConfig(
@@ -118,6 +201,40 @@ async def test_runtime_and_session_context_lifecycle(tmp_path: Path) -> None:
 
     assert gateway.closed
     assert not runtime.started
+
+
+async def test_multimodal_run_and_stream_send_equivalent_provider_content(
+    tmp_path: Path,
+) -> None:
+    gateway = RecordingGateway()
+    config = runtime_config(tmp_path).model_copy(
+        update={
+            "gateway": gateway.config,
+            "inputs": InputConfig(),
+        }
+    )
+    user_input = UserInput(
+        text="describe",
+        parts=(ImageInput.from_bytes(b"png", media_type="image/png"),),
+    )
+
+    async with PraxisRuntime(config, gateway=gateway) as runtime:
+        async with runtime.session() as regular_session:
+            response = await regular_session.run(user_input)
+        async with runtime.session() as streaming_session:
+            events = [event async for event in streaming_session.run_stream(user_input)]
+
+    assert response.content == "ok"
+    assert events
+    assert len(gateway.recording_router.messages) == 2
+    regular_messages, stream_messages = gateway.recording_router.messages
+    assert stream_messages == regular_messages
+    user_messages = [item for item in regular_messages if item["role"] == "user"]
+    assert len(user_messages) == 1
+    content = user_messages[0]["content"]
+    assert isinstance(content, list)
+    assert content[0] == {"type": "text", "text": "describe"}
+    assert content[1]["type"] == "image_url"
 
 
 async def test_start_and_close_are_idempotent(tmp_path: Path) -> None:
@@ -204,7 +321,10 @@ async def test_runtime_builds_owned_subagent_with_explicit_tool_subset(tmp_path:
             handler,
         )
 
-    runtime = PraxisRuntime(runtime_config(tmp_path), gateway=FakeGateway())
+    config = runtime_config(tmp_path).model_copy(
+        update={"inputs": InputConfig(max_attachment_bytes=123)}
+    )
+    runtime = PraxisRuntime(config, gateway=FakeGateway())
     await runtime.start()
     child = await runtime.build_subagent_session(
         SubagentSpec(task="isolated", tool_names=["allowed"], max_turns=3),
@@ -213,6 +333,7 @@ async def test_runtime_builds_owned_subagent_with_explicit_tool_subset(tmp_path:
     try:
         assert child.registry.list_tools() == ["allowed"]
         assert child.loop.config.max_turns == 3
+        assert child.input_resolver.config.max_attachment_bytes == 123
         assert runtime.owned_subagent_count == 1
     finally:
         await runtime.release_subagent_session(child)
@@ -313,7 +434,7 @@ async def test_session_stream_abort_properties_and_idempotent_context(tmp_path: 
 async def test_health_covers_provider_failures_and_visual_ready(tmp_path: Path) -> None:
     gateway = FakeGateway()
     gateway.health = AsyncMock(side_effect=RuntimeError("down"))  # type: ignore[method-assign]
-    gateway.supports_vision = MagicMock(return_value=True)  # type: ignore[method-assign]
+    gateway.model_capabilities = ModelCapabilities(image=True)
     store = MagicMock()
     store.list_keys = AsyncMock(side_effect=RuntimeError("storage down"))
     store.close = AsyncMock()

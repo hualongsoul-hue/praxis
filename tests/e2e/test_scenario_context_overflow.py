@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock
 
 from praxis.config.schemas import ContextConfig, OrchestratorConfig
 from praxis.models.orchestrator import TerminationReason
-from tests.e2e.conftest import build_loop
+from tests.e2e.conftest import build_loop, resolved_text_input
 
 
 def make_raw_response(content: str = "") -> SimpleNamespace:
@@ -50,13 +50,13 @@ class TestContextOverflow:
         )
 
         # 第一轮
-        r1 = await loop.run("问题 1")
+        r1 = await loop.run(resolved_text_input("问题 1"))
         assert r1.content == "回复 1"
         # conversation_history 保存 assistant 响应（user 消息在 assemble_prompt 中实时注入）
         assert len(loop.assembler.conversation_history) >= 1
 
         # 第二轮（上下文累积）
-        r2 = await loop.run("问题 2")
+        r2 = await loop.run(resolved_text_input("问题 2"))
         assert r2.content == "回复 2"
         assert len(loop.assembler.conversation_history) >= 2
 
@@ -87,7 +87,9 @@ class TestContextOverflow:
                 "content": f"这是一段较长的消息内容，用于填充上下文窗口 - 消息 {i} " * 5,
             })
 
-        response = await loop.run("在已有大量上下文的情况下继续对话")
+        response = await loop.run(
+            resolved_text_input("在已有大量上下文的情况下继续对话")
+        )
         assert response is not None
 
     async def test_max_turns_terminates_loop(
@@ -134,6 +136,6 @@ class TestContextOverflow:
             orch_config, context_config,
         )
 
-        response = await loop.run("无限循环测试")
+        response = await loop.run(resolved_text_input("无限循环测试"))
         assert response.termination_reason == TerminationReason.MAX_TURNS
         assert response.total_turns == 2

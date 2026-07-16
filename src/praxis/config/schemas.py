@@ -110,7 +110,6 @@ class ModelDeployment(StrictConfigModel):
     output_cost_per_token: float | None = Field(default=None, ge=0)
     default_max_output_tokens: int = Field(default=4096, ge=1)
     capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
-    supports_vision: bool = False
 
 
 class GatewayConfig(StrictConfigModel):

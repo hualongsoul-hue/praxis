@@ -10,6 +10,7 @@ from praxis.context.jit_retrieval import ContentLoader, JITRetriever
 from praxis.context.masking import ObservationMasker
 from praxis.context.tool_injection import ToolInjector
 from praxis.models.context import TurnContext
+from praxis.models.messages import ImageContent, ImageUrl, TextContent
 from praxis.models.tools import ToolDefinition, ToolMetadata
 from praxis.tools.registry import ToolRegistry
 
@@ -45,7 +46,7 @@ class TestPromptAssembler:
     def test_basic_assembly(self, mock_tc: Any, mock_mt: Any) -> None:
         config = ContextConfig()
         asm = PromptAssembler(config)
-        turn = TurnContext(user_message="你好")
+        turn = TurnContext(user_content="你好", user_text="你好")
         result = asm.assemble_prompt(turn)
         assert len(result.messages) >= 2
         assert result.messages[0]["role"] == "system"
@@ -56,11 +57,47 @@ class TestPromptAssembler:
 
     @patch(f"{ASSEMBLER_MOD}.get_max_tokens", side_effect=mock_get_max_tokens)
     @patch(f"{ASSEMBLER_MOD}.get_token_count", side_effect=mock_get_token_count)
+    def test_structured_content_is_serialized_in_original_order(
+        self,
+        mock_tc: Any,
+        mock_mt: Any,
+    ) -> None:
+        assembler = PromptAssembler(ContextConfig())
+        turn = TurnContext(
+            user_content=[
+                TextContent(text="describe"),
+                ImageContent(image_url=ImageUrl(url="data:image/png;base64,cG5n")),
+            ],
+            user_text="describe\n\n[image: image.png, image/png, 3 bytes]",
+        )
+
+        result = assembler.assemble_prompt(turn)
+
+        user_messages = [
+            message for message in result.messages if message["role"] == "user"
+        ]
+        assert user_messages == [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "describe"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64,cG5n",
+                        "detail": "auto",
+                    },
+                },
+            ],
+        }]
+
+    @patch(f"{ASSEMBLER_MOD}.get_max_tokens", side_effect=mock_get_max_tokens)
+    @patch(f"{ASSEMBLER_MOD}.get_token_count", side_effect=mock_get_token_count)
     def test_all_layers(self, mock_tc: Any, mock_mt: Any) -> None:
         config = ContextConfig()
         asm = PromptAssembler(config)
         turn = TurnContext(
-            user_message="写代码",
+            user_content="写代码",
+            user_text="写代码",
             developer_instructions="使用 Python",
             user_instructions="简洁风格",
         )
@@ -119,7 +156,11 @@ class TestPromptAssembler:
     def test_system_prompt_override(self, mock_tc: Any, mock_mt: Any) -> None:
         config = ContextConfig()
         asm = PromptAssembler(config)
-        turn = TurnContext(user_message="hi", system_prompt_override="自定义系统提示")
+        turn = TurnContext(
+            user_content="hi",
+            user_text="hi",
+            system_prompt_override="自定义系统提示",
+        )
         result = asm.assemble_prompt(turn)
         assert "自定义系统提示" in result.messages[0]["content"]
 
@@ -129,7 +170,7 @@ class TestPromptAssembler:
         config = ContextConfig()
         asm = PromptAssembler(config)
         asm.set_tool_schemas([{"type": "function", "function": {"name": "test"}}])
-        turn = TurnContext(user_message="test")
+        turn = TurnContext(user_content="test", user_text="test")
         result = asm.assemble_prompt(turn)
         assert len(result.tools) == 1
 
@@ -427,7 +468,7 @@ class TestJITInjection:
 
         asm = PromptAssembler(ContextConfig(), model="gpt-4o-mini")
         prompt = asm.assemble_prompt(
-            TurnContext(user_message="实现快排"),
+            TurnContext(user_content="实现快排", user_text="实现快排"),
             identifier_index="- [function] quicksort (algos.py)",
             few_shot_messages=[
                 {"role": "user", "content": "示例问"},
@@ -472,9 +513,13 @@ class TestJITInjection:
             return_value=MagicMock(tripwire=False, verdict=None)
         )
         loop.strategy.get_step_instruction = MagicMock(return_value="")
-        ctx = RunContext(turn_context=TurnContext(user_message="排序", task_stage="coding"))
+        ctx = RunContext(turn_context=TurnContext(
+            user_content="排序",
+            user_text="排序",
+            task_stage="coding",
+        ))
 
-        early = await loop.prepare_run("排序", ctx)
+        early = await loop.prepare_run(ctx)
         assert early is None
         # JIT 段应按 task_stage 填充 few-shot 与标识符索引
         assert ctx.few_shot_messages and ctx.few_shot_messages[0]["content"] == "如何排序"

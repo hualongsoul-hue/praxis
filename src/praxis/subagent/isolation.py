@@ -9,6 +9,7 @@ from typing import Protocol
 
 from praxis.config.schemas import (
     ContextConfig,
+    InputConfig,
     OrchestratorConfig,
     SessionConfig,
 )
@@ -47,12 +48,14 @@ class IsolatedContext:
         gateway: GatewayRouter,
         orchestrator_config: OrchestratorConfig,
         context_config: ContextConfig,
+        input_config: InputConfig | None = None,
         runtime: RuntimeSubagentFactory | None = None,
     ) -> None:
         self.store = store
         self.gateway = gateway
         self.orchestrator_config = orchestrator_config
         self.context_config = context_config
+        self.input_config = input_config or InputConfig()
         self.runtime = runtime
 
     async def create_isolated_session(
@@ -94,6 +97,7 @@ class IsolatedContext:
             session_config=SessionConfig(auto_checkpoint=False),
             orchestrator_config=sub_orch_config,
             context_config=self.context_config,
+            input_config=self.input_config,
         )
 
         session = await factory.create_session(

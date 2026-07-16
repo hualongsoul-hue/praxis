@@ -142,7 +142,7 @@ class TestS4S7GatewayContextChain:
     def test_assembler_produces_valid_prompt(self) -> None:
         """验证：PromptAssembler 组装的 Prompt 符合 LLM 消息格式。"""
         assembler = PromptAssembler(ContextConfig(), model="test-model")
-        turn = TurnContext(user_message="你好")
+        turn = TurnContext(user_content="你好", user_text="你好")
         prompt = assembler.assemble_prompt(turn)
 
         assert isinstance(prompt, AssembledPrompt)
@@ -157,7 +157,7 @@ class TestS4S7GatewayContextChain:
         schemas = [{"type": "function", "function": {"name": "read_file"}}]
         assembler.set_tool_schemas(schemas)
 
-        turn = TurnContext(user_message="读取文件")
+        turn = TurnContext(user_content="读取文件", user_text="读取文件")
         prompt = assembler.assemble_prompt(turn)
         assert prompt.tools == schemas
 

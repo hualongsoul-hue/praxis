@@ -207,7 +207,7 @@ class VerifierRegistry:
                 verifier_name="visual",
                 feedback="未配置网关，视觉型验证不可用",
             )
-        if not self.gateway.supports_vision():
+        if not self.gateway.capabilities().image:
             return VerificationResult(
                 status=VerificationStatus.SKIP,
                 verification_type=VerificationType.VISUAL,

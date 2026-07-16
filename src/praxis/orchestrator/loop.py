@@ -24,6 +24,7 @@ from praxis.memory.core import CognitiveMemory
 from praxis.models.context import AssembledPrompt, RunContext, TurnContext
 from praxis.models.guardrails import VerdictType
 from praxis.models.memory import WorkingMemoryMessage
+from praxis.models.messages import ResolvedUserInput
 from praxis.models.orchestrator import (
     AgentEvent,
     AgentResponse,
@@ -114,7 +115,7 @@ class OrchestrationLoop:
 
     def init_run(
         self,
-        user_message: str,
+        user_input: ResolvedUserInput,
         system_prompt_override: str | None = None,
         developer_instructions: str = "",
         user_instructions: str = "",
@@ -124,17 +125,20 @@ class OrchestrationLoop:
         self.state = LoopState(phase=LoopPhase.ASSEMBLING)
         self.emitter.clear()
         turn_context = TurnContext(
-            user_message=user_message,
+            user_content=user_input.content,
+            user_text=user_input.text_projection,
             system_prompt_override=system_prompt_override,
             developer_instructions=developer_instructions,
             user_instructions=user_instructions,
             task_stage=task_stage,
         )
-        return RunContext(turn_context=turn_context)
+        return RunContext(
+            turn_context=turn_context,
+            safe_input_projection=user_input.text_projection,
+        )
 
     async def prepare_run(
         self,
-        user_message: str,
         ctx: RunContext,
     ) -> AgentResponse | None:
         """执行循环前的准备工作：记忆记录、输入护栏、记忆检索、技能加载、工具注入、策略。
@@ -142,13 +146,15 @@ class OrchestrationLoop:
         返回 AgentResponse 表示提前终止（如输入被拦截），None 表示继续。
         """
         # S6: 记录用户消息到工作记忆
+        user_text = ctx.turn_context.user_text
+
         if self.memory is not None:
             self.memory.append_message(
-                WorkingMemoryMessage(role="user", content=user_message)
+                WorkingMemoryMessage(role="user", content=user_text)
             )
 
         # 输入护栏检查
-        input_verdict = await self.guardrails.check_input(user_message)
+        input_verdict = await self.guardrails.check_input(user_text)
         if input_verdict.tripwire or input_verdict.verdict == VerdictType.BLOCK:
             return self.make_response(
                 content=f"输入被拒绝: {input_verdict.reason}",
@@ -162,7 +168,7 @@ class OrchestrationLoop:
                 ctx.memory_index = "\n".join(
                     f"- [{e.memory_type}] {e.summary}" for e in index_entries
                 )
-            results = await self.memory.search_memory(user_message, top_k=5)
+            results = await self.memory.search_memory(user_text, top_k=5)
             if results:
                 ctx.semantic_results = "\n".join(
                     f"[{r.relevance_score:.2f}] {r.entry.content[:200]}" for r in results
@@ -175,7 +181,7 @@ class OrchestrationLoop:
                 ctx.skill_index = "\n".join(
                     f"- {e.name}: {e.description}" for e in skill_entries
                 )
-                self.skill_manager.auto_activate_for_task(user_message)
+                self.skill_manager.auto_activate_for_task(user_text)
 
         # S7 JIT: 按任务阶段取 few-shot 示例 + 标识符索引
         if self.jit_retriever is not None:
@@ -195,16 +201,16 @@ class OrchestrationLoop:
 
         # Plan-and-Execute 模式：首次进入时先生成计划（否则 plan 恒空，退化为 ReAct）
         if self.strategy.mode == StrategyMode.PLAN_AND_EXECUTE and not self.strategy.plan:
-            await self.generate_plan(user_message)
+            await self.generate_plan(user_text)
 
         # Plan-and-Execute 模式：注入步骤指令
         step_instruction = self.strategy.get_step_instruction()
         if step_instruction:
-            ctx.turn_context.user_message += step_instruction
+            ctx.turn_context.user_instructions += step_instruction
 
         return None
 
-    async def generate_plan(self, user_message: str) -> None:
+    async def generate_plan(self, user_text: str) -> None:
         """Plan-and-Execute：调用 LLM 将任务分解为有序步骤并 set_plan。
 
         失败或解析不出步骤时静默退化为 ReAct（plan 留空）。
@@ -212,7 +218,7 @@ class OrchestrationLoop:
         self.state.phase = LoopPhase.PLANNING
         messages = [
             {"role": "system", "content": PLANNING_SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
+            {"role": "user", "content": user_text},
         ]
         try:
             response = await chat(self.gateway, messages, model=self.model)
@@ -265,6 +271,23 @@ class OrchestrationLoop:
                         self.assembler.file_refs,
                     )
                     self.assembler.compaction_count += 1
+                    active_message = ctx.input_history_message
+                    if active_message is not None:
+                        active_index = next(
+                            (
+                                index
+                                for index, message in enumerate(
+                                    self.assembler.conversation_history
+                                )
+                                if message is active_message
+                            ),
+                            None,
+                        )
+                        if active_index is None:
+                            raise RuntimeError(
+                                "context compaction discarded the active user input"
+                            )
+                        ctx.input_history_index = active_index
 
         # Step 1: Prompt 组装（注入 S6 记忆 + S14 技能 + 计划进度）
         # 计划上下文与语义检索并存（此前用 or 互斥：有记忆结果时计划进度会丢失）
@@ -282,12 +305,35 @@ class OrchestrationLoop:
         )
 
         # 将用户消息存入对话历史
-        if ctx.turn_context.user_message:
-            self.assembler.conversation_history.append(
-                {"role": "user", "content": ctx.turn_context.user_message}
-            )
+        if ctx.input_history_index is None and ctx.turn_context.user_content:
+            current_message = prompt.messages[-1]
+            history_message = {
+                "role": "user",
+                "content": current_message["content"],
+            }
+            self.assembler.conversation_history.append(history_message)
+            ctx.input_history_index = len(self.assembler.conversation_history) - 1
+            ctx.input_history_message = history_message
 
         return prompt
+
+    def sanitize_run_input(self, ctx: RunContext) -> None:
+        """Replace active provider content with its safe text projection."""
+        index = ctx.input_history_index
+        if index is None:
+            return
+        history_message = ctx.input_history_message
+        if history_message is not None:
+            history_message.clear()
+            history_message.update({
+                "role": "user",
+                "content": ctx.safe_input_projection,
+            })
+        elif 0 <= index < len(self.assembler.conversation_history):
+            self.assembler.conversation_history[index] = {
+                "role": "user",
+                "content": ctx.safe_input_projection,
+            }
 
     # ── 公共后处理方法 ────────────────────────────────────────────────────
 
@@ -487,7 +533,8 @@ class OrchestrationLoop:
         """轮次末尾：终止检查、策略推进、发射 turn_end。返回 AgentResponse 表示终止。"""
         # 清空用户消息但保留系统/开发者/用户指令配置
         ctx.turn_context = TurnContext(
-            user_message="",
+            user_content=None,
+            user_text="",
             system_prompt_override=ctx.turn_context.system_prompt_override,
             developer_instructions=ctx.turn_context.developer_instructions,
             user_instructions=ctx.turn_context.user_instructions,
@@ -520,7 +567,7 @@ class OrchestrationLoop:
 
     async def run(
         self,
-        user_message: str,
+        user_input: ResolvedUserInput,
         system_prompt_override: str | None = None,
         developer_instructions: str = "",
         user_instructions: str = "",
@@ -529,7 +576,7 @@ class OrchestrationLoop:
         """完整调用运行 Agent 轮次。
 
         Args:
-            user_message: 用户消息。
+            user_input: 已解析的用户输入。
             system_prompt_override: 系统提示覆盖。
             developer_instructions: 开发者指令。
             user_instructions: 用户指令。
@@ -539,11 +586,19 @@ class OrchestrationLoop:
             Agent 最终响应。
         """
         ctx = self.init_run(
-            user_message, system_prompt_override,
+            user_input, system_prompt_override,
             developer_instructions, user_instructions, task_stage,
         )
 
-        early = await self.prepare_run(user_message, ctx)
+        try:
+            return await self.execute_run(ctx)
+        finally:
+            self.sanitize_run_input(ctx)
+
+    async def execute_run(self, ctx: RunContext) -> AgentResponse:
+        """Execute the non-streaming state machine for an initialized run."""
+
+        early = await self.prepare_run(ctx)
         if early is not None:
             return early
 
@@ -607,7 +662,7 @@ class OrchestrationLoop:
 
     async def run_stream(
         self,
-        user_message: str,
+        user_input: ResolvedUserInput,
         system_prompt_override: str | None = None,
         developer_instructions: str = "",
         user_instructions: str = "",
@@ -616,7 +671,7 @@ class OrchestrationLoop:
         """流式运行 Agent 轮次，逐事件 yield。
 
         Args:
-            user_message: 用户消息。
+            user_input: 已解析的用户输入。
             system_prompt_override: 系统提示覆盖。
             developer_instructions: 开发者指令。
             user_instructions: 用户指令。
@@ -626,11 +681,20 @@ class OrchestrationLoop:
             AgentEvent 事件流。
         """
         ctx = self.init_run(
-            user_message, system_prompt_override,
+            user_input, system_prompt_override,
             developer_instructions, user_instructions, task_stage,
         )
 
-        early = await self.prepare_run(user_message, ctx)
+        try:
+            async for event in self.stream_run(ctx):
+                yield event
+        finally:
+            self.sanitize_run_input(ctx)
+
+    async def stream_run(self, ctx: RunContext) -> AsyncIterator[AgentEvent]:
+        """Execute the streaming state machine for an initialized run."""
+
+        early = await self.prepare_run(ctx)
         if early is not None:
             yield self.last_event()
             return

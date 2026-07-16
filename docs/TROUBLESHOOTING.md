@@ -29,7 +29,7 @@ praxis config validate config.yaml
 ## 视觉验证不可用
 
 需要同时满足：安装 `praxis[visual]`、执行 `playwright install chromium`、配置
-`verification.visual_enabled: true`，并让默认模型部署声明 `supports_vision: true`。
+`verification.visual_enabled: true`，并让默认模型部署声明 `capabilities.image: true`。
 
 ## MCP 无法启动
 

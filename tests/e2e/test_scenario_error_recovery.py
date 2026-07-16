@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
-from tests.e2e.conftest import build_loop, register_tool
+from tests.e2e.conftest import build_loop, register_tool, resolved_text_input
 
 
 def make_raw_response(
@@ -72,7 +72,7 @@ class TestErrorRecovery:
             orchestrator_config, context_config,
         )
 
-        response = await loop.run("获取 example.com 的内容")
+        response = await loop.run(resolved_text_input("获取 example.com 的内容"))
         assert "缓存" in response.content
         assert response.tool_calls_made == 1
         assert call_count == 2
@@ -112,7 +112,7 @@ class TestErrorRecovery:
         for failure_index in range(5):  # noqa: B007 - public discard name
             loop.coordinator.circuits.record_outcome("unstable_tool", success=False)
 
-        response = await loop.run("执行不稳定操作")
+        response = await loop.run(resolved_text_input("执行不稳定操作"))
         # 熔断器应跳过工具调用
         assert response is not None
 
@@ -156,6 +156,6 @@ class TestErrorRecovery:
             orchestrator_config, context_config,
         )
 
-        response = await loop.run("执行慢操作")
+        response = await loop.run(resolved_text_input("执行慢操作"))
         assert response is not None
         assert call_count == 2

@@ -10,7 +10,9 @@ from typing import Any
 
 from praxis.config.schemas import (
     ContextConfig,
+    InputConfig,
     MemoryConfig,
+    ModelCapabilities,
     OrchestratorConfig,
     RecoveryConfig,
     SessionConfig,
@@ -22,7 +24,9 @@ from praxis.context.masking import ObservationMasker
 from praxis.context.tool_injection import ToolInjector
 from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
+from praxis.input_resolver import InputResolver
 from praxis.memory.core import CognitiveMemory
+from praxis.models.inputs import InputValue
 from praxis.models.orchestrator import AgentEvent, AgentResponse, StrategyMode
 from praxis.models.session import (
     SessionMetadata,
@@ -77,6 +81,8 @@ class Session:
         registry: ToolRegistry,
         store: PersistenceStore,
         config: SessionConfig,
+        input_resolver: InputResolver,
+        model_capabilities: ModelCapabilities,
         memory: CognitiveMemory | None = None,
         skill_manager: SkillManager | None = None,
         verifier_registry: VerifierRegistry | None = None,
@@ -89,6 +95,8 @@ class Session:
         self.registry = registry
         self.store = store
         self.config = config
+        self.input_resolver = input_resolver
+        self.model_capabilities = model_capabilities
         self.memory = memory
         self.skill_manager = skill_manager
         self.verifier_registry = verifier_registry
@@ -120,11 +128,15 @@ class Session:
         for key, value in self.continuation.prepare_turn(self).items():
             kwargs.setdefault(key, value)
 
-    async def run_turn(self, user_message: str, **kwargs: Any) -> AgentResponse:
+    async def run_turn(self, user_input: InputValue, **kwargs: Any) -> AgentResponse:
         """执行一轮对话。"""
         self.metadata.status = SessionStatus.ACTIVE
         self.apply_continuation(kwargs)
-        response = await self.loop.run(user_message, **kwargs)
+        resolved = await self.input_resolver.resolve(
+            user_input,
+            self.model_capabilities,
+        )
+        response = await self.loop.run(resolved, **kwargs)
         if self.continuation is not None:
             self.continuation.advance_phase(self)
         self.metadata.total_turns += response.total_turns
@@ -177,14 +189,18 @@ class Session:
 
     async def run_turn_stream(
         self,
-        user_message: str,
+        user_input: InputValue,
         **kwargs: Any,
     ) -> AsyncIterator[AgentEvent]:
         """流式执行一轮对话。"""
         self.metadata.status = SessionStatus.ACTIVE
         self.apply_continuation(kwargs)
+        resolved = await self.input_resolver.resolve(
+            user_input,
+            self.model_capabilities,
+        )
         turn_tokens = 0
-        async for event in self.loop.run_stream(user_message, **kwargs):
+        async for event in self.loop.run_stream(resolved, **kwargs):
             if event.event_type == "llm_request":
                 turn_tokens += event.data.get("token_count", 0)
             yield event
@@ -224,6 +240,7 @@ class SessionFactory:
         session_config: SessionConfig,
         orchestrator_config: OrchestratorConfig,
         context_config: ContextConfig,
+        input_config: InputConfig | None = None,
         memory_config: MemoryConfig | None = None,
         recovery_config: RecoveryConfig | None = None,
         approval_handler: ApprovalHandler | None = None,
@@ -233,6 +250,7 @@ class SessionFactory:
         self.session_config = session_config
         self.orchestrator_config = orchestrator_config
         self.context_config = context_config
+        self.input_config = input_config or InputConfig()
         self.memory_config = memory_config or MemoryConfig()
         self.recovery_config = recovery_config or RecoveryConfig()
         self.approval_handler = approval_handler
@@ -270,6 +288,8 @@ class SessionFactory:
             初始化完毕的 Session。
         """
         metadata = SessionMetadata(status=SessionStatus.INITIALIZING)
+        model_capabilities = gateway.capabilities(model)
+        input_resolver = InputResolver(self.input_config)
 
         # S6: 记忆系统——自动创建并启动（后台 Worker + Dream 调度器）
         if memory is None:
@@ -383,6 +403,8 @@ class SessionFactory:
             registry=registry,
             store=self.store,
             config=self.session_config,
+            input_resolver=input_resolver,
+            model_capabilities=model_capabilities,
             memory=memory,
             skill_manager=skill_manager,
             verifier_registry=verifier_registry,

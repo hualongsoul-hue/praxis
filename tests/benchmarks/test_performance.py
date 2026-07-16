@@ -84,7 +84,7 @@ class TestPromptAssemblyPerformance:
                 "content": f"消息 {i}: 这是一段测试内容用于验证组装性能。" * 3,
             })
 
-        turn = TurnContext(user_message="当前用户消息")
+        turn = TurnContext(user_content="当前用户消息", user_text="当前用户消息")
 
         # 预热
         assembler.assemble_prompt(turn)
@@ -121,7 +121,7 @@ class TestPromptAssemblyPerformance:
         ]
         assembler.set_tool_schemas(schemas)
 
-        turn = TurnContext(user_message="使用工具")
+        turn = TurnContext(user_content="使用工具", user_text="使用工具")
 
         iterations = 50
         start = time.perf_counter()

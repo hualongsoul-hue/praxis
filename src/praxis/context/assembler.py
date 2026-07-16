@@ -131,10 +131,17 @@ class PromptAssembler:
             layers.append("conversation_history")
 
         # Layer 8: 当前用户消息（末位放置，确保 LLM 关注）
-        # 工具执行后续轮 user_message 为空，不追加以保持
+        # 工具执行后续轮 user_content 为空，不追加以保持
         # assistant(tool_calls) → tool(result) 的标准消息序列
-        if turn.user_message:
-            messages.append({"role": "user", "content": turn.user_message})
+        if turn.user_content:
+            content: str | list[dict[str, Any]]
+            if isinstance(turn.user_content, str):
+                content = turn.user_content
+            else:
+                content = [
+                    part.model_dump(mode="json") for part in turn.user_content
+                ]
+            messages.append({"role": "user", "content": content})
             layers.append("current_message")
 
         # Layer 2: 工具定义

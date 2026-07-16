@@ -3,7 +3,7 @@
 from collections.abc import AsyncIterator
 from typing import Any, Protocol, runtime_checkable
 
-from praxis.config.schemas import GatewayConfig
+from praxis.config.schemas import GatewayConfig, ModelCapabilities
 from praxis.models.responses import ModelResponse, ModelResponseChunk
 from praxis.models.telemetry import AuditEvent
 from praxis.models.tools import ApprovalDecision, ApprovalRequest
@@ -35,7 +35,7 @@ class ModelGateway(Protocol):
 
     async def health(self) -> bool: ...
 
-    def supports_vision(self, model_name: str | None = None) -> bool: ...
+    def capabilities(self, model_name: str | None = None) -> ModelCapabilities: ...
 
     async def close(self) -> None: ...
 

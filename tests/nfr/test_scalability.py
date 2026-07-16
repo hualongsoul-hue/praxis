@@ -139,7 +139,7 @@ class TestConversationScalability:
                 "content": f"回复 {i}: 这是一段内容。",
             })
 
-        turn = TurnContext(user_message="新消息")
+        turn = TurnContext(user_content="新消息", user_text="新消息")
         prompt = assembler.assemble_prompt(turn)
 
         assert len(prompt.messages) > 500

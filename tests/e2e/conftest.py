@@ -22,6 +22,7 @@ from praxis.guardrails.engine import GuardrailEngine
 from praxis.guardrails.permissions import PermissionManager
 from praxis.guardrails.rules import RuleEngine
 from praxis.memory.core import CognitiveMemory
+from praxis.models.messages import ResolvedUserInput
 from praxis.models.responses import ModelResponse, Usage
 from praxis.models.tools import FunctionCall, ToolCall, ToolDefinition
 from praxis.orchestrator.events import EventEmitter
@@ -38,6 +39,11 @@ from praxis.tools.policy import ToolPolicy
 from praxis.tools.registry import ToolHandler, ToolRegistry
 
 # ── 通用辅助 ──────────────────────────────────────────────────────────────
+
+
+def resolved_text_input(text: str) -> ResolvedUserInput:
+    """Build the orchestration boundary value for a text-only scenario."""
+    return ResolvedUserInput(content=text, text_projection=text)
 
 
 def make_model_response(

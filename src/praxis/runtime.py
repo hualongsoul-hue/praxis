@@ -10,6 +10,7 @@ from praxis.exceptions import ConcurrentSessionRunError, RuntimeStateError, Sess
 from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine, build_guardrail_engine
 from praxis.lifecycle import TaskSupervisor
+from praxis.models.inputs import InputValue
 from praxis.models.orchestrator import AgentEvent, AgentResponse
 from praxis.models.runtime import ComponentHealth, HealthStatus, RuntimeHealth, RuntimeState
 from praxis.models.session import SessionStatus
@@ -29,11 +30,11 @@ class SessionRunner(Protocol):
     @property
     def status(self) -> SessionStatus: ...
 
-    async def run_turn(self, user_message: str, **kwargs: Any) -> AgentResponse: ...
+    async def run_turn(self, user_input: InputValue, **kwargs: Any) -> AgentResponse: ...
 
     def run_turn_stream(
         self,
-        user_message: str,
+        user_input: InputValue,
         **kwargs: Any,
     ) -> AsyncIterator[AgentEvent]: ...
 
@@ -143,6 +144,7 @@ class PraxisRuntime:
             session_config=self.config.session,
             orchestrator_config=self.config.orchestrator,
             context_config=self.config.context,
+            input_config=self.config.inputs,
             memory_config=self.config.memory,
             recovery_config=self.config.recovery,
             approval_handler=self.approval_handler,
@@ -163,6 +165,7 @@ class PraxisRuntime:
             gateway=cast(Any, self.gateway),
             orchestrator_config=self.config.orchestrator,
             context_config=self.config.context,
+            input_config=self.config.inputs,
             subagent_config=self.config.subagent,
             model=self.config.gateway.default_model,
             runtime=self,
@@ -195,6 +198,7 @@ class PraxisRuntime:
                 update={"max_turns": spec.max_turns}
             ),
             context_config=self.config.context,
+            input_config=self.config.inputs,
             memory_config=self.config.memory,
             recovery_config=self.config.recovery,
             approval_handler=self.approval_handler,
@@ -290,7 +294,7 @@ class PraxisRuntime:
                 detail="缺少可选依赖 praxis[visual]",
                 required=False,
             )
-        elif not self.gateway.supports_vision():
+        elif not self.gateway.capabilities().image:
             components["visual"] = ComponentHealth(
                 status=HealthStatus.DEGRADED,
                 detail="默认模型未声明视觉能力",
@@ -400,17 +404,17 @@ class AgentSession:
             raise SessionError("AgentSession 已终止")
         return self.runner
 
-    async def run(self, user_message: str, **kwargs: Any) -> AgentResponse:
+    async def run(self, user_input: InputValue, **kwargs: Any) -> AgentResponse:
         runner = self.require_runner()
         if self.run_lock.locked():
             raise ConcurrentSessionRunError("同一 AgentSession 不能并发执行两个轮次")
         async with self.run_lock:
             with use_metrics(self.runtime.metrics):
-                return await runner.run_turn(user_message, **kwargs)
+                return await runner.run_turn(user_input, **kwargs)
 
     async def run_stream(
         self,
-        user_message: str,
+        user_input: InputValue,
         **kwargs: Any,
     ) -> AsyncIterator[AgentEvent]:
         runner = self.require_runner()
@@ -418,7 +422,7 @@ class AgentSession:
             raise ConcurrentSessionRunError("同一 AgentSession 不能并发执行两个轮次")
         async with self.run_lock:
             with use_metrics(self.runtime.metrics):
-                async for event in runner.run_turn_stream(user_message, **kwargs):
+                async for event in runner.run_turn_stream(user_input, **kwargs):
                     yield event
 
     def abort(self) -> None:

@@ -169,6 +169,8 @@ class ContextCompactor:
             是否关键。
         """
         content = msg.get("content", "")
+        if msg.get("role") == "user" and isinstance(content, list):
+            return True
         if not isinstance(content, str):
             return False
         content_lower = content.lower()

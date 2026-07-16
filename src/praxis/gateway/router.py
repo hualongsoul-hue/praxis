@@ -10,7 +10,7 @@ from typing import Any
 
 from litellm.router import Router
 
-from praxis.config.schemas import GatewayConfig, ModelDeployment
+from praxis.config.schemas import GatewayConfig, ModelCapabilities, ModelDeployment
 from praxis.exceptions import AuthenticationError, BudgetExceededError, GatewayError
 from praxis.models.responses import ModelResponse, ModelResponseChunk
 
@@ -115,10 +115,10 @@ class GatewayRouter:
                 return deployment
         raise GatewayError("模型别名未配置", details={"model_name": model_name})
 
-    def supports_vision(self, model_name: str | None = None) -> bool:
-        """Probe the typed capabilities declared for a configured model alias."""
+    def capabilities(self, model_name: str | None = None) -> ModelCapabilities:
+        """Return the typed capabilities declared for a configured model alias."""
         resolved_name = model_name or self.gateway_config.default_model
-        return self.resolve_deployment(resolved_name).supports_vision
+        return self.resolve_deployment(resolved_name).capabilities
 
     def reserve_usage(
         self,

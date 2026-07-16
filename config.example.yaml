@@ -29,7 +29,11 @@ gateway:
       api_base: "http://172.24.23.192:3000/v1"
       api_key_env: "PRAXIS_MODEL_API_KEY"   # 配置中只保存环境变量名
       default_max_output_tokens: 4096
-      supports_vision: false
+      capabilities:
+        image: false
+        audio: false
+        video: false
+        file: false
   default_model: "default"
   routing_strategy: "simple-shuffle"
   num_retries: 3
