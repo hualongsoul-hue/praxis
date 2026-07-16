@@ -75,9 +75,9 @@ async def create_http_transport(
         async with streamable_http_client(
             url=config.url,
             http_client=http_client,
-        ) as (read_stream, write_stream, _get_session_id), ClientSession(
-            read_stream,
-            write_stream,
+        ) as transport_streams, ClientSession(
+            transport_streams[0],
+            transport_streams[1],
             sampling_callback=sampling_callback,
             elicitation_callback=elicitation_callback,
         ) as session:

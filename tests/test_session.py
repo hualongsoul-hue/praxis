@@ -114,7 +114,7 @@ class TestSessionFactory:
         )
         session = await factory.create_session(guardrails=guardrails, gateway=mock_gateway)
         try:
-            for _ in range(6):
+            for checkpoint_index in range(6):  # noqa: B007 - public discard name
                 await session.save_auto_checkpoint()
             mgr = CheckpointManager(store)
             infos = await mgr.list_checkpoints(session.session_id)

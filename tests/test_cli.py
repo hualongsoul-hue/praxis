@@ -79,7 +79,7 @@ class FakeChatSession:
     async def __aenter__(self):
         return self
 
-    async def __aexit__(self, *_args: object) -> None:
+    async def __aexit__(self, *exit_arguments: object) -> None:
         return None
 
     async def run(self, message: str) -> SimpleNamespace:
@@ -93,7 +93,7 @@ class FakeChatRuntime:
     async def __aenter__(self):
         return self
 
-    async def __aexit__(self, *_args: object) -> None:
+    async def __aexit__(self, *exit_arguments: object) -> None:
         return None
 
     def session(self) -> FakeChatSession:
@@ -104,7 +104,7 @@ def test_chat_handles_messages_empty_input_and_exit(capsys) -> None:
     inputs = iter(["", "hello", "quit"])
     with (
         patch("praxis.__main__.PraxisRuntime", FakeChatRuntime),
-        patch("builtins.input", side_effect=lambda _prompt: next(inputs)),
+        patch("builtins.input", side_effect=lambda prompt: next(inputs)),
     ):
         assert main(["chat"]) == 0
     assert "echo:hello" in capsys.readouterr().out

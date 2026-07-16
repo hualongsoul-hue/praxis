@@ -59,7 +59,9 @@ def create_handler(sandbox: ToolPolicy):
         text = resp.text
         results: list[str] = []
         start = 0
-        for _ in range(max_results):
+        remaining_results = max_results
+        while remaining_results > 0:
+            remaining_results -= 1
             idx = text.find('class="result__a"', start)
             if idx == -1:
                 break

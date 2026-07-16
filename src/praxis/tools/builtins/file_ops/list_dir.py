@@ -44,7 +44,7 @@ def create_handler(sandbox: ToolPolicy):
         entries: list[str] = []
         for item in sorted(path.iterdir()):
             if item.is_dir():
-                sub_count = sum(1 for _ in item.rglob("*"))
+                sub_count = len(list(item.rglob("*")))
                 entries.append(f"  {item.name}/  ({sub_count} items)")
             else:
                 size = item.stat().st_size

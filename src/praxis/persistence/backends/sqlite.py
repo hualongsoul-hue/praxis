@@ -69,7 +69,7 @@ class SqliteBackend:
 
         # 生产并发加固：WAL 提升读写并发，busy_timeout 缓解 "database is locked"，
         # NORMAL 同步级别在 WAL 下兼顾持久性与吞吐。
-        def set_sqlite_pragmas(dbapi_conn: Any, _record: Any) -> None:
+        def set_sqlite_pragmas(dbapi_conn: Any, connection_record: Any) -> None:
             cur = dbapi_conn.cursor()
             cur.execute("PRAGMA journal_mode=WAL")
             cur.execute("PRAGMA busy_timeout=5000")

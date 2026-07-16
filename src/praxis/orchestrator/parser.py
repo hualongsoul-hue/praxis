@@ -117,7 +117,9 @@ class StreamAccumulator:
                     type="function",
                     function=FunctionCall(name=buf["name"], arguments=buf["arguments"]),
                 )
-                for _, buf in sorted(self.tool_call_buffers.items())
+                for buf in (
+                    item[1] for item in sorted(self.tool_call_buffers.items())
+                )
             ]
         usage = self.usage or Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)
         return ModelResponse(

@@ -388,7 +388,7 @@ class TestToolCoordination:
                 return ApprovalDecision(approved=True, reason="operator approved")
 
         verdict = GuardrailVerdict(verdict=VerdictType.CONFIRM, reason="需确认")
-        coordinator, executor, _ = self.make_coordinator(
+        coordinator, executor, emitter = self.make_coordinator(
             guardrail_verdict=verdict,
             approval_handler=Approver(),
         )
@@ -402,7 +402,7 @@ class TestToolCoordination:
                 raise RuntimeError("approval unavailable")
 
         verdict = GuardrailVerdict(verdict=VerdictType.CONFIRM, reason="需确认")
-        coordinator, executor, _ = self.make_coordinator(
+        coordinator, executor, emitter = self.make_coordinator(
             guardrail_verdict=verdict,
             approval_handler=BrokenApprover(),
         )
@@ -413,7 +413,7 @@ class TestToolCoordination:
     async def test_circuit_open(self) -> None:
         coordinator, executor, emitter = self.make_coordinator()
         # 触发熔断
-        for _ in range(6):
+        for failure_index in range(6):  # noqa: B007 - public discard name
             coordinator.circuits.record_outcome("read_file", success=False)
         tc = make_tool_call()
         outcomes = await coordinator.execute_tool_calls([tc], turn=1)

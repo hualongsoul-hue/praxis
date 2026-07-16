@@ -117,7 +117,7 @@ async def test_live_stream_can_be_cancelled(live_gateway: GatewayRouter) -> None
 
     async def consume() -> None:
         started.set()
-        async for _chunk in chat_stream(
+        async for chunk in chat_stream(  # noqa: B007 - public discard name
             live_gateway,
             [{"role": "user", "content": "写一篇较长的分布式系统说明"}],
             max_tokens=512,

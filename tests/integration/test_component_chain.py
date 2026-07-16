@@ -298,7 +298,7 @@ class TestS9RecoveryChain:
         assert circuits.check_circuit("tool_a") == CircuitState.CLOSED
 
         # 连续失败触发熔断
-        for _ in range(4):
+        for failure_index in range(4):  # noqa: B007 - public discard name
             circuits.record_outcome("tool_a", success=False)
         assert circuits.check_circuit("tool_a") == CircuitState.OPEN
 

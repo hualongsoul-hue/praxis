@@ -436,7 +436,7 @@ class TestSubagentSpawner:
         started = asyncio.Event()
         child = MagicMock()
 
-        async def slow(*_args: Any, **_kwargs: Any) -> AgentResponse:
+        async def slow(*run_arguments: Any, **run_options: Any) -> AgentResponse:
             started.set()
             await asyncio.Event().wait()
             raise AssertionError("unreachable")

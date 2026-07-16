@@ -71,12 +71,12 @@ class ResultAggregator:
                     answer_map.setdefault(key, []).append((r.subagent_id, str(value)))
 
         for key, entries in answer_map.items():
-            unique_values = set(v for _, v in entries)
+            unique_values = {entry[1] for entry in entries}
             if len(unique_values) > 1:
                 conflicts.append(ConflictMarker(
                     field=key,
                     values=list(unique_values),
-                    subagent_ids=[sid for sid, _ in entries],
+                    subagent_ids=[entry[0] for entry in entries],
                     description=f"子代理对 {key} 给出不同结论",
                 ))
 

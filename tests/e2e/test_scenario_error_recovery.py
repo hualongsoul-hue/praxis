@@ -109,7 +109,7 @@ class TestErrorRecovery:
         )
 
         # 预先注入失败记录使熔断器处于半开状态
-        for _ in range(5):
+        for failure_index in range(5):  # noqa: B007 - public discard name
             loop.coordinator.circuits.record_outcome("unstable_tool", success=False)
 
         response = await loop.run("执行不稳定操作")

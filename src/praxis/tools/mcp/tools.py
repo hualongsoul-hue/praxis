@@ -73,16 +73,16 @@ class MCPToolsBridge:
             )
 
             # 创建代理处理函数
-            original_name = tool.name
-            srv_name = server_name
+            bound_tool_name = tool.name
+            bound_server_name = server_name
 
             async def handler(
                 arguments: dict[str, Any] | None = None,
-                logger_name: str = original_name,
-                _server: str = srv_name,
+                tool_name: str = bound_tool_name,
+                server_name: str = bound_server_name,
                 **kwargs: Any,
             ) -> str:
-                return await self.call_tool(_server, logger_name, arguments or {})
+                return await self.call_tool(server_name, tool_name, arguments or {})
 
             self.registry.register(definition, handler)
 

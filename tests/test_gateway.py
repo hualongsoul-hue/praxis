@@ -353,7 +353,7 @@ class TestChat:
         active = 0
         maximum = 0
 
-        async def completion(**_kwargs: object):
+        async def completion(**completion_options: object):
             nonlocal active, maximum
             active += 1
             maximum = max(maximum, active)
@@ -382,7 +382,7 @@ class TestChat:
         started = asyncio.Event()
         release = asyncio.Event()
 
-        async def completion(**_kwargs: object) -> SimpleNamespace:
+        async def completion(**completion_options: object) -> SimpleNamespace:
             started.set()
             await release.wait()
             return make_raw_response(prompt_tokens=1, completion_tokens=4)
@@ -501,7 +501,7 @@ class TestChat:
         gw.router.acompletion = AsyncMock(return_value=pending_stream())
 
         async def consume() -> None:
-            async for _chunk in chat_stream(
+            async for chunk in chat_stream(  # noqa: B007 - public discard name
                 gw,
                 [{"role": "user", "content": "cancel"}],
                 max_tokens=9,
@@ -576,7 +576,7 @@ class TestMetering:
     @patch("litellm.cost_per_token", return_value=(0.0, 0.0))
     def test_zero_price_is_unknown_without_explicit_deployment_price(
         self,
-        _mock_cost: MagicMock,
+        mock_cost: MagicMock,
     ) -> None:
         assert estimate_input_cost(100, "custom/model") is None
 

@@ -92,7 +92,7 @@ class TestPromptAssemblyPerformance:
         # 计时
         iterations = 50
         start = time.perf_counter()
-        for _ in range(iterations):
+        for iteration in range(iterations):  # noqa: B007 - public discard name
             assembler.assemble_prompt(turn)
         elapsed = (time.perf_counter() - start) / iterations * 1000
 
@@ -125,7 +125,7 @@ class TestPromptAssemblyPerformance:
 
         iterations = 50
         start = time.perf_counter()
-        for _ in range(iterations):
+        for iteration in range(iterations):  # noqa: B007 - public discard name
             assembler.assemble_prompt(turn)
         elapsed = (time.perf_counter() - start) / iterations * 1000
 
@@ -146,7 +146,7 @@ class TestGuardrailPerformance:
 
         iterations = 100
         start = time.perf_counter()
-        for _ in range(iterations):
+        for iteration in range(iterations):  # noqa: B007 - public discard name
             await engine.check_input("这是一个正常的用户消息，不包含任何注入攻击。")
         elapsed = (time.perf_counter() - start) / iterations * 1000
 
@@ -160,7 +160,7 @@ class TestGuardrailPerformance:
 
         iterations = 100
         start = time.perf_counter()
-        for _ in range(iterations):
+        for iteration in range(iterations):  # noqa: B007 - public discard name
             await engine.check_output("这是正常的助手回复内容，不包含敏感信息。")
         elapsed = (time.perf_counter() - start) / iterations * 1000
 
@@ -181,7 +181,7 @@ class TestGuardrailPerformance:
 
         iterations = 100
         start = time.perf_counter()
-        for _ in range(iterations):
+        for iteration in range(iterations):  # noqa: B007 - public discard name
             await engine.check_input("正常消息，不匹配任何规则")
         elapsed = (time.perf_counter() - start) / iterations * 1000
 
@@ -251,7 +251,7 @@ class TestCheckpointPerformance:
 
         iterations = 10
         start = time.perf_counter()
-        for _ in range(iterations):
+        for iteration in range(iterations):  # noqa: B007 - public discard name
             await session.save_auto_checkpoint()
         elapsed = (time.perf_counter() - start) / iterations * 1000
 

@@ -440,7 +440,7 @@ class TestWebFetchSecurity:
 
         policy.check_url = check_url  # type: ignore[method-assign]
         client = httpx.AsyncClient(transport=httpx.MockTransport(
-            lambda _request: httpx.Response(
+            lambda request: httpx.Response(
                 302,
                 headers={"location": "http://127.0.0.1/x"},
             )
@@ -462,7 +462,7 @@ class TestWebFetchSecurity:
             network_max_response_bytes=5,
         ))
         client = httpx.AsyncClient(transport=httpx.MockTransport(
-            lambda _request: httpx.Response(200, content=b"0123456789")
+            lambda request: httpx.Response(200, content=b"0123456789")
         ))
         try:
             result = await web_fetch.create_handler(policy, client)({

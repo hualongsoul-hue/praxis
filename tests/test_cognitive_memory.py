@@ -1072,7 +1072,7 @@ class TestCognitiveMemory:
                 ms.append_message(WorkingMemoryMessage(role="user", content="I like Python"))
                 ms.append_message(WorkingMemoryMessage(role="assistant", content="Noted"))
                 # 等待 Worker 消费
-                for _ in range(40):
+                for poll_attempt in range(40):  # noqa: B007 - public discard name
                     await asyncio.sleep(0.05)
                     if ms.worker.last_processed_message_id is not None:
                         break

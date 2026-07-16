@@ -220,7 +220,7 @@ class TestCheckpointRecovery:
         ]
 
         # 保存 3 次
-        for _ in range(3):
+        for checkpoint_index in range(3):  # noqa: B007 - public discard name
             await session.save_auto_checkpoint()
 
         cp_mgr = CheckpointManager(store)

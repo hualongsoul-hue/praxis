@@ -42,7 +42,7 @@ def create_handler(policy: ToolPolicy, client: httpx.AsyncClient | None = None):
         owns_client = client is None
         active_client = client or httpx.AsyncClient(timeout=30.0, follow_redirects=False)
         try:
-            for _ in range(6):
+            for redirect_attempt in range(6):
                 await policy.check_url(current_url)
                 request = active_client.build_request("GET", current_url)
                 response = await active_client.send(request, stream=True)
@@ -51,6 +51,8 @@ def create_handler(policy: ToolPolicy, client: httpx.AsyncClient | None = None):
                         location = response.headers.get("location")
                         if not location:
                             raise ToolPolicyViolationError("重定向响应缺少 Location")
+                        if redirect_attempt == 5:
+                            break
                         current_url = urljoin(current_url, location)
                         continue
 

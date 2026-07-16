@@ -107,7 +107,7 @@ async def test_runtime_and_session_context_lifecycle(tmp_path: Path) -> None:
     async with PraxisRuntime(
         runtime_config(tmp_path),
         gateway=gateway,
-        session_builder=lambda _: asyncio.sleep(0, result=runner),
+        session_builder=lambda runtime_instance: asyncio.sleep(0, result=runner),
     ) as runtime:
         assert runtime.started
         async with runtime.session() as session:
@@ -124,7 +124,7 @@ async def test_start_and_close_are_idempotent(tmp_path: Path) -> None:
     runtime = PraxisRuntime(
         runtime_config(tmp_path),
         gateway=FakeGateway(),
-        session_builder=lambda _: asyncio.sleep(0, result=FakeRunner()),
+        session_builder=lambda runtime_instance: asyncio.sleep(0, result=FakeRunner()),
     )
     await asyncio.gather(runtime.start(), runtime.start())
     assert runtime.started
@@ -139,7 +139,7 @@ async def test_session_rejects_concurrent_runs(tmp_path: Path) -> None:
     async with PraxisRuntime(
         runtime_config(tmp_path),
         gateway=FakeGateway(),
-        session_builder=lambda _: asyncio.sleep(0, result=runner),
+        session_builder=lambda runtime_instance: asyncio.sleep(0, result=runner),
     ) as runtime:
         async with runtime.session() as session:
             first = asyncio.create_task(session.run("first"))
@@ -154,7 +154,7 @@ async def test_session_requires_context_manager(tmp_path: Path) -> None:
     async with PraxisRuntime(
         runtime_config(tmp_path),
         gateway=FakeGateway(),
-        session_builder=lambda _: asyncio.sleep(0, result=FakeRunner()),
+        session_builder=lambda runtime_instance: asyncio.sleep(0, result=FakeRunner()),
     ) as runtime:
         session = runtime.session()
         with pytest.raises(SessionError, match="尚未启动"):
@@ -165,7 +165,7 @@ async def test_health_reports_local_embedding_degradation(tmp_path: Path) -> Non
     async with PraxisRuntime(
         runtime_config(tmp_path),
         gateway=FakeGateway(),
-        session_builder=lambda _: asyncio.sleep(0, result=FakeRunner()),
+        session_builder=lambda runtime_instance: asyncio.sleep(0, result=FakeRunner()),
     ) as runtime:
         health = await runtime.health()
         assert health.status is HealthStatus.DEGRADED
@@ -180,7 +180,7 @@ async def test_health_reports_unavailable_visual_capability(tmp_path: Path) -> N
     async with PraxisRuntime(
         config,
         gateway=FakeGateway(),
-        session_builder=lambda _: asyncio.sleep(0, result=FakeRunner()),
+        session_builder=lambda runtime_instance: asyncio.sleep(0, result=FakeRunner()),
     ) as runtime:
         health = await runtime.health()
         assert health.components["visual"].status is HealthStatus.DEGRADED
@@ -190,7 +190,7 @@ async def test_health_reports_unavailable_visual_capability(tmp_path: Path) -> N
 async def test_runtime_builds_owned_subagent_with_explicit_tool_subset(tmp_path: Path) -> None:
     parent_registry = ToolRegistry()
 
-    async def handler(_arguments: dict[str, Any]) -> str:
+    async def handler(arguments: dict[str, Any]) -> str:
         return "ok"
 
     for name in ("allowed", "not_allowed"):
@@ -267,7 +267,7 @@ async def test_runtime_rejects_recursive_subagent_tool_delegation(tmp_path: Path
     await runtime.start()
     registry = ToolRegistry()
 
-    async def handler(_arguments: dict[str, Any]) -> str:
+    async def handler(arguments: dict[str, Any]) -> str:
         return "unused"
 
     registry.register(
@@ -292,7 +292,7 @@ async def test_session_stream_abort_properties_and_idempotent_context(tmp_path: 
     async with PraxisRuntime(
         runtime_config(tmp_path),
         gateway=FakeGateway(),
-        session_builder=lambda _: asyncio.sleep(0, result=runner),
+        session_builder=lambda runtime_instance: asyncio.sleep(0, result=runner),
     ) as runtime:
         session = runtime.session()
         assert session.session_id is None
@@ -327,7 +327,7 @@ async def test_health_covers_provider_failures_and_visual_ready(tmp_path: Path) 
         gateway=gateway,
         store=store,
         embedding_provider=embedding,
-        session_builder=lambda _: asyncio.sleep(0, result=FakeRunner()),
+        session_builder=lambda runtime_instance: asyncio.sleep(0, result=FakeRunner()),
     )
     await runtime.start()
     with patch("praxis.runtime.find_spec", return_value=object()):

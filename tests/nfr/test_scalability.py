@@ -77,7 +77,7 @@ class TestToolScalability:
 
         # 查找性能
         start = time.perf_counter()
-        for _ in range(1000):
+        for lookup_iteration in range(1000):  # noqa: B007 - public discard name
             registry.get_entry("tool_100")
         elapsed = (time.perf_counter() - start) / 1000 * 1000  # ms
 
@@ -196,7 +196,7 @@ class TestGuardrailScalability:
         engine = GuardrailEngine(rule_engine, PermissionManager())
 
         start = time.perf_counter()
-        for _ in range(100):
+        for guardrail_iteration in range(100):  # noqa: B007 - public discard name
             await engine.check_input("正常消息，不匹配任何规则模式")
         elapsed = (time.perf_counter() - start) / 100 * 1000
 
@@ -236,7 +236,7 @@ class TestCircuitBreakerScalability:
         assert len(registry.breakers) == 100
 
         # 单个工具熔断不影响其他
-        for _ in range(4):
+        for failure_index in range(4):  # noqa: B007 - public discard name
             registry.record_outcome("tool_050", success=False)
 
         from praxis.models.recovery import CircuitState

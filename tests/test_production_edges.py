@@ -510,7 +510,7 @@ class TestDreamConsolidatorEdges:
         return dream, scoped, retention, meta_store
 
     async def test_should_run_handles_invalid_and_recent_metadata(self) -> None:
-        dream, _, _, meta_store = self.consolidator([])
+        dream, scoped_store, retention_policy, meta_store = self.consolidator([])
         assert not await dream.should_run(1)
         assert await dream.should_run(2)
         meta_store.load.return_value = {"completed_at": 42}
@@ -528,13 +528,15 @@ class TestDreamConsolidatorEdges:
 
     async def test_empty_and_model_failure_runs_are_persisted(self) -> None:
         scope = MemoryScope(scope_type=ScopeType.GLOBAL)
-        empty, _, _, empty_meta = self.consolidator([])
+        empty, empty_scoped_store, empty_retention_policy, empty_meta = self.consolidator([])
         report = await empty.run_dream([scope])
         assert report.summary == "无记忆条目需要整理"
         empty_meta.save.assert_awaited_once()
 
         entry = TestVectorAndMeteringEdges.entry("old")
-        failing, _, _, failure_meta = self.consolidator([entry])
+        failing, failure_scoped_store, failure_retention_policy, failure_meta = self.consolidator(
+            [entry]
+        )
         with patch("praxis.memory.dream.chat", AsyncMock(side_effect=RuntimeError("down"))):
             report = await failing.run_dream([scope])
         assert "LLM 调用失败" in report.summary

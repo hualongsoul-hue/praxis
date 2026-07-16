@@ -46,7 +46,7 @@ def load_cli_config(path: str | None) -> PraxisConfig:
     return load_config(Path(path) if path else None)
 
 
-def cmd_version(_: argparse.Namespace) -> int:
+def cmd_version(arguments: argparse.Namespace) -> int:
     print(f"praxis {__version__}")
     return 0
 
