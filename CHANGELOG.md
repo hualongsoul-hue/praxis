@@ -1,91 +1,30 @@
 # Changelog
 
-本项目遵循 [Semantic Versioning](https://semver.org/)。
+本项目遵循 Semantic Versioning。
 
-## [Unreleased]
+## [1.0.0] - 2026-07-16
 
-### 缺陷修复
+首个生产级 SDK/CLI 版本。
 
-- **S9 重试失效**: 工具瞬态错误此前只记录日志不重试，改为按退避策略真正重连执行
-- **S4 预算失效**: 修正预算预检查算法（误把 token 数字符串当文本计价），新增累计花费追踪
-- **S7 Token 低估**: 上下文用量纳入系统提示/记忆/工具定义层，修正压缩与终止误判
-- **S11 流式终止**: 提前终止内容透传、Handoff 工具计数翻倍、事件捕获健壮性
-- **S8 护栏**: ALLOW 放行但触发绊线时不再丢失绊线标记
-- **S6 记忆**: 移除硬编码内网嵌入地址、复用 httpx 连接池、检查点恢复待提取消息
+### 核心
 
-### 功能链补全（消除「实现但未接入」）
+- 新增应用级 `PraxisRuntime`、并发安全 `AgentSession`、异步事件流和组件健康检查。
+- 统一模型网关、Token/金额预算预留、并发限制、结构化错误和流式取消语义。
+- 统一聊天、总结、判断、记忆、验证和 MCP Sampling 的默认模型别名。
+- 新增隔离子代理会话、显式工具子集、并发限制、取消、超时和结果聚合。
 
-- **S6 记忆工具**: save/search/update/delete/scratchpad 暴露为 LLM 可调用工具
-- **S9 降级**: 工具降级映射经 `tools.fallback_mappings` 配置装配
-- **S10 验证**: 验证器注册表支持推理型/视觉型验证（注入网关）
-- **S12 续接**: `resume_agent_session` 顶层入口 + `ContinuationManager` 热身序列接通
-- **S6 衰减**: 梦境周期执行相关性衰减遗忘（`decay_enabled`）
-- **MCP**: 服务器装配到会话、Sampling/Elicitation 回调、资源/提示工具、OAuth 头注入
+### 安全与可靠性
 
-### 生产化加固
+- 严格、冻结且无进程全局状态的配置；模型密钥仅从环境变量读取。
+- 文件路径边界、原子写入、检查点版本/校验和、append-only 审计和优雅关闭。
+- Shell 默认禁用，网络默认阻止 SSRF，异步审批失败关闭，写工具不自动重试。
+- Redis、MCP、视觉和 OTLP 拆分为懒加载可选依赖。
 
-- **配置保真**: 装配 RecoveryConfig、default_strategy、VerificationConfig 开关、
-  max_checkpoints_per_session、input/output_guardrails_enabled、permissions_file、
-  audit_enabled——消除「配置了却无效」
-- **可观测**: `configure_telemetry` 统一初始化；Histogram 分桶/分位；
-  Prometheus /metrics 抓取端点；OTLP 追踪（可选依赖，未装则降级 console）；
-  修复 session_id/turn 标签导致的无界基数
-- **安全**: 收窄敏感信息正则降误报、护栏启停可配、文档明确为基础启发式
-- **持久化**: SQLite 启用 WAL + busy_timeout 加固并发
-- **运维**: `python -m praxis` CLI（version/validate/show-config/serve-metrics）
-- **集成验证**: 新增 LiteLLM 真实链路集成测试（mock_response，无网络）
+### 工程
 
-## [1.0.0] - 2026-04-17
+- 支持 Python 3.12、3.13、3.14 以及 Windows/Linux。
+- 提供 `praxis config validate/show`、`doctor`、`chat` 和 `version`。
+- 提供 strict Pyright 类型、`py.typed`、跨平台 CI、安全扫描、wheel 干净环境冒烟和文档示例校验。
+- 重写架构、配置、安全、部署、扩展和故障排查文档。
 
-### 架构
-
-- **S1 配置系统**: Pydantic Settings 驱动的分层配置，环境变量 > 配置文件 > 默认值
-- **S2 遥测系统**: 结构化日志（structlog）、OpenTelemetry 指标/追踪、审计持久化通道
-- **S3 持久化引擎**: 三后端统一接口（SQLite / Redis / 文件系统），SQLAlchemy ORM
-- **S4 模型网关**: LiteLLM Router 封装，100+ Provider 统一接入，成本预算控制
-- **S5 工具系统**: 统一注册表、沙箱执行、并发调度、MCP 桥接
-- **S6 记忆管线**: 四型认知记忆（语义/情景/程序/工作），双路径处理，向量检索
-- **S7 上下文引擎**: 五层 Prompt 组装、Token 追踪、上下文压缩、注意力遮蔽
-- **S8 护栏系统**: 三层护栏（输入/工具/输出）、规则引擎、权限管理、绊线机制
-- **S9 错误恢复**: 熔断器三态模型、指数退避重试、优雅降级
-- **S10 验证引擎**: 计算验证、推理验证、视觉验证
-- **S11 编排循环**: Agent 轮次生命周期编排、ReAct/Plan-and-Execute 策略
-- **S12 会话管理**: 会话工厂、自动检查点、跨窗口恢复
-- **S13 子代理协调**: 隔离上下文、工具子集、独立轮次限制
-- **S14 技能系统**: 技能发现/注册/激活、三层渐进式披露、版本管理
-
-### MCP 集成
-
-- MCP 工具桥接：透明代理发现与执行
-- Elicitation 管理：用户确认请求转发
-- Sampling 管理：LLM 采样代理 + Human-in-the-loop
-- 连接管理：能力协商、崩溃自动重连
-
-### 测试
-
-- 8 个端到端场景测试（38 个测试用例）
-- 25 个跨组件集成测试
-- 9 个性能基准测试
-- 41 个非功能需求验证测试
-- 全部 113 个 Phase 16 测试通过
-
-### 文档
-
-- API 参考文档 (`docs/API.md`)
-- 使用指南 (`docs/GUIDE.md`)
-- 配置参考 (`docs/CONFIG_REFERENCE.md`)
-- 配置模板 (`config.example.yaml`)
-
-### 性能指标
-
-- 编排循环开销: <50ms
-- 工具执行管线延迟: <100ms
-- 检查点写入: <200ms
-- Prompt 组装: <20ms
-- 护栏裁决: <10ms
-
-### 非功能需求
-
-- 安全: 沙箱隔离、提示注入检测、敏感信息防护、100% 审计覆盖
-- 可靠: 单步 ≥99.5%、检查点恢复 100%
-- 可扩展: 100+ 工具、1000+ 轮次、10000+ 记忆条目
+此版本不兼容旧公开 API 或旧检查点，不提供自动迁移层。
