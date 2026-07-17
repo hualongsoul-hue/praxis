@@ -34,7 +34,7 @@
 - 使用指定真实端点完成三个独立健康窗口探测：图片和视频稳定成功并启用，音频和文件稳定
   映射为 `GatewayError/BadRequestError` 并保持关闭；非健康窗口不会参与能力分类。
 - 提供 strict Pyright 类型、`py.typed`、跨平台 CI、安全扫描、wheel 干净环境冒烟和文档示例校验。
-- 发布门禁通过 837 项测试（12 项显式环境跳过）、91.14% 分支覆盖、Ruff、Pyright、
+- 发布门禁通过 839 项测试（12 项显式环境跳过）、91.12% 分支覆盖、Ruff、Pyright、
   pip-audit、wheel/sdist 构建，以及无密钥、无 Redis/MCP/视觉依赖的 wheel-only 冒烟。
 - 重写架构、配置、安全、部署、扩展和故障排查文档。
 
