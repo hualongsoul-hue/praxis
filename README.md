@@ -61,6 +61,29 @@ async with PraxisRuntime(load_config("config.yaml")) as runtime:
             print(event.event_type, event.data)
 ```
 
+### 实时交互控制台
+
+仓库内的 [examples/interactive_console.py](examples/interactive_console.py) 是一个完整的
+长生命周期控制台示例。它只创建一个 `PraxisRuntime` 和一个 `AgentSession`，持续复用会话上下文，
+并实时渲染 `content_delta`、工具执行和终止事件：
+
+```shell
+copy config.example.yaml config.yaml  # Windows
+cp config.example.yaml config.yaml     # Linux
+uv run python examples/interactive_console.py --config config.yaml
+```
+
+模型密钥仍然只从 `PRAXIS_MODEL_API_KEY` 环境变量读取。控制台命令包括：
+
+- `/health`：查看 Runtime、模型、存储和后台任务健康状态；
+- `/attach <image|audio|video|file> <path>`：为下一轮排队一个本地附件；
+- `/attachments`、`/clear`：查看或清除待发送附件；
+- `/help`、`/quit`：查看帮助或优雅退出。
+
+附件路径仍由 `inputs.allowed_paths`、模型能力和输入大小策略共同校验；控制台不会绕过 SDK
+的路径、网络、护栏、审批、检查点或审计流程。流式输出期间按 `Ctrl+C` 只中止当前轮次，
+不会直接跳过 Runtime 的关闭流程。
+
 ## 文本与多模态输入
 
 `AgentSession.run()` 和 `run_stream()` 接受普通字符串，也接受由图片、音频、视频和文件组成的
