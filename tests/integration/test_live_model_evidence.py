@@ -1,11 +1,14 @@
 """Deterministic classification contracts for live-model evidence."""
 
+from types import SimpleNamespace
+
 from tests.integration.live_model_evidence import (
     CapabilityClassification,
     HealthWindowEvidence,
     ModalityObservation,
     classify_capability_windows,
     format_safe_evidence,
+    response_has_model_output,
 )
 
 
@@ -116,3 +119,11 @@ def test_safe_evidence_projection_contains_categories_but_no_payload() -> None:
     assert "ProviderUnavailableError" in projection
     assert "base64" not in projection.lower()
     assert "data:" not in projection.lower()
+
+
+def test_reasoning_only_model_response_is_model_output() -> None:
+    assert response_has_model_output(SimpleNamespace(content="", reasoning_content="step"))
+
+
+def test_empty_model_response_has_no_output() -> None:
+    assert not response_has_model_output(SimpleNamespace(content="", reasoning_content=""))

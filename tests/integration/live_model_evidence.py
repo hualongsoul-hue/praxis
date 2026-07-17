@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
 
 class CapabilityClassification(StrEnum):
@@ -10,6 +11,18 @@ class CapabilityClassification(StrEnum):
     UNCLASSIFIED = "unclassified"
     SUPPORTED = "supported"
     UNSUPPORTED = "unsupported"
+
+
+def response_has_model_output(response: Any) -> bool:
+    """Treat visible content or reasoning content as a non-empty response."""
+
+    return bool(
+        (isinstance(getattr(response, "content", None), str) and response.content.strip())
+        or (
+            isinstance(getattr(response, "reasoning_content", None), str)
+            and response.reasoning_content.strip()
+        )
+    )
 
 
 CLASSIFYING_UNSUPPORTED_SIGNATURES = frozenset(

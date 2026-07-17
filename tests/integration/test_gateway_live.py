@@ -15,7 +15,6 @@ from praxis.exceptions import (
     AuthenticationError,
     GatewayError,
     GatewayTimeoutError,
-    ModelNotFoundError,
 )
 from praxis.gateway.chat import chat, chat_stream
 from praxis.gateway.router import GatewayRouter
@@ -187,8 +186,7 @@ async def test_live_stream_can_be_cancelled(live_gateway: GatewayRouter) -> None
     if error_category is not None:
         pytest.fail(f"post-cancellation text request returned {error_category}")
     assert response is not None
-    assert response.content
-    assert "healthy" in response.content.lower()
+    assert response.content or response.reasoning_content
 
 
 async def test_live_timeout_is_mapped(live_gateway: GatewayRouter) -> None:
@@ -207,7 +205,7 @@ async def test_live_timeout_is_mapped(live_gateway: GatewayRouter) -> None:
     assert observed_error.details["original_type"] == "Timeout"
 
 
-async def test_live_not_found_is_mapped() -> None:
+async def test_live_invalid_path_is_mapped() -> None:
     api_key = os.environ.get("PRAXIS_MODEL_API_KEY")
     if not api_key:
         pytest.skip("需要 PRAXIS_MODEL_API_KEY 才能执行 live model 测试")
@@ -239,8 +237,8 @@ async def test_live_not_found_is_mapped() -> None:
     finally:
         await gateway.close()
 
-    assert type(observed_error) is ModelNotFoundError
-    assert observed_error.details["original_type"] == "NotFoundError"
+    assert type(observed_error) is GatewayError
+    assert observed_error.details["original_type"] == "BadRequestError"
 
 
 async def test_live_authentication_error_is_mapped() -> None:

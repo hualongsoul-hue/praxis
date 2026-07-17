@@ -14,9 +14,9 @@ gateway:
       api_key_env: PRAXIS_MODEL_API_KEY
       default_max_output_tokens: 4096
       capabilities:
-        image: false
+        image: true
         audio: false
-        video: false
+        video: true
         file: false
   default_model: default
   max_concurrent_requests: 8

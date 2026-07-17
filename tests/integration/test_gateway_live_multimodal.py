@@ -25,6 +25,7 @@ from tests.integration.live_model_evidence import (
     ModalityObservation,
     classify_capability_windows,
     format_safe_evidence,
+    response_has_model_output,
 )
 
 MODEL = "openai/glm-5.1-openai"
@@ -93,7 +94,7 @@ def modality_cases() -> list[tuple[str, dict[str, Any], CapabilityClassification
                 "type": "image_url",
                 "image_url": {"url": f"data:image/png;base64,{PNG_BASE64}"},
             },
-            CapabilityClassification.UNCLASSIFIED,
+            CapabilityClassification.SUPPORTED,
         ),
         (
             "audio",
@@ -101,7 +102,7 @@ def modality_cases() -> list[tuple[str, dict[str, Any], CapabilityClassification
                 "type": "input_audio",
                 "input_audio": {"data": build_wav_base64(), "format": "wav"},
             },
-            CapabilityClassification.UNCLASSIFIED,
+            CapabilityClassification.UNSUPPORTED,
         ),
         (
             "video",
@@ -109,7 +110,7 @@ def modality_cases() -> list[tuple[str, dict[str, Any], CapabilityClassification
                 "type": "video_url",
                 "video_url": {"url": f"data:video/mp4;base64,{MP4_BASE64}"},
             },
-            CapabilityClassification.UNCLASSIFIED,
+            CapabilityClassification.SUPPORTED,
         ),
         (
             "file",
@@ -121,7 +122,7 @@ def modality_cases() -> list[tuple[str, dict[str, Any], CapabilityClassification
                     + base64.b64encode("Praxis 端点能力证据".encode()).decode("ascii"),
                 },
             },
-            CapabilityClassification.UNCLASSIFIED,
+            CapabilityClassification.UNSUPPORTED,
         ),
     ]
 
@@ -342,7 +343,7 @@ async def probe_text_control(
         error_category = type(exc).__name__
     if error_category is not None:
         return False, error_category
-    if response is None or not isinstance(response.content, str) or not response.content.strip():
+    if response is None or not response_has_model_output(response):
         return False, "EmptyModelResponse"
     return True, None
 
@@ -370,7 +371,7 @@ async def probe_modality(
             type(observed_error).__name__,
             original_type if isinstance(original_type, str) else "UnknownProviderError",
         )
-    if response is None or not isinstance(response.content, str) or not response.content.strip():
+    if response is None or not response_has_model_output(response):
         return ModalityObservation.failed("EmptyModelResponse", "EmptyModelResponse")
     return ModalityObservation.succeeded()
 

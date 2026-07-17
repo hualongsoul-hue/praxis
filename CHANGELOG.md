@@ -31,8 +31,8 @@
 - 新增仓库级公开符号 AST 策略，项目自有 Python 代码禁止单下划线私有定义与访问。
 - 将内存替身场景归类到 `tests/scenarios`；`tests/e2e` 仅保留经过真实 HTTP/TCP
   边界的 Runtime → LiteLLM 契约测试，并独立校验集成与文档示例。
-- 指定真实端点的多模态能力保持未分类且示例能力开关保持关闭：最近的健康窗口在纯文本
-  控制请求阶段返回 HTTP 503 / `no_available_workers`，未把非健康窗口当作能力证据。
+- 使用指定真实端点完成三个独立健康窗口探测：图片和视频稳定成功并启用，音频和文件稳定
+  映射为 `GatewayError/BadRequestError` 并保持关闭；非健康窗口不会参与能力分类。
 - 提供 strict Pyright 类型、`py.typed`、跨平台 CI、安全扫描、wheel 干净环境冒烟和文档示例校验。
 - 发布门禁通过 837 项测试（12 项显式环境跳过）、91.14% 分支覆盖、Ruff、Pyright、
   pip-audit、wheel/sdist 构建，以及无密钥、无 Redis/MCP/视觉依赖的 wheel-only 冒烟。
