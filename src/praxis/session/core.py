@@ -39,7 +39,7 @@ from praxis.orchestrator.strategy import LoopStrategy
 from praxis.orchestrator.termination import TerminationManager
 from praxis.orchestrator.tool_coordination import ToolCoordinator
 from praxis.persistence.store import PersistenceStore
-from praxis.protocols import ApprovalHandler, AuditSink
+from praxis.protocols import ApprovalHandler, AuditSink, EmbeddingProvider
 from praxis.recovery.circuit_breaker import CircuitBreakerRegistry
 from praxis.recovery.fallback import FallbackRegistry
 from praxis.recovery.retry import RetryPolicy
@@ -223,6 +223,9 @@ class Session:
         """终止会话：停止后台记忆 Worker、Dream 调度器并关闭 MCP 连接。"""
         if self.memory is not None:
             await self.memory.stop()
+        if self.mcp_manager is not None:
+            for server_name in self.mcp_manager.list_connected_servers():
+                self.mcp_manager.disconnect_server(server_name)
         if self.mcp_stack is not None:
             await self.mcp_stack.aclose()
             self.mcp_stack = None
@@ -247,6 +250,7 @@ class SessionFactory:
         recovery_config: RecoveryConfig | None = None,
         approval_handler: ApprovalHandler | None = None,
         audit_sink: AuditSink | None = None,
+        embedding_provider: EmbeddingProvider | None = None,
     ) -> None:
         self.store = store
         self.session_config = session_config
@@ -257,6 +261,7 @@ class SessionFactory:
         self.recovery_config = recovery_config or RecoveryConfig()
         self.approval_handler = approval_handler
         self.audit_sink = audit_sink
+        self.embedding_provider = embedding_provider
 
     async def create_session(
         self,
@@ -300,6 +305,7 @@ class SessionFactory:
                 gateway=gateway,
                 session_id=metadata.session_id,
                 config=self.memory_config,
+                embedding_provider=self.embedding_provider,
             )
         await memory.start()
 

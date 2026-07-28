@@ -379,6 +379,48 @@ class TestExecutor:
         with pytest.raises(ToolNotFoundError):
             await executor.execute("nonexistent", {})
 
+    async def test_readonly_concurrency_uses_configured_limit(self, tmp_path: Path) -> None:
+        policy = ToolPolicy(
+            ToolsConfig(
+                allowed_paths=[str(tmp_path)],
+                max_concurrent_readonly=1,
+            )
+        )
+        registry = ToolRegistry()
+        first_started = asyncio.Event()
+        release = asyncio.Event()
+        active = 0
+        maximum_active = 0
+
+        async def handler(arguments: dict[str, Any]) -> str:
+            nonlocal active, maximum_active
+            active += 1
+            maximum_active = max(maximum_active, active)
+            first_started.set()
+            await release.wait()
+            active -= 1
+            return "ok"
+
+        registry.register(
+            ToolDefinition(
+                name="bounded_read",
+                description="bounded",
+                parameters={"type": "object", "properties": {}},
+                metadata=ToolMetadata(readonly=True),
+            ),
+            handler,
+        )
+        executor = ToolExecutor(registry, policy)
+        first = asyncio.create_task(executor.execute("bounded_read", {}))
+        second = asyncio.create_task(executor.execute("bounded_read", {}))
+        await first_started.wait()
+        await asyncio.sleep(0)
+        assert maximum_active == 1
+        release.set()
+        results = await asyncio.gather(first, second)
+        assert all(result.success for result in results)
+        assert maximum_active == 1
+
     def test_validate_arguments_pass(self) -> None:
         schema = {
             "type": "object",

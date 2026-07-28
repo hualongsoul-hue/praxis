@@ -27,6 +27,7 @@ class ToolExecutor:
         self.registry = registry
         self.sandbox = sandbox
         self.write_lock = asyncio.Lock()
+        self.read_semaphore = asyncio.Semaphore(sandbox.max_concurrent_readonly)
 
     async def execute(
         self,
@@ -67,10 +68,11 @@ class ToolExecutor:
 
         try:
             if meta.readonly:
-                content = await asyncio.wait_for(
-                    entry.handler(arguments),
-                    timeout=timeout,
-                )
+                async with self.read_semaphore:
+                    content = await asyncio.wait_for(
+                        entry.handler(arguments),
+                        timeout=timeout,
+                    )
             else:
                 async with self.write_lock:
                     content = await asyncio.wait_for(

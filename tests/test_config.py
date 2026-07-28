@@ -10,7 +10,7 @@ from praxis.config import (
     get_component_config,
     load_config,
 )
-from praxis.config.schemas import GatewayConfig, TelemetryConfig, ToolsConfig
+from praxis.config.schemas import GatewayConfig, MCPConfig, TelemetryConfig, ToolsConfig
 from praxis.exceptions import ConfigError, ModelValidationError
 
 
@@ -159,3 +159,7 @@ class TestValidation:
         yaml_file.write_text("persistence:\n  backend: invalid_backend\n")
         with pytest.raises(ModelValidationError):
             load_config(yaml_file)
+
+    def test_enabled_mcp_requires_server_configuration(self) -> None:
+        with pytest.raises(ModelValidationError):
+            MCPConfig(enabled=True)

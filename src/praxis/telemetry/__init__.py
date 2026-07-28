@@ -5,6 +5,7 @@ from praxis.telemetry.audit import AuditService, NullAuditSink
 from praxis.telemetry.logger import StructuredLogger, configure_logging, get_logger
 from praxis.telemetry.metrics import (
     MetricsCollector,
+    MetricsExporter,
     configure_metrics,
     emit_metric,
     export_prometheus,
@@ -22,6 +23,7 @@ def configure_cli_telemetry(config: TelemetryConfig) -> None:
 __all__ = [
     "AuditService",
     "MetricsCollector",
+    "MetricsExporter",
     "NullAuditSink",
     "StructuredLogger",
     "configure_cli_telemetry",

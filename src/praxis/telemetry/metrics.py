@@ -8,6 +8,7 @@ import threading
 from collections.abc import Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Literal
 
@@ -131,7 +132,8 @@ def format_labels(tags: tuple[tuple[str, str], ...]) -> str:
 class MetricsCollector:
     """线程安全的指标采集器。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, enabled: bool = True) -> None:
+        self.enabled = enabled
         self.counters: dict[MetricKey, Counter] = {}
         self.gauges: dict[MetricKey, Gauge] = {}
         self.histograms: dict[MetricKey, Histogram] = {}
@@ -143,6 +145,8 @@ class MetricsCollector:
     def counter(
         self, name: str, value: float = 1.0, tags: dict[str, str] | None = None
     ) -> None:
+        if not self.enabled:
+            return
         key = self.metric_key(name, tags)
         with self.lock:
             if key not in self.counters:
@@ -152,6 +156,8 @@ class MetricsCollector:
     def gauge(
         self, name: str, value: float, tags: dict[str, str] | None = None
     ) -> None:
+        if not self.enabled:
+            return
         key = self.metric_key(name, tags)
         with self.lock:
             if key not in self.gauges:
@@ -161,6 +167,8 @@ class MetricsCollector:
     def histogram(
         self, name: str, value: float, tags: dict[str, str] | None = None
     ) -> None:
+        if not self.enabled:
+            return
         key = self.metric_key(name, tags)
         with self.lock:
             if key not in self.histograms:
@@ -206,7 +214,82 @@ class MetricsCollector:
 
     def export_to_file(self, path: str | Path) -> None:
         """导出指标到文件。"""
-        Path(path).write_text(self.export_prometheus(), encoding="utf-8")
+        output_path = Path(path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary_path = output_path.with_name(f"{output_path.name}.tmp")
+        temporary_path.write_text(self.export_prometheus(), encoding="utf-8")
+        temporary_path.replace(output_path)
+
+
+class MetricsExporter:
+    """CLI-owned metrics exporter with deterministic start and close semantics."""
+
+    def __init__(
+        self,
+        collector: MetricsCollector,
+        config: TelemetryConfig,
+    ) -> None:
+        self.collector = collector
+        self.config = config
+        self.server: ThreadingHTTPServer | None = None
+        self.thread: threading.Thread | None = None
+
+    def __enter__(self) -> "MetricsExporter":
+        self.start()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object | None,
+    ) -> None:
+        self.close()
+
+    def start(self) -> None:
+        if not self.config.metrics_enabled or self.config.metrics_export == "file":
+            return
+
+        collector = self.collector
+
+        class MetricsRequestHandler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                if self.path != "/metrics":
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                body = collector.export_prometheus().encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain; version=0.0.4")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, format: str, *args: object) -> None:
+                return
+
+        self.server = ThreadingHTTPServer(
+            ("127.0.0.1", self.config.metrics_port),
+            MetricsRequestHandler,
+        )
+        self.thread = threading.Thread(
+            target=self.server.serve_forever,
+            name="praxis-metrics",
+            daemon=False,
+        )
+        self.thread.start()
+
+    def close(self) -> None:
+        if self.config.metrics_enabled and self.config.metrics_export == "file":
+            output_path = self.config.metrics_file or "data/praxis.metrics.prom"
+            self.collector.export_to_file(output_path)
+        if self.server is not None:
+            self.server.shutdown()
+            self.server.server_close()
+            self.server = None
+        if self.thread is not None:
+            self.thread.join(timeout=5)
+            self.thread = None
 
 
 current_collector: ContextVar[MetricsCollector | None] = ContextVar(
@@ -217,7 +300,7 @@ current_collector: ContextVar[MetricsCollector | None] = ContextVar(
 
 def configure_metrics(config: TelemetryConfig) -> None:
     """为当前 CLI 上下文绑定采集器；不启动永久线程或 HTTP 服务。"""
-    current_collector.set(MetricsCollector())
+    current_collector.set(MetricsCollector(enabled=config.metrics_enabled))
 
 
 @contextmanager

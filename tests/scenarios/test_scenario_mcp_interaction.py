@@ -131,23 +131,17 @@ class TestMCPInteraction:
         mock_router.config.max_budget = None
         mock_router.config.default_model = "test-model"
 
-        # mock chat 返回
-        from types import SimpleNamespace
-        raw_response = SimpleNamespace(
+        from praxis.models.responses import ModelResponse, Usage
+
+        mock_router.complete = AsyncMock(
+            return_value=ModelResponse(
             id="resp-sampling",
-            choices=[SimpleNamespace(
-                message=SimpleNamespace(
-                    content="推荐航班: BA-447, 直飞, 价格最优",
-                    tool_calls=None,
-                ),
-                finish_reason="stop",
-            )],
-            usage=SimpleNamespace(prompt_tokens=30, completion_tokens=50, total_tokens=80),
+            content="推荐航班: BA-447, 直飞, 价格最优",
+            usage=Usage(prompt_tokens=30, completion_tokens=50, total_tokens=80),
             model="test-model",
             created=1700000000,
+            )
         )
-        mock_router.router = MagicMock()
-        mock_router.router.acompletion = AsyncMock(return_value=raw_response)
 
         manager = SamplingManager(mock_router)
 

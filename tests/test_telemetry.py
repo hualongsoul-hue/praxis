@@ -2,7 +2,9 @@
 
 import asyncio
 import json
+import socket
 from pathlib import Path
+from urllib.request import urlopen
 
 import pytest
 
@@ -18,6 +20,7 @@ from praxis.telemetry.logger import (
 )
 from praxis.telemetry.metrics import (
     MetricsCollector,
+    MetricsExporter,
     emit_metric,
     export_prometheus,
 )
@@ -337,3 +340,57 @@ class TestMetricsConcurrency:
         emit_thread.join()
         # 修复前：export 在锁外迭代 → "dictionary changed size during iteration"
         assert errors == []
+
+
+class TestMetricsConfiguration:
+    """Every metrics configuration field must affect observable behavior."""
+
+    def test_disabled_collector_drops_samples(self) -> None:
+        collector = MetricsCollector(enabled=False)
+        collector.counter("ignored")
+        collector.gauge("ignored_gauge", 1)
+        collector.histogram("ignored_histogram", 2)
+        assert collector.export_prometheus() == ""
+
+    def test_file_exporter_flushes_to_configured_path(self, tmp_path: Path) -> None:
+        output = tmp_path / "nested" / "metrics.prom"
+        config = TelemetryConfig(
+            metrics_enabled=True,
+            metrics_export="file",
+            metrics_file=str(output),
+            tracing_enabled=False,
+        )
+        collector = MetricsCollector()
+        collector.counter("completed_turns")
+
+        with MetricsExporter(collector, config):
+            pass
+
+        assert "completed_turns" in output.read_text(encoding="utf-8")
+        assert not output.with_name(f"{output.name}.tmp").exists()
+
+    def test_prometheus_exporter_uses_configured_port_and_closes(self) -> None:
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        config = TelemetryConfig(
+            metrics_enabled=True,
+            metrics_export="prometheus",
+            metrics_port=port,
+            tracing_enabled=False,
+        )
+        collector = MetricsCollector()
+        collector.counter("runtime_ready")
+        exporter = MetricsExporter(collector, config)
+
+        exporter.start()
+        try:
+            with urlopen(f"http://127.0.0.1:{port}/metrics", timeout=2) as response:
+                body = response.read().decode("utf-8")
+            assert response.status == 200
+            assert "runtime_ready" in body
+        finally:
+            exporter.close()
+
+        assert exporter.server is None
+        assert exporter.thread is None

@@ -36,6 +36,7 @@ from praxis.models.memory import (
     WorkingMemoryMessage,
 )
 from praxis.persistence.store import PersistenceStore
+from praxis.protocols import EmbeddingProvider
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
 
@@ -57,6 +58,7 @@ class CognitiveMemory:
         session_id: str,
         config: MemoryConfig | None = None,
         default_scope: MemoryScope | None = None,
+        embedding_provider: EmbeddingProvider | None = None,
     ) -> None:
         self.store = store
         self.gateway = gateway
@@ -74,12 +76,14 @@ class CognitiveMemory:
         # 向量索引
         self.vector_store = VectorStore(
             self.scoped_store,
+            embed_func=embedding_provider.embed if embedding_provider is not None else None,
             api_base=self.config.embedding_api_base,
             api_key=(
                 os.getenv(self.config.embedding_api_key_env, "")
                 if self.config.embedding_api_key_env
                 else ""
             ),
+            model=self.config.embedding_model,
             timeout=self.config.embedding_timeout,
             dimensions=self.config.embedding_dimensions,
         )

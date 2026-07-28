@@ -37,6 +37,7 @@ async def tei_embed(
     text: str,
     api_base: str,
     api_key: str = "",
+    model: str | None = None,
     timeout: float = 30.0,
     client: httpx.AsyncClient | None = None,
 ) -> list[float]:
@@ -52,7 +53,13 @@ async def tei_embed(
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
 
-    payload = {"inputs": [text], "normalize": True, "truncate": True}
+    payload: dict[str, object] = {
+        "inputs": [text],
+        "normalize": True,
+        "truncate": True,
+    }
+    if model:
+        payload["model"] = model
 
     if client is not None:
         response = await client.post(url, json=payload, headers=headers)
@@ -100,12 +107,14 @@ class VectorStore:
         embed_func: EmbeddingFunc | None = None,
         api_base: str | None = None,
         api_key: str = "",
+        model: str | None = None,
         timeout: float = 30.0,
         dimensions: int = 0,
     ) -> None:
         self.scoped_store = scoped_store
         self.api_base = api_base
         self.api_key = api_key
+        self.model = model
         self.timeout = timeout
         self.dimensions = dimensions  # 期望嵌入维度；>0 时校验，0 表示不校验
         self.embed_func: EmbeddingFunc = embed_func or (
@@ -127,6 +136,7 @@ class VectorStore:
             text,
             api_base=self.api_base,
             api_key=self.api_key,
+            model=self.model,
             timeout=self.timeout,
             client=self.get_client(),
         )

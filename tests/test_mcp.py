@@ -1,5 +1,6 @@
 """S5 MCP 完整集成单元测试。"""
 
+import asyncio
 import sys
 import time
 from pathlib import Path
@@ -547,7 +548,12 @@ class TestMCPWiring:
 
         registry = ToolRegistry()
         configs = [
-            MCPServerConfig(name="bad", transport=MCPTransportType.STDIO, command="x"),
+            MCPServerConfig(
+                name="bad",
+                transport=MCPTransportType.STDIO,
+                command="x",
+                reconnect_attempts=0,
+            ),
             MCPServerConfig(name="good", transport=MCPTransportType.STDIO, command="y"),
         ]
         with patch("praxis.tools.mcp.wiring.create_transport", flaky_transport):
@@ -555,6 +561,101 @@ class TestMCPWiring:
                 manager = await connect_mcp_servers(registry, configs, stack)
         assert registry.has_tool("mcp_good_echo")
         assert "bad" not in manager.list_connected_servers()
+
+    async def test_connect_mcp_servers_retries_then_recovers(self) -> None:
+        from contextlib import AsyncExitStack, asynccontextmanager
+
+        from praxis.tools.mcp.wiring import connect_mcp_servers
+
+        attempts = 0
+        session = make_mock_session()
+
+        @asynccontextmanager
+        async def recovering_transport(config: Any, *args: Any):
+            nonlocal attempts
+            attempts += 1
+            if attempts < 3:
+                raise RuntimeError("temporary failure")
+            yield session
+
+        registry = ToolRegistry()
+        config = MCPServerConfig(
+            name="recovering",
+            command="python",
+            reconnect_attempts=2,
+            reconnect_delay=0,
+        )
+        with patch("praxis.tools.mcp.wiring.create_transport", recovering_transport):
+            async with AsyncExitStack() as stack:
+                manager = await connect_mcp_servers(registry, [config], stack)
+                assert manager.list_connected_servers() == ["recovering"]
+                assert registry.has_tool("mcp_recovering_echo")
+
+        assert attempts == 3
+
+    async def test_auth_failure_is_isolated_from_other_servers(self) -> None:
+        from contextlib import AsyncExitStack, asynccontextmanager
+
+        from praxis.tools.mcp.wiring import connect_mcp_servers
+
+        session = make_mock_session()
+
+        @asynccontextmanager
+        async def fake_transport(config: Any, *args: Any):
+            yield session
+
+        auth_manager = MagicMock()
+
+        async def authenticate(server_name: str) -> bool:
+            if server_name == "bad-auth":
+                raise RuntimeError("authentication failed")
+            return True
+
+        auth_manager.initiate_auth_flow = authenticate
+        auth_manager.get_auth_headers.return_value = {}
+        configs = [
+            MCPServerConfig(name="bad-auth", command="python"),
+            MCPServerConfig(name="good-auth", command="python"),
+        ]
+        with patch("praxis.tools.mcp.wiring.create_transport", fake_transport):
+            async with AsyncExitStack() as stack:
+                manager = await connect_mcp_servers(
+                    ToolRegistry(),
+                    configs,
+                    stack,
+                    auth_manager=auth_manager,
+                )
+
+        assert manager.list_connected_servers() == ["good-auth"]
+
+    async def test_connection_cancellation_closes_open_transport(self) -> None:
+        from contextlib import AsyncExitStack, asynccontextmanager
+
+        from praxis.tools.mcp.wiring import connect_mcp_servers
+
+        transport_closed = False
+
+        @asynccontextmanager
+        async def cancellable_transport(config: Any, *args: Any):
+            nonlocal transport_closed
+            try:
+                yield make_mock_session()
+            finally:
+                transport_closed = True
+
+        config = MCPServerConfig(name="cancelled", command="python")
+        with (
+            patch("praxis.tools.mcp.wiring.create_transport", cancellable_transport),
+            patch(
+                "praxis.tools.mcp.wiring.MCPConnectionManager.connect_server",
+                AsyncMock(side_effect=asyncio.CancelledError),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            async with AsyncExitStack() as stack:
+                await connect_mcp_servers(ToolRegistry(), [config], stack)
+
+        assert transport_closed is True
 
 
 class TestMCPSamplingElicitationWiring:
@@ -608,20 +709,19 @@ class TestMCPSamplingElicitationWiring:
             max_tokens=32,
         )
 
-        with patch(
-            "praxis.tools.mcp.sampling.chat",
-            AsyncMock(return_value=ModelResponse(
+        gateway.complete = AsyncMock(
+            return_value=ModelResponse(
                 id="sample-1",
                 content="ok",
                 usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
                 model="runtime-default",
                 created=0,
-            )),
-        ) as model_call:
-            response = await manager.handle_sampling(request)
+            )
+        )
+        response = await manager.handle_sampling(request)
 
         assert response["model"] == "runtime-default"
-        assert model_call.await_args.kwargs["model"] == "runtime-default"
+        assert gateway.complete.await_args.kwargs["model"] == "runtime-default"
 
     async def test_elicitation_callback_adapter_accept(self) -> None:
         from mcp.types import ElicitRequestFormParams, ElicitResult

@@ -2,7 +2,7 @@
 
 import asyncio
 from collections.abc import AsyncGenerator, Awaitable, Callable
-from contextlib import aclosing
+from contextlib import AsyncExitStack, aclosing
 from importlib.util import find_spec
 from typing import Any, Protocol, cast
 
@@ -12,6 +12,7 @@ from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine, build_guardrail_engine
 from praxis.lifecycle import TaskSupervisor
 from praxis.models.inputs import InputValue
+from praxis.models.mcp import MCPElicitationRequest, MCPElicitationResponse
 from praxis.models.orchestrator import AgentEvent, AgentResponse
 from praxis.models.runtime import ComponentHealth, HealthStatus, RuntimeHealth, RuntimeState
 from praxis.models.session import SessionStatus
@@ -19,9 +20,20 @@ from praxis.models.subagent import SubagentSpec
 from praxis.persistence.store import PersistenceStore, create_store
 from praxis.protocols import ApprovalHandler, AuditSink, EmbeddingProvider, ModelGateway
 from praxis.session.core import Session, SessionFactory
+from praxis.skills.manager import build_skill_manager
 from praxis.telemetry.audit import AuditService
 from praxis.telemetry.metrics import MetricsCollector, use_metrics
 from praxis.tools.registry import ToolRegistry
+from praxis.verification.registry import VerifierRegistry
+
+MCPElicitationHandler = Callable[
+    [MCPElicitationRequest],
+    Awaitable[MCPElicitationResponse],
+]
+MCPSamplingReviewHandler = Callable[
+    [list[dict[str, Any]], str],
+    Awaitable[bool],
+]
 
 
 class SessionRunner(Protocol):
@@ -60,6 +72,8 @@ class PraxisRuntime:
         approval_handler: ApprovalHandler | None = None,
         embedding_provider: EmbeddingProvider | None = None,
         session_builder: SessionBuilder | None = None,
+        mcp_elicitation_handler: MCPElicitationHandler | None = None,
+        mcp_sampling_review_handler: MCPSamplingReviewHandler | None = None,
     ) -> None:
         self.config = config.model_copy(deep=True)
         self.gateway = gateway
@@ -67,9 +81,11 @@ class PraxisRuntime:
         self.audit_sink = audit_sink
         self.approval_handler = approval_handler
         self.embedding_provider = embedding_provider
-        self.metrics = MetricsCollector()
+        self.metrics = MetricsCollector(enabled=self.config.telemetry.metrics_enabled)
         self.supervisor = TaskSupervisor()
         self.session_builder = session_builder
+        self.mcp_elicitation_handler = mcp_elicitation_handler
+        self.mcp_sampling_review_handler = mcp_sampling_review_handler
         self.guardrails: GuardrailEngine | None = None
         self.sessions: set[AgentSession] = set()
         self.subagent_sessions: set[Session] = set()
@@ -150,6 +166,7 @@ class PraxisRuntime:
             recovery_config=self.config.recovery,
             approval_handler=self.approval_handler,
             audit_sink=self.audit_sink,
+            embedding_provider=self.embedding_provider,
         )
         session = await factory.create_session(
             guardrails=self.guardrails,
@@ -157,6 +174,7 @@ class PraxisRuntime:
             model=self.config.gateway.default_model,
             tools_config=self.config.tools,
         )
+        await self.configure_session_extensions(session)
         from praxis.subagent.tools import wire_subagent
 
         wire_subagent(
@@ -173,6 +191,81 @@ class PraxisRuntime:
             supervisor=self.supervisor,
         )
         return session
+
+    async def configure_session_extensions(self, session: Session) -> None:
+        """Attach configured skills, verification, and optional MCP to one session."""
+
+        if self.store is None or self.gateway is None:
+            raise RuntimeStateError("Runtime 扩展组件尚未就绪")
+
+        skill_manager = await build_skill_manager(
+            self.config.skills,
+            session.registry,
+            self.store,
+        )
+        skill_manager.register_disclosure_tools()
+        session.skill_manager = skill_manager
+        session.loop.skill_manager = skill_manager
+
+        verifier_registry = VerifierRegistry.from_config(
+            self.config.verification,
+            gateway=cast(Any, self.gateway),
+        )
+        session.verifier_registry = verifier_registry
+        session.loop.verifier_registry = verifier_registry
+
+        if self.config.mcp.enabled:
+            await self.configure_session_mcp(session)
+
+    async def configure_session_mcp(self, session: Session) -> None:
+        """Connect configured MCP servers with session-owned transport lifetimes."""
+
+        if self.gateway is None:
+            raise RuntimeStateError("模型网关尚未就绪")
+
+        from praxis.tools.mcp.elicitation import ElicitationManager
+        from praxis.tools.mcp.sampling import SamplingManager
+        from praxis.tools.mcp.wiring import connect_mcp_servers
+
+        sampling_manager = (
+            SamplingManager(self.gateway) if self.config.mcp.sampling_enabled else None
+        )
+        if (
+            sampling_manager is not None
+            and self.mcp_sampling_review_handler is not None
+        ):
+            sampling_manager.set_review_handler(self.mcp_sampling_review_handler)
+
+        elicitation_manager = ElicitationManager()
+        if self.mcp_elicitation_handler is not None:
+            elicitation_manager.set_handler(self.mcp_elicitation_handler)
+
+        server_configs = [
+            server.model_copy(
+                update={
+                    "timeout": min(server.timeout, self.config.mcp.connect_timeout),
+                }
+            )
+            for server in self.config.mcp.servers
+        ]
+        stack = AsyncExitStack()
+        await stack.__aenter__()
+        try:
+            manager = await connect_mcp_servers(
+                session.registry,
+                server_configs,
+                stack,
+                sampling_manager=sampling_manager,
+                elicitation_manager=elicitation_manager,
+            )
+        except BaseException:
+            await stack.aclose()
+            raise
+
+        session.mcp_manager = manager
+        session.mcp_sampling_manager = sampling_manager
+        session.mcp_elicitation_manager = elicitation_manager
+        session.attach_mcp_stack(stack)
 
     async def build_subagent_session(
         self,
@@ -204,6 +297,7 @@ class PraxisRuntime:
             recovery_config=self.config.recovery,
             approval_handler=self.approval_handler,
             audit_sink=self.audit_sink,
+            embedding_provider=self.embedding_provider,
         )
         child = await factory.create_session(
             guardrails=self.guardrails,
@@ -305,6 +399,61 @@ class PraxisRuntime:
             components["visual"] = ComponentHealth(
                 status=HealthStatus.READY,
                 detail="视觉验证能力就绪",
+                required=False,
+            )
+
+        concrete_sessions = [
+            session.runner
+            for session in self.sessions
+            if isinstance(session.runner, Session)
+        ]
+        skills_loaded = any(
+            session.skill_manager is not None
+            for session in concrete_sessions
+        )
+        components["skills"] = ComponentHealth(
+            status=HealthStatus.READY,
+            detail=(
+                "技能系统已装配"
+                if skills_loaded
+                else "技能系统将在创建会话时装配"
+            ),
+            required=False,
+        )
+        verification_loaded = any(
+            session.verifier_registry is not None
+            for session in concrete_sessions
+        )
+        components["verification"] = ComponentHealth(
+            status=HealthStatus.READY,
+            detail=(
+                "验证注册表已装配"
+                if verification_loaded
+                else "验证注册表将在创建会话时装配"
+            ),
+            required=False,
+        )
+
+        if not self.config.mcp.enabled:
+            components["mcp"] = ComponentHealth(
+                status=HealthStatus.READY,
+                detail="MCP 未启用",
+                required=False,
+            )
+        else:
+            connected_servers = {
+                server_name
+                for session in concrete_sessions
+                if session.mcp_manager is not None
+                for server_name in session.mcp_manager.list_connected_servers()
+            }
+            expected_servers = {server.name for server in self.config.mcp.servers}
+            mcp_ready = connected_servers == expected_servers
+            components["mcp"] = ComponentHealth(
+                status=HealthStatus.READY if mcp_ready else HealthStatus.DEGRADED,
+                detail=(
+                    f"{len(connected_servers)}/{len(expected_servers)} 个 MCP Server 已连接"
+                ),
                 required=False,
             )
 
@@ -446,6 +595,8 @@ __all__ = [
     "AgentSession",
     "ComponentHealth",
     "HealthStatus",
+    "MCPElicitationHandler",
+    "MCPSamplingReviewHandler",
     "PraxisRuntime",
     "RuntimeHealth",
     "RuntimeState",

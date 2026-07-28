@@ -7,10 +7,9 @@ MCP Server 请求由 Praxis 通过 S4 模型网关代理完成。
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
-from praxis.gateway.chat import chat
-from praxis.gateway.router import GatewayRouter
 from praxis.models.mcp import MCPSamplingRequest
 from praxis.models.messages import Message, Role
+from praxis.protocols import ModelGateway
 from praxis.telemetry.logger import get_logger
 
 log = get_logger("tools.mcp.sampling")
@@ -24,8 +23,8 @@ class SamplingManager:
     将 MCP Server 的 LLM 调用请求通过 S4 模型网关代理完成。
     """
 
-    def __init__(self, router: GatewayRouter) -> None:
-        self.router = router
+    def __init__(self, gateway: ModelGateway) -> None:
+        self.gateway = gateway
         self.review_handler: HumanReviewHandler | None = None
 
     def set_review_handler(self, handler: HumanReviewHandler) -> None:
@@ -74,13 +73,12 @@ class SamplingManager:
                 return {"role": "assistant", "content": "用户拒绝了此请求。"}
 
         # MCP Server 的偏好不能绕过 Runtime 的统一默认模型部署。
-        model = self.router.config.default_model
+        model = self.gateway.config.default_model
 
-        # 通过 S4 调用 LLM
+        # 只依赖公共 ModelGateway 边界，支持 Runtime 注入自定义网关。
         msg_dicts = [{"role": m.role.value, "content": m.content} for m in messages]
-        response = await chat(
-            gateway=self.router,
-            messages=msg_dicts,
+        response = await self.gateway.complete(
+            msg_dicts,
             model=model,
             max_tokens=request.max_tokens,
         )

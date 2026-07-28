@@ -1,6 +1,7 @@
 """应用级 Runtime 与 AgentSession 生命周期测试。"""
 
 import asyncio
+import sys
 from collections.abc import AsyncGenerator, AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -12,18 +13,27 @@ from praxis.config import PraxisConfig
 from praxis.config.schemas import (
     GatewayConfig,
     InputConfig,
+    MCPConfig,
     ModelCapabilities,
     PersistenceConfig,
+    SkillsConfig,
     VerificationConfig,
 )
 from praxis.exceptions import ConcurrentSessionRunError, RuntimeStateError, SessionError
 from praxis.models.inputs import InputValue
+from praxis.models.mcp import (
+    MCPElicitationRequest,
+    MCPElicitationResponse,
+    MCPServerConfig,
+    MCPTransportType,
+)
 from praxis.models.orchestrator import AgentEvent, AgentResponse
-from praxis.models.responses import ModelResponse, ModelResponseChunk
+from praxis.models.responses import ModelResponse, ModelResponseChunk, Usage
 from praxis.models.session import SessionStatus
 from praxis.models.subagent import SubagentSpec
 from praxis.models.tools import ToolDefinition, ToolMetadata
 from praxis.runtime import HealthStatus, PraxisRuntime
+from praxis.session.core import Session
 from praxis.tools.registry import ToolRegistry
 
 
@@ -41,7 +51,13 @@ class FakeGateway:
         tools: list[dict[str, Any]] | None = None,
         **kwargs: Any,
     ) -> ModelResponse:
-        return ModelResponse(content="unused")
+        return ModelResponse(
+            id="fake-response",
+            content="unused",
+            usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+            model=model or self.config.default_model,
+            created=0,
+        )
 
     async def stream(
         self,
@@ -264,6 +280,8 @@ async def test_runtime_builds_default_session_and_wires_subagent_tools(tmp_path:
         assert runner.session_id
         assert runner.registry.has_tool("spawn_subagent")  # type: ignore[attr-defined]
         assert runner.registry.has_tool("fork_subagents")  # type: ignore[attr-defined]
+        assert runner.skill_manager is not None  # type: ignore[attr-defined]
+        assert runner.verifier_registry is not None  # type: ignore[attr-defined]
     finally:
         await runner.terminate()
         await runtime.close()
@@ -345,4 +363,179 @@ async def test_health_covers_provider_failures_and_visual_ready(tmp_path: Path) 
     assert health.components["embedding"].status is HealthStatus.READY
     assert health.components["visual"].status is HealthStatus.READY
     await runtime.close()
+    embedding.close.assert_awaited_once()
+
+
+async def test_runtime_wires_configured_skills_verification_mcp_and_callbacks(
+    tmp_path: Path,
+) -> None:
+    manager = MagicMock()
+    manager.list_connected_servers.return_value = ["local"]
+    elicitation_handler = AsyncMock()
+    sampling_review_handler = AsyncMock(return_value=True)
+    config = runtime_config(tmp_path).model_copy(
+        update={
+            "skills": SkillsConfig(
+                skill_paths=[str(Path("examples/skills"))],
+                auto_discover=True,
+                max_skills_in_context=2,
+            ),
+            "verification": VerificationConfig(
+                computational_enabled=False,
+                inferential_enabled=False,
+                visual_enabled=False,
+            ),
+            "mcp": MCPConfig(
+                enabled=True,
+                connect_timeout=7,
+                sampling_enabled=True,
+                servers=[
+                    MCPServerConfig(
+                        name="local",
+                        command="python",
+                        timeout=30,
+                    )
+                ],
+            ),
+        }
+    )
+    runtime = PraxisRuntime(
+        config,
+        gateway=FakeGateway(),
+        mcp_elicitation_handler=elicitation_handler,
+        mcp_sampling_review_handler=sampling_review_handler,
+    )
+
+    with patch(
+        "praxis.tools.mcp.wiring.connect_mcp_servers",
+        AsyncMock(return_value=manager),
+    ) as connect:
+        await runtime.start()
+        runner = await runtime.build_session()
+        try:
+            assert runner.skill_manager is not None  # type: ignore[attr-defined]
+            assert runner.skill_manager.skills  # type: ignore[attr-defined]
+            assert runner.registry.has_tool("load_skill")  # type: ignore[attr-defined]
+            registry = runner.verifier_registry  # type: ignore[attr-defined]
+            assert registry is not None
+            assert registry.computational_enabled is False
+            assert registry.inferential_enabled is False
+            assert runner.mcp_manager is manager  # type: ignore[attr-defined]
+            assert runner.mcp_sampling_manager.review_handler is sampling_review_handler  # type: ignore[attr-defined]
+            assert runner.mcp_elicitation_manager.handler is elicitation_handler  # type: ignore[attr-defined]
+            connected_config = connect.await_args.args[1][0]
+            assert connected_config.timeout == 7
+            health = await runtime.health()
+            assert health.components["mcp"].status is HealthStatus.DEGRADED
+        finally:
+            await runner.terminate()
+            await runtime.close()
+
+
+async def test_runtime_uses_real_mcp_stdio_capabilities_and_closes_them(
+    tmp_path: Path,
+) -> None:
+    reviews: list[tuple[int, str]] = []
+    elicitations: list[str] = []
+
+    async def review(messages: list[dict[str, Any]], server_name: str) -> bool:
+        reviews.append((len(messages), server_name))
+        return True
+
+    async def elicit(request: MCPElicitationRequest) -> MCPElicitationResponse:
+        elicitations.append(request.message)
+        return MCPElicitationResponse(accepted=True, data={"answer": "approved"})
+
+    server_path = Path(__file__).parent / "fixtures" / "mcp_stdio_server.py"
+    config = runtime_config(tmp_path).model_copy(
+        update={
+            "mcp": MCPConfig(
+                enabled=True,
+                sampling_enabled=True,
+                servers=[
+                    MCPServerConfig(
+                        name="runtime-stdio",
+                        transport=MCPTransportType.STDIO,
+                        command=sys.executable,
+                        args=[str(server_path)],
+                    )
+                ],
+            )
+        }
+    )
+
+    async with PraxisRuntime(
+        config,
+        gateway=FakeGateway(),
+        mcp_elicitation_handler=elicit,
+        mcp_sampling_review_handler=review,
+    ) as runtime:
+        async with runtime.session() as agent_session:
+            assert isinstance(agent_session.runner, Session)
+            runner = agent_session.runner
+            manager = runner.mcp_manager
+            assert manager.list_connected_servers() == ["runtime-stdio"]
+            assert (
+                await manager.tools_bridge.call_tool(
+                    "runtime-stdio",
+                    "echo",
+                    {"message": "runtime"},
+                )
+                == "runtime"
+            )
+            assert (
+                await manager.resources_bridge.read_resource(
+                    "runtime-stdio",
+                    "test://fixture",
+                )
+            ).text == "fixture resource"
+            prompt = await manager.prompts_bridge.get_prompt(
+                "runtime-stdio",
+                "greet",
+                {"name": "Praxis"},
+            )
+            assert prompt[0].content == "Hello, Praxis!"
+            assert (
+                await manager.tools_bridge.call_tool(
+                    "runtime-stdio",
+                    "request_sampling",
+                    {},
+                )
+                == "unused"
+            )
+            assert (
+                await manager.tools_bridge.call_tool(
+                    "runtime-stdio",
+                    "request_elicitation",
+                    {},
+                )
+                == "approved"
+            )
+            assert (await runtime.health()).components["mcp"].status is HealthStatus.READY
+
+        assert manager.list_connected_servers() == []
+        assert not runner.registry.has_tool("mcp_runtime-stdio_echo")
+
+    assert reviews == [(1, "runtime-stdio")]
+    assert elicitations == ["Provide approval"]
+
+
+async def test_runtime_injects_owned_embedding_provider_into_memory(tmp_path: Path) -> None:
+    embedding = MagicMock()
+    embedding.embed = AsyncMock(return_value=[1.0, 0.0])
+    embedding.close = AsyncMock()
+    runtime = PraxisRuntime(
+        runtime_config(tmp_path),
+        gateway=FakeGateway(),
+        embedding_provider=embedding,
+    )
+    await runtime.start()
+    runner = await runtime.build_session()
+    try:
+        memory = runner.memory  # type: ignore[attr-defined]
+        assert memory is not None
+        assert memory.vector_store.embed_func == embedding.embed
+    finally:
+        await runner.terminate()
+        await runtime.close()
     embedding.close.assert_awaited_once()

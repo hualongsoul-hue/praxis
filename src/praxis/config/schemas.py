@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import ConfigDict, Field, model_validator
 
 from praxis.models.base import SafeBaseModel
+from praxis.models.mcp import MCPServerConfig
 
 LogLevel = Literal["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"]
 
@@ -74,7 +75,7 @@ class TelemetryConfig(StrictConfigModel):
     )
     metrics_enabled: bool = True
     metrics_export: Literal["prometheus", "file"] = "file"
-    metrics_file: str | None = None
+    metrics_file: str | None = "data/praxis.metrics.prom"
     metrics_port: int = Field(
         default=9090,
         ge=1,
@@ -281,3 +282,12 @@ class MCPConfig(StrictConfigModel):
     enabled: bool = False
     connect_timeout: float = Field(default=30.0, gt=0)
     sampling_enabled: bool = True
+    servers: list[MCPServerConfig] = Field(
+        default_factory=lambda: list[MCPServerConfig](),
+    )
+
+    @model_validator(mode="after")
+    def validate_enabled_servers(self) -> "MCPConfig":
+        if self.enabled and not self.servers:
+            raise ValueError("mcp.enabled=true 时必须至少配置一个 MCP Server")
+        return self

@@ -22,6 +22,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from praxis.config.schemas import MemoryConfig, PersistenceConfig
@@ -36,7 +37,7 @@ from praxis.memory.retention import RetentionManager
 from praxis.memory.retriever import MemoryRetriever
 from praxis.memory.scratchpad import Scratchpad
 from praxis.memory.store import ProfileStore, ScopedMemoryStore, entry_from_dict
-from praxis.memory.vector import VectorStore, cosine_similarity
+from praxis.memory.vector import VectorStore, cosine_similarity, tei_embed
 from praxis.memory.worker import BackgroundWorker
 from praxis.models.memory import (
     ConsolidationAction,
@@ -238,6 +239,26 @@ class TestScopedStore:
 
 
 class TestVectorStore:
+    async def test_remote_embedding_sends_configured_model(self) -> None:
+        captured: dict[str, object] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured.update(json.loads(request.content))
+            return httpx.Response(200, json=[[1.0, 0.0]])
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+        ) as client:
+            vector = await tei_embed(
+                "hello",
+                "https://embedding.example",
+                model="embedding-v2",
+                client=client,
+            )
+
+        assert vector == [1.0, 0.0]
+        assert captured["model"] == "embedding-v2"
+
     def test_cosine_similarity(self) -> None:
         assert cosine_similarity([1, 0], [1, 0]) == pytest.approx(1.0)
         assert cosine_similarity([1, 0], [0, 1]) == pytest.approx(0.0)

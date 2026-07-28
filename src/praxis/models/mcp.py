@@ -3,7 +3,7 @@
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class MCPTransportType(StrEnum):
@@ -26,16 +26,18 @@ class MCPServerStatus(StrEnum):
 class MCPServerConfig(BaseModel):
     """MCP 服务器连接配置。"""
 
-    name: str
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str = Field(min_length=1)
     transport: MCPTransportType = MCPTransportType.STDIO
     command: str = ""
     args: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
     url: str = ""
     headers: dict[str, str] = Field(default_factory=dict)
-    timeout: float = 30.0
-    reconnect_attempts: int = 3
-    reconnect_delay: float = 1.0
+    timeout: float = Field(default=30.0, gt=0, le=300.0)
+    reconnect_attempts: int = Field(default=3, ge=0, le=20)
+    reconnect_delay: float = Field(default=1.0, ge=0, le=60.0)
 
 
 class MCPResourceInfo(BaseModel):

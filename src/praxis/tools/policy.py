@@ -33,6 +33,7 @@ class ToolPolicy:
         self.allow_private_networks = config.allow_private_networks
         self.configured_network_max_response_bytes = config.network_max_response_bytes
         self.environment_allowlist = frozenset(config.shell_environment_allowlist)
+        self.configured_max_concurrent_readonly = config.max_concurrent_readonly
 
     @property
     def shell_timeout(self) -> float:
@@ -49,6 +50,10 @@ class ToolPolicy:
     @property
     def network_max_response_bytes(self) -> int:
         return self.configured_network_max_response_bytes
+
+    @property
+    def max_concurrent_readonly(self) -> int:
+        return self.configured_max_concurrent_readonly
 
     @property
     def default_working_directory(self) -> Path:
