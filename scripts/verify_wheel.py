@@ -17,16 +17,24 @@ def run(
     working_directory: Path,
     environment: dict[str, str] | None = None,
     expected_return_code: int = 0,
+    timeout: float = 300,
 ) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        command,
-        cwd=working_directory,
-        env=environment,
-        check=False,
-        capture_output=True,
-        encoding="utf-8",
-        text=True,
-    )
+    print(f"[wheel smoke] {' '.join(command)}", flush=True)
+    try:
+        result = subprocess.run(
+            command,
+            cwd=working_directory,
+            env=environment,
+            check=False,
+            capture_output=True,
+            encoding="utf-8",
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError(
+            f"command {command!r} exceeded {timeout:.0f} seconds"
+        ) from error
     if result.stdout:
         print(result.stdout, end="")
     if result.stderr:
@@ -91,6 +99,8 @@ def main() -> int:
             uv,
             "pip",
             "install",
+            "--link-mode",
+            "copy",
             "--python",
             str(python),
             str(wheels[0]),

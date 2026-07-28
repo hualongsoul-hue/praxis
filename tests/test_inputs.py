@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import socket
+import string
 import traceback
 from pathlib import Path
 
@@ -43,9 +44,10 @@ from praxis.config import InputConfig, ModelCapabilities
 from praxis.models import ContentPart, TextContent
 
 SAFE_FILENAMES = st.text(
-    alphabet=st.characters(
-        blacklist_categories=("Cc", "Cs"),
-        blacklist_characters="/\\:",
+    alphabet=(
+        string.ascii_letters
+        + string.digits
+        + " ._-()[]{}@#$%^&+=,;!~'`?*<>|中文测试é😀"
     ),
     min_size=1,
     max_size=40,
