@@ -1,25 +1,30 @@
 # Praxis 配置示例
 # 所有字段均有默认值，仅需配置需要覆盖的项目。
-# 完整配置参考: docs/CONFIG_REFERENCE.md
+# 完整配置参考: docs/CONFIGURATION.md
 
 # ── S2 遥测系统 ────────────────────────────────────────────
 telemetry:
   log_level: "INFO"
   log_format: "text"        # "json" 用于生产环境
+  log_file: null
   log_levels:
     gateway: "INFO"
     guardrails: "INFO"
   metrics_enabled: true
   metrics_export: "file"    # "prometheus" 用于生产环境
+  metrics_file: "data/praxis.metrics.prom"
+  metrics_port: 9090
   tracing_enabled: true
   tracing_export: "console" # "otlp" 用于生产环境
+  otlp_endpoint: null
   audit_enabled: true
 
 # ── S3 持久化引擎 ──────────────────────────────────────────
 persistence:
   backend: "sqlite"
   sqlite_path: "data/praxis.db"
-  # redis_url: "redis://localhost:6379/0"  # Redis 后端
+  redis_url: null           # Redis 后端启用时填写 URL
+  filesystem_path: "data/storage"
 
 # ── S4 模型网关 ────────────────────────────────────────────
 gateway:
@@ -28,6 +33,8 @@ gateway:
       model: "openai/glm-5.1-openai"
       api_base: "http://172.24.23.192:3000/v1"
       api_key_env: "PRAXIS_MODEL_API_KEY"   # 配置中只保存环境变量名
+      input_cost_per_token: null
+      output_cost_per_token: null
       default_max_output_tokens: 4096
       capabilities:
         image: true
@@ -39,8 +46,8 @@ gateway:
   num_retries: 3
   timeout: 60.0
   max_concurrent_requests: 8
-  # max_total_tokens: 1000000
-  # max_budget: 10.0  # USD 成本上限
+  max_total_tokens: null
+  max_budget: null  # 启用 USD 预算时必须配置可信价格
 
 # ── 用户输入解析 ──────────────────────────────────────────
 inputs:
@@ -53,6 +60,16 @@ inputs:
   max_total_bytes: 50000000
   max_redirects: 5
   remote_timeout: 30.0
+  image_media_types: ["image/jpeg", "image/png", "image/gif", "image/webp"]
+  audio_media_types: ["audio/mpeg", "audio/wav"]
+  video_media_types: ["video/mp4", "video/webm", "video/quicktime"]
+  file_media_types:
+    - "application/pdf"
+    - "application/json"
+    - "application/yaml"
+    - "text/csv"
+    - "text/markdown"
+    - "text/plain"
 
 # ── S5 工具系统 ────────────────────────────────────────────
 tools:
@@ -61,20 +78,38 @@ tools:
   max_concurrent_readonly: 5
   shell_timeout: 120.0
   shell_enabled: false
+  shell_environment_allowlist: []
   network_allowed: false
   allow_private_networks: false
+  network_max_response_bytes: 1000000
+  approval_timeout: 60.0
   # S9 工具降级映射：首选工具不可用/熔断时切换到替代工具
-  # fallback_mappings:
-  #   web_search: "web_fetch"
+  fallback_mappings: {}
 
 # ── S6 记忆系统 ────────────────────────────────────────────
 memory:
   embedding_api_base: null  # 未配置时使用确定性本地词法检索
-  # embedding_api_key_env: "PRAXIS_EMBEDDING_API_KEY"
+  embedding_model: null
+  embedding_api_key_env: null
+  embedding_timeout: 30.0
+  embedding_dimensions: 2560
+  extraction_prompts: {}
+  consolidation_similarity_threshold: 0.75
+  background_enabled: true
   max_memories: 10000
   decay_enabled: true       # 梦境周期执行相关性衰减遗忘
   background_batch_threshold: 5
   background_interval_seconds: 10.0
+  dream_enabled: true
+  dream_min_hours: 24.0
+  dream_min_sessions: 5
+  dream_check_interval_seconds: 3600.0
+  dream_scopes: ["global"]
+  decay_half_life_days: 30.0
+  inactivity_threshold_days: 90.0
+  project_root: null
+  project_name: null
+  load_project_praxis_md: true
 
 # ── S7 上下文引擎 ──────────────────────────────────────────
 context:
@@ -87,6 +122,7 @@ context:
 # ── S8 护栏系统 ────────────────────────────────────────────
 guardrails:
   default_permission: "confirm"  # auto_approve / confirm / deny
+  permissions_file: null
   input_guardrails_enabled: true
   output_guardrails_enabled: true
   # permissions_file: "permissions.yaml"  # 声明式权限配置
@@ -134,3 +170,15 @@ mcp:
   enabled: false
   connect_timeout: 30.0
   sampling_enabled: true
+  # disabled 时仅作为完整字段示例；enabled=true 后才会启动此进程。
+  servers:
+    - name: "local-example"
+      transport: "stdio"
+      command: "python"
+      args: ["path/to/mcp_server.py"]
+      env: {}
+      url: ""
+      headers: {}
+      timeout: 30.0
+      reconnect_attempts: 3
+      reconnect_delay: 1.0

@@ -106,9 +106,23 @@ mcp:
   enabled: false
   connect_timeout: 30
   sampling_enabled: true
+  servers:
+    - name: local-agent-tools
+      transport: stdio
+      command: python
+      args: [path/to/mcp_server.py]
+      env: {}
+      url: ""
+      headers: {}
+      timeout: 30
+      reconnect_attempts: 3
+      reconnect_delay: 1
 ```
 
 视觉验证必须同时安装 `praxis[visual]`、安装 Playwright 浏览器，并由默认部署声明
 `capabilities.image: true`。未满足条件时返回明确不可用状态。
+`mcp.enabled: false` 时不会导入 MCP 可选依赖或启动示例进程；启用后，Runtime 会为每个
+Session 建立独立连接，并在 Session 关闭时断开。交互控制台会对 MCP Sampling 做人工复核，
+并以结构化 JSON 处理 Elicitation；未提供处理器的嵌入式服务应按拒绝处理。
 
 完整、可直接校验的示例见 [config.example.yaml](../config.example.yaml)。

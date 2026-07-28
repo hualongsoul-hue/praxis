@@ -76,6 +76,9 @@ uv run python examples/interactive_console.py --config config.yaml
 模型密钥仍然只从 `PRAXIS_MODEL_API_KEY` 环境变量读取。控制台命令包括：
 
 - `/health`：查看 Runtime、模型、存储和后台任务健康状态；
+- `/status`：查看 Runtime 与当前 Session 生命周期状态；
+- `/metrics`：输出当前 Runtime 的 Prometheus 指标快照；
+- `/reasoning <on|off>`：运行时切换推理增量展示；
 - `/attach <image|audio|video|file> <path>`：为下一轮排队一个本地附件；
 - `/attachments`、`/clear`：查看或清除待发送附件；
 - `/help`、`/quit`：查看帮助或优雅退出。

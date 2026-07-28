@@ -14,12 +14,13 @@ resolver, guardrails, memory, tools, checkpoints, and output streaming.
 
 import argparse
 import asyncio
+import json
 import os
 import re
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from praxis import (
     AgentSession,
@@ -35,8 +36,11 @@ from praxis import (
     load_config,
 )
 from praxis.exceptions import PraxisError
+from praxis.models.mcp import MCPElicitationRequest, MCPElicitationResponse
 from praxis.models.orchestrator import AgentEvent
 from praxis.models.runtime import RuntimeHealth
+from praxis.models.tools import ApprovalDecision, ApprovalRequest
+from praxis.telemetry import MetricsExporter, configure_cli_telemetry
 
 ATTACHMENT_TYPES: dict[str, type[AttachmentInput]] = {
     "image": ImageInput,
@@ -44,7 +48,7 @@ ATTACHMENT_TYPES: dict[str, type[AttachmentInput]] = {
     "video": VideoInput,
     "file": FileInput,
 }
-COMMANDS = "/help, /health, /attach, /attachments, /clear, /quit"
+COMMANDS = "/help, /health, /status, /metrics, /reasoning, /attach, /attachments, /clear, /quit"
 SECRET_PATTERN = re.compile(r"(?i)(?:sk-[a-z0-9_-]{16,}|bearer\s+[a-z0-9._-]{16,})")
 
 
@@ -140,11 +144,76 @@ def print_help() -> None:
     print("Commands:")
     print("  /help                         Show this help.")
     print("  /health                       Check Runtime, model, storage, and workers.")
+    print("  /status                       Show Runtime and AgentSession state.")
+    print("  /metrics                      Export current Runtime metrics to the terminal.")
+    print("  /reasoning <on|off>           Toggle reasoning-delta rendering.")
     print("  /attach <kind> <path>         Queue image/audio/video/file for the next turn.")
     print("  /attachments                  List queued attachments.")
     print("  /clear                        Remove queued attachments.")
     print("  /quit                         Close the session and Runtime.")
     print("Press Ctrl+C while a response is streaming to abort that turn.")
+
+
+async def read_confirmation(prompt: str) -> bool:
+    """Read a fail-closed yes/no decision without blocking the event loop."""
+
+    try:
+        answer = await asyncio.to_thread(input, prompt)
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return answer.strip().casefold() in {"y", "yes"}
+
+
+class ConsoleApprovalHandler:
+    """Interactive fail-closed ApprovalHandler for guarded tool calls."""
+
+    async def request_approval(self, request: ApprovalRequest) -> ApprovalDecision:
+        argument_names = ", ".join(sorted(request.arguments)) or "none"
+        approved = await read_confirmation(
+            f"\n[approval] tool={request.tool_name}, argument keys={argument_names}. Allow? [y/N] "
+        )
+        return ApprovalDecision(
+            approved=approved,
+            reason="console approval" if approved else "console denial",
+        )
+
+
+async def review_mcp_sampling(
+    messages: list[dict[str, Any]],
+    server_name: str,
+) -> bool:
+    """Ask the operator before an MCP Server can request model sampling."""
+
+    return await read_confirmation(
+        f"\n[mcp sampling] server={server_name}, messages={len(messages)}. Allow? [y/N] "
+    )
+
+
+async def handle_mcp_elicitation(
+    request: MCPElicitationRequest,
+) -> MCPElicitationResponse:
+    """Collect structured MCP Elicitation data as a JSON object."""
+
+    safe_message = SECRET_PATTERN.sub("[REDACTED]", request.message)[:300]
+    print(f"\n[mcp elicitation] server={request.server_name}: {safe_message}")
+    try:
+        answer = await asyncio.to_thread(
+            input,
+            "Enter a JSON object to accept, or leave blank to decline: ",
+        )
+    except (EOFError, KeyboardInterrupt):
+        return MCPElicitationResponse(accepted=False)
+    if not answer.strip():
+        return MCPElicitationResponse(accepted=False)
+    try:
+        data = json.loads(answer)
+    except json.JSONDecodeError:
+        print("[mcp elicitation] invalid JSON; request declined")
+        return MCPElicitationResponse(accepted=False)
+    if not isinstance(data, dict):
+        print("[mcp elicitation] response must be a JSON object; request declined")
+        return MCPElicitationResponse(accepted=False)
+    return MCPElicitationResponse(accepted=True, data=data)
 
 
 def print_attachments(attachments: Sequence[InputAttachment]) -> None:
@@ -185,6 +254,24 @@ def render_event(event: AgentEvent, show_reasoning: bool) -> bool:
         print(f"[tool] retry {data.get('tool_name', 'unknown')}", flush=True)
     elif event.event_type == "verification_result":
         print(f"[verify] {data.get('passed', data.get('success', 'unknown'))}", flush=True)
+    elif event.event_type == "plan_created":
+        print(f"[plan] steps={data.get('step_count', 'unknown')}", flush=True)
+    elif event.event_type == "turn_start":
+        print(f"\n[turn] start {event.turn}", flush=True)
+    elif event.event_type == "llm_request":
+        print(f"[model] request tokens={data.get('token_count', 'unknown')}", flush=True)
+    elif event.event_type == "llm_response":
+        print(
+            "[model] response "
+            f"prompt={data.get('prompt_tokens', 0)} "
+            f"completion={data.get('completion_tokens', 0)} "
+            f"reasoning={data.get('reasoning_tokens', 0)}",
+            flush=True,
+        )
+    elif event.event_type == "gav_feedback":
+        print(f"[verify] feedback={data.get('feedback', 'available')}", flush=True)
+    elif event.event_type == "turn_end":
+        print(f"[turn] end {event.turn}", flush=True)
     elif event.event_type == "termination":
         print(f"\n[turn] terminated: {data.get('reason', 'unknown')}", flush=True)
     return False
@@ -262,6 +349,24 @@ async def interactive_loop(
         if command == "/health":
             print_health(await runtime.health())
             continue
+        if command == "/status":
+            print(
+                f"[status] runtime={runtime.state.value} "
+                f"session={session.status.value} "
+                f"session_id={session.session_id or 'unavailable'}"
+            )
+            continue
+        if command == "/metrics":
+            metrics = runtime.metrics.export_prometheus().strip()
+            print(metrics or "[metrics] no samples")
+            continue
+        if command == "/reasoning":
+            if len(fields) != 2 or fields[1].casefold() not in {"on", "off"}:
+                print("Usage: /reasoning <on|off>")
+                continue
+            show_reasoning = fields[1].casefold() == "on"
+            print(f"[reasoning] {'enabled' if show_reasoning else 'disabled'}")
+            continue
         if command == "/attachments":
             print_attachments(pending_attachments)
             continue
@@ -288,16 +393,24 @@ async def main(arguments: argparse.Namespace) -> None:
 
     try:
         config = load_config(arguments.config)
-        async with PraxisRuntime(config) as runtime:
-            health = await runtime.health()
-            print_health(health)
-            async with runtime.session() as session:
-                await interactive_loop(
-                    runtime,
-                    session,
-                    arguments.prompt,
-                    arguments.show_reasoning,
-                )
+        configure_cli_telemetry(config.telemetry)
+        approval_handler = ConsoleApprovalHandler()
+        async with PraxisRuntime(
+            config,
+            approval_handler=approval_handler,
+            mcp_elicitation_handler=handle_mcp_elicitation,
+            mcp_sampling_review_handler=review_mcp_sampling,
+        ) as runtime:
+            with MetricsExporter(runtime.metrics, config.telemetry):
+                health = await runtime.health()
+                print_health(health)
+                async with runtime.session() as session:
+                    await interactive_loop(
+                        runtime,
+                        session,
+                        arguments.prompt,
+                        arguments.show_reasoning,
+                    )
     except (PraxisError, OSError, ValueError) as error:
         print(f"[startup error] {format_error(error)}", file=sys.stderr)
         raise SystemExit(2) from error
