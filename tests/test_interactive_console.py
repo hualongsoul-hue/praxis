@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from examples.interactive_console import (
+    EXAMPLE_CONFIG_PATH,
     ConsoleApprovalHandler,
     build_attachment,
     build_parser,
@@ -409,6 +410,15 @@ def test_parser_exposes_runtime_options() -> None:
     assert arguments.config == Path("custom.yaml")
     assert arguments.show_reasoning is True
     assert arguments.prompt == "hello"
+
+
+def test_parser_defaults_to_example_directory_config() -> None:
+    arguments = build_parser().parse_args([])
+
+    assert arguments.config == EXAMPLE_CONFIG_PATH
+    assert arguments.config == (
+        Path(__file__).parents[1] / "examples" / "config.yaml"
+    ).resolve()
 
 
 async def test_main_wires_all_runtime_handlers_and_telemetry(tmp_path: Path) -> None:

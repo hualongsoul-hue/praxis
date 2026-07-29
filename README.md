@@ -68,12 +68,11 @@ async with PraxisRuntime(load_config("config.yaml")) as runtime:
 并实时渲染 `content_delta`、工具执行和终止事件：
 
 ```shell
-copy config.example.yaml config.yaml  # Windows
-cp config.example.yaml config.yaml     # Linux
-uv run python examples/interactive_console.py --config config.yaml
+uv run python examples/interactive_console.py
 ```
 
-模型密钥仍然只从 `PRAXIS_MODEL_API_KEY` 环境变量读取。控制台命令包括：
+控制台默认加载 `examples/config.yaml`；也可用 `--config <path>` 覆盖。模型密钥仍然只从
+`PRAXIS_MODEL_API_KEY` 环境变量读取。控制台命令包括：
 
 - `/health`：查看 Runtime、模型、存储和后台任务健康状态；
 - `/status`：查看 Runtime 与当前 Session 生命周期状态；

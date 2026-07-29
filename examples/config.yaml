@@ -1,0 +1,167 @@
+# Praxis 完整交互控制台配置
+#
+# 模型密钥只从 PRAXIS_MODEL_API_KEY 环境变量读取。此文件与根目录
+# config.example.yaml 保持相同配置值，便于直接运行 interactive_console.py。
+
+telemetry:
+  log_level: "INFO"
+  log_format: "text"
+  log_file: null
+  log_levels:
+    gateway: "INFO"
+    guardrails: "INFO"
+  metrics_enabled: true
+  metrics_export: "file"
+  metrics_file: "data/praxis.metrics.prom"
+  metrics_port: 9090
+  tracing_enabled: true
+  tracing_export: "console"
+  otlp_endpoint: null
+  audit_enabled: true
+
+persistence:
+  backend: "sqlite"
+  sqlite_path: "data/praxis.db"
+  redis_url: null
+  filesystem_path: "data/storage"
+
+gateway:
+  deployments:
+    - model_name: "default"
+      model: "openai/glm-5.1-openai"
+      api_base: "http://172.24.23.192:3000/v1"
+      api_key_env: "PRAXIS_MODEL_API_KEY"
+      input_cost_per_token: null
+      output_cost_per_token: null
+      default_max_output_tokens: 4096
+      capabilities:
+        image: true
+        audio: false
+        video: true
+        file: false
+  default_model: "default"
+  routing_strategy: "simple-shuffle"
+  num_retries: 3
+  timeout: 60.0
+  max_concurrent_requests: 8
+  max_total_tokens: null
+  max_budget: null
+
+inputs:
+  allowed_paths:
+    - "./attachments"
+  remote_enabled: false
+  allow_private_networks: false
+  max_attachment_bytes: 20000000
+  max_total_bytes: 50000000
+  max_redirects: 5
+  remote_timeout: 30.0
+  image_media_types: ["image/jpeg", "image/png", "image/gif", "image/webp"]
+  audio_media_types: ["audio/mpeg", "audio/wav"]
+  video_media_types: ["video/mp4", "video/webm", "video/quicktime"]
+  file_media_types:
+    - "application/pdf"
+    - "application/json"
+    - "application/yaml"
+    - "text/csv"
+    - "text/markdown"
+    - "text/plain"
+
+tools:
+  allowed_paths: []
+  default_timeout: 30.0
+  max_concurrent_readonly: 5
+  shell_timeout: 120.0
+  shell_enabled: false
+  shell_environment_allowlist: []
+  network_allowed: false
+  allow_private_networks: false
+  network_max_response_bytes: 1000000
+  approval_timeout: 60.0
+  fallback_mappings: {}
+
+memory:
+  embedding_api_base: null
+  embedding_model: null
+  embedding_api_key_env: null
+  embedding_timeout: 30.0
+  embedding_dimensions: 2560
+  extraction_prompts: {}
+  consolidation_similarity_threshold: 0.75
+  background_enabled: true
+  max_memories: 10000
+  decay_enabled: true
+  background_batch_threshold: 5
+  background_interval_seconds: 10.0
+  dream_enabled: true
+  dream_min_hours: 24.0
+  dream_min_sessions: 5
+  dream_check_interval_seconds: 3600.0
+  dream_scopes: ["global"]
+  decay_half_life_days: 30.0
+  inactivity_threshold_days: 90.0
+  project_root: null
+  project_name: null
+  load_project_praxis_md: true
+
+context:
+  compaction_threshold: 0.8
+  compaction_min_history: 8
+  masking_turn_distance: 10
+  masking_token_threshold: 2000
+  recent_file_refs_keep: 5
+
+guardrails:
+  default_permission: "confirm"
+  permissions_file: null
+  input_guardrails_enabled: true
+  output_guardrails_enabled: true
+
+recovery:
+  max_retries: 3
+  base_delay: 1.0
+  max_delay: 30.0
+  circuit_breaker_threshold: 5
+  circuit_breaker_cooldown: 60.0
+
+verification:
+  computational_enabled: true
+  inferential_enabled: true
+  visual_enabled: false
+
+orchestrator:
+  max_turns: 100
+  default_strategy: "react"
+
+session:
+  auto_checkpoint: true
+  max_checkpoints_per_session: 50
+
+subagent:
+  max_concurrent: 5
+  default_max_turns: 50
+  default_timeout: 300.0
+
+skills:
+  skill_paths:
+    - ".praxis/skills"
+    - "~/.praxis/skills"
+  auto_discover: true
+  max_skills_in_context: 10
+
+mcp:
+  enabled: false
+  connect_timeout: 30.0
+  sampling_enabled: true
+  # enabled=false 时只作为完整配置示例，不会启动此占位进程。
+  servers:
+    - name: "local-example"
+      transport: "stdio"
+      command: "python"
+      args: ["path/to/mcp_server.py"]
+      env: {}
+      url: ""
+      headers: {}
+      timeout: 30.0
+      reconnect_attempts: 3
+      reconnect_delay: 1.0

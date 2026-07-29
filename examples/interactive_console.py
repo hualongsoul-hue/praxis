@@ -1,9 +1,10 @@
 """Complete interactive streaming console for the Praxis runtime.
 
-Run from the repository root after creating ``config.yaml`` from
-``config.example.yaml`` and exporting ``PRAXIS_MODEL_API_KEY``::
+Run after exporting ``PRAXIS_MODEL_API_KEY``.  The console defaults to the
+``config.yaml`` stored beside this script, independent of the current working
+directory::
 
-    uv run python examples/interactive_console.py --config config.yaml
+    uv run python examples/interactive_console.py
 
 The console keeps one runtime and one session alive for the whole process.
 Every ordinary message uses ``AgentSession.run_stream`` and renders content
@@ -42,6 +43,7 @@ from praxis.models.runtime import RuntimeHealth
 from praxis.models.tools import ApprovalDecision, ApprovalRequest
 from praxis.telemetry import MetricsExporter, configure_cli_telemetry
 
+EXAMPLE_CONFIG_PATH = Path(__file__).resolve().with_name("config.yaml")
 ATTACHMENT_TYPES: dict[str, type[AttachmentInput]] = {
     "image": ImageInput,
     "audio": AudioInput,
@@ -61,8 +63,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("config.yaml"),
-        help="Path to a Praxis YAML configuration (default: config.yaml).",
+        default=EXAMPLE_CONFIG_PATH,
+        help=f"Path to a Praxis YAML configuration (default: {EXAMPLE_CONFIG_PATH}).",
     )
     parser.add_argument(
         "--show-reasoning",

@@ -68,6 +68,18 @@ def test_example_config_explicitly_lists_every_schema_field() -> None:
     assert_complete_mapping(raw, complete)
 
 
+def test_interactive_console_config_matches_current_template() -> None:
+    template = yaml.safe_load(
+        (ROOT / "config.example.yaml").read_text(encoding="utf-8")
+    )
+    console_config = yaml.safe_load(
+        (ROOT / "examples" / "config.yaml").read_text(encoding="utf-8")
+    )
+
+    assert console_config == template
+    assert load_config(ROOT / "examples" / "config.yaml", environ={})
+
+
 def test_documentation_links_reference_current_files() -> None:
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     for target in re.findall(r"\[[^]]+]\(([^)]+\.md)\)", readme):
