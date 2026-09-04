@@ -178,7 +178,7 @@ class MemoryConfig(StrictConfigModel):
     embedding_model: str | None = None
     embedding_api_key_env: str | None = None
     embedding_timeout: float = Field(default=30.0, gt=0)
-    embedding_dimensions: int = Field(default=2560, ge=1)
+    embedding_dimensions: int = Field(default=256, ge=1, le=65536)
     extraction_prompts: dict[str, str] = Field(default_factory=dict)
     consolidation_similarity_threshold: float = Field(default=0.75, ge=0, le=1)
     background_enabled: bool = True

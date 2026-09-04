@@ -4,6 +4,7 @@
 嵌入通过 Hugging Face Text Embeddings Inference (TEI) 服务获取。
 """
 
+import asyncio
 import hashlib
 import math
 import re
@@ -19,6 +20,8 @@ from praxis.telemetry.logger import get_logger
 log = get_logger("memory.vector")
 
 EmbeddingFunc = Callable[[str], Awaitable[list[float]]]
+MEMORY_INDEX_META_NAMESPACE = "memory_index_meta"
+MEMORY_INDEX_META_KEY = "semantic"
 
 
 async def local_lexical_embed(text: str, dimensions: int = 256) -> list[float]:
@@ -86,7 +89,11 @@ async def tei_embed(
 
 def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     """计算两个向量的余弦相似度。"""
-    dot = sum(a * b for a, b in zip(vec_a, vec_b, strict=False))
+    if not vec_a or len(vec_a) != len(vec_b):
+        raise ValueError(
+            f"向量维度必须相同且非空: {len(vec_a)} != {len(vec_b)}"
+        )
+    dot = sum(a * b for a, b in zip(vec_a, vec_b, strict=True))
     norm_a = math.sqrt(sum(a * a for a in vec_a))
     norm_b = math.sqrt(sum(b * b for b in vec_b))
     if norm_a == 0.0 or norm_b == 0.0:
@@ -110,6 +117,8 @@ class VectorStore:
         model: str | None = None,
         timeout: float = 30.0,
         dimensions: int = 0,
+        provider_id: str = "local-lexical-v1",
+        max_memories: int = 10000,
     ) -> None:
         self.scoped_store = scoped_store
         self.api_base = api_base
@@ -117,11 +126,37 @@ class VectorStore:
         self.model = model
         self.timeout = timeout
         self.dimensions = dimensions  # 期望嵌入维度；>0 时校验，0 表示不校验
+        self.provider_id = provider_id
+        self.max_memories = max_memories
         self.embed_func: EmbeddingFunc = embed_func or (
             self.default_embed if api_base else self.local_embed
         )
         self.index: dict[str, tuple[MemoryEntry, list[float]]] = {}
         self.client: httpx.AsyncClient | None = None
+        self.start_lock = asyncio.Lock()
+        self.started = False
+
+    async def start(self) -> None:
+        """Load every active persisted memory into the semantic index exactly once."""
+        async with self.start_lock:
+            if self.started:
+                return
+            manifest = await self.scoped_store.store.load(
+                MEMORY_INDEX_META_NAMESPACE,
+                MEMORY_INDEX_META_KEY,
+            )
+            expected = {
+                "provider_id": self.provider_id,
+                "dimensions": self.dimensions,
+            }
+            force_reembed = manifest != expected
+            await self.rebuild_all(force_reembed=force_reembed)
+            await self.scoped_store.store.save(
+                MEMORY_INDEX_META_NAMESPACE,
+                MEMORY_INDEX_META_KEY,
+                expected,
+            )
+            self.started = True
 
     def get_client(self) -> httpx.AsyncClient:
         """惰性创建并复用共享 httpx 客户端（连接池）。"""
@@ -150,6 +185,16 @@ class VectorStore:
         if self.client is not None and not self.client.is_closed:
             await self.client.aclose()
         self.client = None
+        self.started = False
+
+    def validate_vector(self, vector: list[float]) -> None:
+        """Reject empty or dimensionally incompatible embeddings."""
+        if not vector:
+            raise ValueError("嵌入向量不能为空")
+        if self.dimensions > 0 and len(vector) != self.dimensions:
+            raise ValueError(
+                f"嵌入维度不匹配：期望 {self.dimensions}，实际 {len(vector)}"
+            )
 
     async def add(self, entry: MemoryEntry) -> None:
         """添加记忆并建立嵌入索引。"""
@@ -158,15 +203,10 @@ class VectorStore:
         else:
             vector = await self.embed_func(entry.content)
             entry.embedding = vector
-        if self.dimensions > 0 and len(vector) != self.dimensions:
-            log.warning(
-                "嵌入维度与配置不符（可能配错嵌入模型）",
-                expected=self.dimensions,
-                actual=len(vector),
-                memory_id=entry.memory_id,
-            )
+        self.validate_vector(vector)
         self.index[entry.memory_id] = (entry, vector)
         await self.scoped_store.save(entry)
+        await self.enforce_capacity(entry.scope)
 
     async def remove(self, memory_id: str) -> None:
         """从索引中移除记忆。"""
@@ -188,6 +228,7 @@ class VectorStore:
             return []
 
         query_vector = await self.embed_func(query)
+        self.validate_vector(query_vector)
 
         scope_strings: set[str] | None = None
         if scopes:
@@ -215,14 +256,63 @@ class VectorStore:
             entries = await self.scoped_store.list_scope(scope)
             for entry in entries:
                 if entry.embedding is not None:
+                    self.validate_vector(entry.embedding)
                     self.index[entry.memory_id] = (entry, entry.embedding)
                 else:
                     vector = await self.embed_func(entry.content)
+                    self.validate_vector(vector)
                     entry.embedding = vector
                     self.index[entry.memory_id] = (entry, vector)
                     await self.scoped_store.update(entry)
                 count += 1
         return count
+
+    async def rebuild_all(self, force_reembed: bool = False) -> int:
+        """Rebuild the complete active index from persistence."""
+        self.index.clear()
+        entries = await self.scoped_store.list_all()
+        scopes: dict[str, MemoryScope] = {}
+        for entry in entries:
+            vector = entry.embedding
+            if force_reembed or vector is None or (
+                self.dimensions > 0 and len(vector) != self.dimensions
+            ):
+                vector = await self.embed_func(entry.content)
+                self.validate_vector(vector)
+                entry.embedding = vector
+                await self.scoped_store.update(entry)
+            else:
+                self.validate_vector(vector)
+            self.index[entry.memory_id] = (entry, vector)
+            scopes[entry.scope.to_string()] = entry.scope
+        for scope in scopes.values():
+            await self.enforce_capacity(scope)
+        return len(self.index)
+
+    async def enforce_capacity(self, scope: MemoryScope) -> int:
+        """Enforce a hard per-scope active-memory limit independently of Dream."""
+        if self.max_memories <= 0:
+            return 0
+        candidates = [
+            pair[0]
+            for pair in self.index.values()
+            if pair[0].scope.to_string() == scope.to_string()
+            and pair[0].status is MemoryStatus.ACTIVE
+        ]
+        if len(candidates) <= self.max_memories:
+            return 0
+        candidates.sort(key=lambda entry: (
+            entry.confidence,
+            entry.access_count,
+            entry.updated_at,
+            entry.memory_id,
+        ))
+        evicted = candidates[: len(candidates) - self.max_memories]
+        for entry in evicted:
+            entry.status = MemoryStatus.INACTIVE
+            await self.scoped_store.update(entry)
+            self.index.pop(entry.memory_id, None)
+        return len(evicted)
 
     def clear(self) -> None:
         """清空内存索引。"""

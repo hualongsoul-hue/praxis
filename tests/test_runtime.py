@@ -267,6 +267,9 @@ async def test_runtime_rejects_session_before_start_and_restart_after_close(tmp_
 
 async def test_runtime_start_failure_closes_partial_store(tmp_path: Path) -> None:
     store = MagicMock()
+    store.load = AsyncMock(return_value=None)
+    store.save = AsyncMock()
+    store.list_keys = AsyncMock(return_value=[])
     store.close = AsyncMock()
     gateway = FakeGateway()
     gateway.close = AsyncMock()  # type: ignore[method-assign]
@@ -303,6 +306,9 @@ async def test_runtime_close_collects_failures_and_closes_every_resource(
     tmp_path: Path,
 ) -> None:
     store = MagicMock()
+    store.load = AsyncMock(return_value=None)
+    store.save = AsyncMock()
+    store.list_keys = AsyncMock(return_value=[])
     store.close = AsyncMock()
     gateway = FakeGateway()
     gateway.close = AsyncMock(side_effect=RuntimeError("gateway close failed"))  # type: ignore[method-assign]
@@ -444,7 +450,15 @@ async def test_health_covers_provider_failures_and_visual_ready(tmp_path: Path) 
     gateway.health = AsyncMock(side_effect=RuntimeError("down"))  # type: ignore[method-assign]
     gateway.model_capabilities = ModelCapabilities(image=True)
     store = MagicMock()
-    store.list_keys = AsyncMock(side_effect=RuntimeError("storage down"))
+    store.load = AsyncMock(return_value=None)
+    store.save = AsyncMock()
+
+    async def health_sensitive_list(namespace: str, prefix: str = "") -> list[str]:
+        if namespace == "_praxis_health":
+            raise RuntimeError("storage down")
+        return []
+
+    store.list_keys = AsyncMock(side_effect=health_sensitive_list)
     store.close = AsyncMock()
     embedding = MagicMock()
     embedding.close = AsyncMock()

@@ -1,6 +1,7 @@
 """应用级 PraxisRuntime 与并发安全的 AgentSession。"""
 
 import asyncio
+import os
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AsyncExitStack, aclosing
 from importlib.util import find_spec
@@ -16,6 +17,8 @@ from praxis.exceptions import (
 from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine, build_guardrail_engine
 from praxis.lifecycle import AsyncResourceOwner, TaskSupervisor
+from praxis.memory.store import ScopedMemoryStore
+from praxis.memory.vector import VectorStore
 from praxis.models.inputs import InputValue
 from praxis.models.mcp import MCPElicitationRequest, MCPElicitationResponse
 from praxis.models.orchestrator import AgentEvent, AgentResponse
@@ -83,6 +86,8 @@ class PraxisRuntime:
         own_store: bool = False,
         own_audit_sink: bool = False,
         own_embedding_provider: bool = False,
+        vector_store: VectorStore | None = None,
+        own_vector_store: bool = False,
     ) -> None:
         self.config = config.model_copy(deep=True)
         self.gateway = gateway
@@ -90,6 +95,7 @@ class PraxisRuntime:
         self.audit_sink = audit_sink
         self.approval_handler = approval_handler
         self.embedding_provider = embedding_provider
+        self.vector_store = vector_store
         self.metrics = MetricsCollector(enabled=self.config.telemetry.metrics_enabled)
         self.supervisor = TaskSupervisor()
         self.session_builder = session_builder
@@ -105,6 +111,7 @@ class PraxisRuntime:
         self.store_owned = store is None or own_store
         self.audit_sink_owned = audit_sink is None or own_audit_sink
         self.embedding_provider_owned = own_embedding_provider
+        self.vector_store_owned = vector_store is None or own_vector_store
 
     @property
     def state(self) -> RuntimeState:
@@ -148,6 +155,37 @@ class PraxisRuntime:
                     self.resource_owner.register("gateway", self.gateway.close)
                 if self.embedding_provider is not None and self.embedding_provider_owned:
                     self.resource_owner.register("embedding", self.embedding_provider.close)
+                if self.vector_store is None:
+                    memory_config = self.config.memory
+                    self.vector_store = VectorStore(
+                        ScopedMemoryStore(self.store),
+                        embed_func=(
+                            self.embedding_provider.embed
+                            if self.embedding_provider is not None
+                            else None
+                        ),
+                        api_base=memory_config.embedding_api_base,
+                        api_key=(
+                            os.getenv(memory_config.embedding_api_key_env, "")
+                            if memory_config.embedding_api_key_env
+                            else ""
+                        ),
+                        model=memory_config.embedding_model,
+                        timeout=memory_config.embedding_timeout,
+                        dimensions=memory_config.embedding_dimensions,
+                        provider_id=(
+                            memory_config.embedding_model
+                            or (
+                                "injected-provider"
+                                if self.embedding_provider is not None
+                                else "local-lexical-v1"
+                            )
+                        ),
+                        max_memories=memory_config.max_memories,
+                    )
+                if self.vector_store_owned:
+                    self.resource_owner.register("memory-index", self.vector_store.aclose)
+                await self.vector_store.start()
                 if self.audit_sink is None:
                     self.audit_sink = AuditService(
                         self.store,
@@ -215,6 +253,7 @@ class PraxisRuntime:
             approval_handler=self.approval_handler,
             audit_sink=self.audit_sink,
             embedding_provider=self.embedding_provider,
+            vector_store=self.vector_store,
         )
         session = await factory.create_session(
             guardrails=self.guardrails,
@@ -347,6 +386,7 @@ class PraxisRuntime:
             approval_handler=self.approval_handler,
             audit_sink=self.audit_sink,
             embedding_provider=self.embedding_provider,
+            vector_store=self.vector_store,
         )
         child = await factory.create_session(
             guardrails=self.guardrails,

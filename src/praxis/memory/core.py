@@ -59,6 +59,7 @@ class CognitiveMemory:
         config: MemoryConfig | None = None,
         default_scope: MemoryScope | None = None,
         embedding_provider: EmbeddingProvider | None = None,
+        vector_store: VectorStore | None = None,
     ) -> None:
         self.store = store
         self.gateway = gateway
@@ -74,7 +75,8 @@ class CognitiveMemory:
         self.profile_store = ProfileStore(store)
 
         # 向量索引
-        self.vector_store = VectorStore(
+        self.owns_vector_store = vector_store is None
+        self.vector_store = vector_store or VectorStore(
             self.scoped_store,
             embed_func=embedding_provider.embed if embedding_provider is not None else None,
             api_base=self.config.embedding_api_base,
@@ -86,6 +88,11 @@ class CognitiveMemory:
             model=self.config.embedding_model,
             timeout=self.config.embedding_timeout,
             dimensions=self.config.embedding_dimensions,
+            provider_id=(
+                self.config.embedding_model
+                or ("injected-provider" if embedding_provider is not None else "local-lexical-v1")
+            ),
+            max_memories=self.config.max_memories,
         )
 
         # 生命周期管理
@@ -164,6 +171,7 @@ class CognitiveMemory:
     async def start(self) -> None:
         """启动后台 Worker 与 Dream 调度器；首次启动时预加载 praxis.md。"""
         await self.load_meta()
+        await self.vector_store.start()
         await self.preload_project_memory()
         if self.config.background_enabled:
             self.worker.start()
@@ -176,7 +184,8 @@ class CognitiveMemory:
         await self.worker.stop()
         await self.dream_scheduler.stop()
         await self.save_meta()
-        await self.vector_store.aclose()
+        if self.owns_vector_store:
+            await self.vector_store.aclose()
         log.info("CognitiveMemory 已停止", session_id=self.session_id)
 
     # ──────────────────────────────────────────────────────────────────

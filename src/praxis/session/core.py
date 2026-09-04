@@ -28,6 +28,7 @@ from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.input_resolver import InputResolver
 from praxis.memory.core import CognitiveMemory
+from praxis.memory.vector import VectorStore
 from praxis.models.inputs import InputValue
 from praxis.models.orchestrator import AgentEvent, AgentResponse, StrategyMode
 from praxis.models.session import (
@@ -304,6 +305,7 @@ class SessionFactory:
         approval_handler: ApprovalHandler | None = None,
         audit_sink: AuditSink | None = None,
         embedding_provider: EmbeddingProvider | None = None,
+        vector_store: VectorStore | None = None,
     ) -> None:
         self.store = store
         self.session_config = session_config
@@ -315,6 +317,7 @@ class SessionFactory:
         self.approval_handler = approval_handler
         self.audit_sink = audit_sink
         self.embedding_provider = embedding_provider
+        self.vector_store = vector_store
 
     async def create_session(
         self,
@@ -359,6 +362,7 @@ class SessionFactory:
                 session_id=metadata.session_id,
                 config=self.memory_config,
                 embedding_provider=self.embedding_provider,
+                vector_store=self.vector_store,
             )
         await memory.start()
 

@@ -264,6 +264,25 @@ class TestVectorStore:
         assert cosine_similarity([1, 0], [0, 1]) == pytest.approx(0.0)
         assert cosine_similarity([0, 0], [1, 0]) == pytest.approx(0.0)
 
+    def test_cosine_similarity_rejects_dimension_mismatch(self) -> None:
+        with pytest.raises(ValueError, match="维度"):
+            cosine_similarity([1.0, 0.0], [1.0])
+
+    async def test_add_rejects_configured_dimension_mismatch(
+        self,
+        scoped: ScopedMemoryStore,
+    ) -> None:
+        vector_store = VectorStore(scoped, embed_func=mock_embed, dimensions=2)
+        entry = SemanticMemory(
+            scope=MemoryScope(scope_type=ScopeType.GLOBAL),
+            content="Python",
+        )
+
+        with pytest.raises(ValueError, match="期望 2"):
+            await vector_store.add(entry)
+
+        assert await scoped.find_by_id(entry.memory_id) is None
+
     async def test_semantic_search_ranks_relevant(
         self, scoped: ScopedMemoryStore,
     ) -> None:
@@ -910,6 +929,57 @@ class TestBackgroundWorker:
 
 
 class TestCognitiveMemory:
+    async def test_restart_rebuilds_semantic_index_automatically(
+        self,
+        store: PersistenceStore,
+        mock_gateway,
+    ) -> None:
+        config = MemoryConfig(
+            background_enabled=False,
+            dream_enabled=False,
+            embedding_dimensions=3,
+        )
+        scope = MemoryScope(scope_type=ScopeType.GLOBAL)
+        first = CognitiveMemory(store, mock_gateway, session_id="first", config=config)
+        first.vector_store.embed_func = mock_embed
+        await first.start()
+        await first.save_memory("用户偏好 Python", scope=scope)
+        await first.stop()
+
+        second = CognitiveMemory(store, mock_gateway, session_id="second", config=config)
+        second.vector_store.embed_func = mock_embed
+        await second.start()
+        try:
+            results = await second.search_memory("Python", scopes=[scope])
+            assert [item.entry.content for item in results] == ["用户偏好 Python"]
+        finally:
+            await second.stop()
+
+    async def test_capacity_is_enforced_when_dream_is_disabled(
+        self,
+        store: PersistenceStore,
+        mock_gateway,
+    ) -> None:
+        config = MemoryConfig(
+            background_enabled=False,
+            dream_enabled=False,
+            embedding_dimensions=3,
+            max_memories=1,
+            consolidation_similarity_threshold=1.0,
+        )
+        scope = MemoryScope(scope_type=ScopeType.GLOBAL)
+        memory = CognitiveMemory(store, mock_gateway, session_id="bounded", config=config)
+        memory.vector_store.embed_func = mock_embed
+        await memory.start()
+        try:
+            await memory.save_memory("用户偏好 Python", scope=scope)
+            await memory.save_memory("使用 PostgreSQL 数据库", scope=scope)
+
+            active = await memory.scoped_store.list_scope(scope)
+            assert len(active) == 1
+            assert len(memory.vector_store.index) == 1
+        finally:
+            await memory.stop()
     async def test_lifecycle_and_append(
         self, store: PersistenceStore, mock_gateway,
     ) -> None:
@@ -931,6 +1001,7 @@ class TestCognitiveMemory:
         config = MemoryConfig(
             background_enabled=False, dream_enabled=False,
             consolidation_similarity_threshold=0.99,
+            embedding_dimensions=3,
         )
         ms = CognitiveMemory(store, mock_gateway, session_id="s", config=config)
         # 替换 embed 避免真实调用
@@ -953,7 +1024,11 @@ class TestCognitiveMemory:
     async def test_update_memory_cross_scope(
         self, store: PersistenceStore, mock_gateway,
     ) -> None:
-        config = MemoryConfig(background_enabled=False, dream_enabled=False)
+        config = MemoryConfig(
+            background_enabled=False,
+            dream_enabled=False,
+            embedding_dimensions=3,
+        )
         ms = CognitiveMemory(store, mock_gateway, session_id="s", config=config)
         ms.vector_store.embed_func = mock_embed
         await ms.start()
@@ -1046,6 +1121,7 @@ class TestCognitiveMemory:
             load_project_praxis_md=True,
             project_root=str(tmp_path),
             project_name="testproj",
+            embedding_dimensions=3,
         )
         ms = CognitiveMemory(store, mock_gateway, session_id="s", config=config)
         ms.vector_store.embed_func = mock_embed
@@ -1080,6 +1156,7 @@ class TestCognitiveMemory:
             background_batch_threshold=2,
             background_interval_seconds=0.05,
             consolidation_similarity_threshold=0.99,
+            embedding_dimensions=3,
         )
         ms = CognitiveMemory(store, mock_gateway, session_id="s", config=config)
         ms.vector_store.embed_func = mock_embed
@@ -1113,7 +1190,11 @@ class TestMemoryTools:
         from praxis.tools.builtins.memory_ops import register_memory_tools
         from praxis.tools.registry import ToolRegistry
 
-        config = MemoryConfig(background_enabled=False, dream_enabled=False)
+        config = MemoryConfig(
+            background_enabled=False,
+            dream_enabled=False,
+            embedding_dimensions=3,
+        )
         ms = CognitiveMemory(store, mock_gateway, session_id="s", config=config)
         ms.vector_store.embed_func = mock_embed
 

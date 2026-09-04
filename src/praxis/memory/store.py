@@ -115,6 +115,22 @@ class ScopedMemoryStore:
                 return entry_from_dict(data)
         return None
 
+    async def list_all(
+        self,
+        status: MemoryStatus | None = MemoryStatus.ACTIVE,
+    ) -> list[MemoryEntry]:
+        """List memories across scopes for Runtime-owned index reconstruction."""
+        keys = await self.store.list_keys(MEMORY_NAMESPACE, "")
+        entries: list[MemoryEntry] = []
+        for key in keys:
+            data = await self.store.load(MEMORY_NAMESPACE, key)
+            if data is None:
+                continue
+            entry = entry_from_dict(data)
+            if status is None or entry.status is status:
+                entries.append(entry)
+        return entries
+
     async def update(self, entry: MemoryEntry) -> None:
         """更新记忆条目（就地替换）。"""
         key = self.scope_key(entry.scope, entry.memory_id)
