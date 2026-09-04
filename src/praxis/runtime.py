@@ -7,10 +7,15 @@ from importlib.util import find_spec
 from typing import Any, Protocol, cast
 
 from praxis.config.settings import PraxisConfig
-from praxis.exceptions import ConcurrentSessionRunError, RuntimeStateError, SessionError
+from praxis.exceptions import (
+    ConcurrentSessionRunError,
+    RuntimeCloseError,
+    RuntimeStateError,
+    SessionError,
+)
 from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine, build_guardrail_engine
-from praxis.lifecycle import TaskSupervisor
+from praxis.lifecycle import AsyncResourceOwner, TaskSupervisor
 from praxis.models.inputs import InputValue
 from praxis.models.mcp import MCPElicitationRequest, MCPElicitationResponse
 from praxis.models.orchestrator import AgentEvent, AgentResponse
@@ -74,6 +79,10 @@ class PraxisRuntime:
         session_builder: SessionBuilder | None = None,
         mcp_elicitation_handler: MCPElicitationHandler | None = None,
         mcp_sampling_review_handler: MCPSamplingReviewHandler | None = None,
+        own_gateway: bool = False,
+        own_store: bool = False,
+        own_audit_sink: bool = False,
+        own_embedding_provider: bool = False,
     ) -> None:
         self.config = config.model_copy(deep=True)
         self.gateway = gateway
@@ -91,6 +100,11 @@ class PraxisRuntime:
         self.subagent_sessions: set[Session] = set()
         self.runtime_state = RuntimeState.NEW
         self.lifecycle_lock = asyncio.Lock()
+        self.resource_owner = AsyncResourceOwner()
+        self.gateway_owned = gateway is None or own_gateway
+        self.store_owned = store is None or own_store
+        self.audit_sink_owned = audit_sink is None or own_audit_sink
+        self.embedding_provider_owned = own_embedding_provider
 
     @property
     def state(self) -> RuntimeState:
@@ -116,30 +130,64 @@ class PraxisRuntime:
         async with self.lifecycle_lock:
             if self.runtime_state is RuntimeState.ACTIVE:
                 return
-            if self.runtime_state in {RuntimeState.STOPPING, RuntimeState.CLOSED}:
+            if self.runtime_state in {
+                RuntimeState.STOPPING,
+                RuntimeState.CLOSED,
+                RuntimeState.FAILED,
+            }:
                 raise RuntimeStateError("已关闭的 Runtime 不能重新启动")
             self.runtime_state = RuntimeState.STARTING
             try:
                 if self.store is None:
                     self.store = await create_store(self.config.persistence)
+                if self.store_owned:
+                    self.resource_owner.register("storage", self.store.close)
                 if self.gateway is None:
                     self.gateway = GatewayRouter(self.config.gateway)
+                if self.gateway_owned:
+                    self.resource_owner.register("gateway", self.gateway.close)
+                if self.embedding_provider is not None and self.embedding_provider_owned:
+                    self.resource_owner.register("embedding", self.embedding_provider.close)
                 if self.audit_sink is None:
                     self.audit_sink = AuditService(
                         self.store,
                         enabled=self.config.telemetry.audit_enabled,
                     )
+                if self.audit_sink_owned:
+                    self.resource_owner.register("audit", self.close_audit_sink)
                 self.guardrails = build_guardrail_engine(
                     self.config.guardrails,
                     audit_sink=self.audit_sink,
                 )
                 self.runtime_state = RuntimeState.ACTIVE
-            except BaseException:
+            except BaseException as start_error:
                 self.runtime_state = RuntimeState.FAILED
-                if self.store is not None:
-                    await self.store.close()
-                    self.store = None
+                cleanup_failures = await self.resource_owner.close()
+                for failure in cleanup_failures:
+                    start_error.add_note(
+                        f"启动回滚失败: {type(failure).__name__}: {failure}"
+                    )
                 raise
+
+    async def close_audit_sink(self) -> None:
+        """Flush and close an owned audit sink without skipping close on flush failure."""
+        if self.audit_sink is None:
+            return
+        flush_error: BaseException | None = None
+        try:
+            await self.audit_sink.flush()
+        except BaseException as exc:
+            flush_error = exc
+        try:
+            await self.audit_sink.close()
+        except BaseException as close_error:
+            if flush_error is not None:
+                close_error.add_note(
+                    f"审计 flush 同时失败: {type(flush_error).__name__}: {flush_error}"
+                )
+            raise
+        if flush_error is not None:
+            raise flush_error
 
     def session(self) -> "AgentSession":
         if not self.started:
@@ -490,28 +538,34 @@ class PraxisRuntime:
             if self.runtime_state is RuntimeState.CLOSED:
                 return
             self.runtime_state = RuntimeState.STOPPING
+            failures: list[BaseException] = []
             sessions = list(self.sessions)
-            if sessions:
-                await asyncio.gather(
-                    *(session.close() for session in sessions),
-                    return_exceptions=True,
-                )
-            await self.supervisor.close()
+            for session in sessions:
+                try:
+                    session.abort()
+                except BaseException as exc:
+                    failures.append(exc)
+            try:
+                await self.supervisor.close()
+            except BaseException as exc:
+                failures.append(exc)
             child_sessions = list(self.subagent_sessions)
             if child_sessions:
-                await asyncio.gather(
+                results = await asyncio.gather(
                     *(self.release_subagent_session(session) for session in child_sessions),
                     return_exceptions=True,
                 )
-            if self.audit_sink is not None:
-                await self.audit_sink.close()
-            if self.embedding_provider is not None:
-                await self.embedding_provider.close()
-            if self.gateway is not None:
-                await self.gateway.close()
-            if self.store is not None:
-                await self.store.close()
+                failures.extend(item for item in results if isinstance(item, BaseException))
+            if sessions:
+                results = await asyncio.gather(
+                    *(session.close() for session in sessions),
+                    return_exceptions=True,
+                )
+                failures.extend(item for item in results if isinstance(item, BaseException))
+            failures.extend(await self.resource_owner.close())
             self.runtime_state = RuntimeState.CLOSED
+            if failures:
+                raise RuntimeCloseError(tuple(failures))
 
 
 class AgentSession:
@@ -521,7 +575,10 @@ class AgentSession:
         self.runtime = runtime
         self.runner: SessionRunner | None = None
         self.run_lock = asyncio.Lock()
+        self.close_lock = asyncio.Lock()
         self.closed = False
+        self.closing = False
+        self.active_task: asyncio.Task[Any] | None = None
 
     @property
     def session_id(self) -> str | None:
@@ -551,7 +608,7 @@ class AgentSession:
     def require_runner(self) -> SessionRunner:
         if self.runner is None:
             raise SessionError("AgentSession 尚未启动，请使用 async with")
-        if self.closed or self.runner.status is SessionStatus.TERMINATED:
+        if self.closed or self.closing or self.runner.status is SessionStatus.TERMINATED:
             raise SessionError("AgentSession 已终止")
         return self.runner
 
@@ -561,7 +618,15 @@ class AgentSession:
             raise ConcurrentSessionRunError("同一 AgentSession 不能并发执行两个轮次")
         async with self.run_lock:
             with use_metrics(self.runtime.metrics):
-                return await runner.run_turn(user_input, **kwargs)
+                task = asyncio.create_task(
+                    runner.run_turn(user_input, **kwargs),
+                    name=f"praxis-session-{runner.session_id}",
+                )
+                self.active_task = task
+                try:
+                    return await task
+                finally:
+                    self.active_task = None
 
     async def run_stream(
         self,
@@ -573,23 +638,41 @@ class AgentSession:
             raise ConcurrentSessionRunError("同一 AgentSession 不能并发执行两个轮次")
         async with self.run_lock:
             with use_metrics(self.runtime.metrics):
-                stream = runner.run_turn_stream(user_input, **kwargs)
-                async with aclosing(stream):
-                    async for event in stream:
-                        yield event
+                self.active_task = asyncio.current_task()
+                try:
+                    stream = runner.run_turn_stream(user_input, **kwargs)
+                    async with aclosing(stream):
+                        async for event in stream:
+                            yield event
+                finally:
+                    self.active_task = None
 
     def abort(self) -> None:
-        self.require_runner().abort()
+        if self.runner is None:
+            raise SessionError("AgentSession 尚未启动，请使用 async with")
+        self.runner.abort()
+        task = self.active_task
+        if task is not None and task is not asyncio.current_task() and not task.done():
+            task.cancel()
 
     async def close(self) -> None:
-        if self.closed:
-            return
-        self.closed = True
-        if self.runner is not None:
-            self.runner.abort()
-            async with self.run_lock:
-                await self.runner.terminate()
-        self.runtime.unregister_session(self)
+        async with self.close_lock:
+            if self.closed:
+                return
+            self.closing = True
+            try:
+                if self.runner is not None:
+                    self.runner.abort()
+                    task = self.active_task
+                    if task is not None and task is not asyncio.current_task() and not task.done():
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+                    async with self.run_lock:
+                        await self.runner.terminate()
+                self.closed = True
+                self.runtime.unregister_session(self)
+            finally:
+                self.closing = False
 
 
 __all__ = [

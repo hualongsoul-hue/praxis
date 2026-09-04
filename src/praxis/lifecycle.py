@@ -1,10 +1,47 @@
 """Runtime 后台任务监督器。"""
 
 import asyncio
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
+from dataclasses import dataclass
 from typing import Any, TypeVar
 
 T = TypeVar("T")
+AsyncCloser = Callable[[], Awaitable[None]]
+
+
+@dataclass(frozen=True, slots=True)
+class OwnedResource:
+    """One named async resource whose lifecycle was transferred to an owner."""
+
+    name: str
+    close: AsyncCloser
+
+
+class AsyncResourceOwner:
+    """Close registered resources in reverse order without short-circuiting."""
+
+    def __init__(self) -> None:
+        self.resources: list[OwnedResource] = []
+        self.closed = False
+
+    def register(self, name: str, close: AsyncCloser) -> None:
+        if self.closed:
+            raise RuntimeError("资源所有者已关闭")
+        self.resources.append(OwnedResource(name=name, close=close))
+
+    async def close(self) -> tuple[BaseException, ...]:
+        if self.closed:
+            return ()
+        self.closed = True
+        resources = list(reversed(self.resources))
+        self.resources.clear()
+        failures: list[BaseException] = []
+        for resource in resources:
+            try:
+                await resource.close()
+            except BaseException as exc:
+                failures.append(exc)
+        return tuple(failures)
 
 
 class TaskSupervisor:

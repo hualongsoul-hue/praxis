@@ -23,6 +23,7 @@ from praxis.context.assembler import PromptAssembler
 from praxis.context.compaction import ContextCompactor
 from praxis.context.masking import ObservationMasker
 from praxis.context.tool_injection import ToolInjector
+from praxis.exceptions import SessionError
 from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.input_resolver import InputResolver
@@ -255,14 +256,32 @@ class Session:
 
     async def terminate(self) -> None:
         """终止会话：停止后台记忆 Worker、Dream 调度器并关闭 MCP 连接。"""
+        if self.metadata.status is SessionStatus.TERMINATED:
+            return
+        failures: list[BaseException] = []
         if self.memory is not None:
-            await self.memory.stop()
+            try:
+                await self.memory.stop()
+            except BaseException as exc:
+                failures.append(exc)
         if self.mcp_manager is not None:
-            for server_name in self.mcp_manager.list_connected_servers():
-                self.mcp_manager.disconnect_server(server_name)
+            try:
+                for server_name in self.mcp_manager.list_connected_servers():
+                    self.mcp_manager.disconnect_server(server_name)
+            except BaseException as exc:
+                failures.append(exc)
         if self.mcp_stack is not None:
-            await self.mcp_stack.aclose()
-            self.mcp_stack = None
+            try:
+                await self.mcp_stack.aclose()
+            except BaseException as exc:
+                failures.append(exc)
+            else:
+                self.mcp_stack = None
+        if failures:
+            raise SessionError(
+                f"会话终止期间发生 {len(failures)} 个错误",
+                details={"failure_types": [type(item).__name__ for item in failures]},
+            ) from failures[0]
         self.metadata.status = SessionStatus.TERMINATED
         log.info("会话已终止", session_id=self.session_id)
 

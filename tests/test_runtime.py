@@ -19,7 +19,12 @@ from praxis.config.schemas import (
     SkillsConfig,
     VerificationConfig,
 )
-from praxis.exceptions import ConcurrentSessionRunError, RuntimeStateError, SessionError
+from praxis.exceptions import (
+    ConcurrentSessionRunError,
+    RuntimeCloseError,
+    RuntimeStateError,
+    SessionError,
+)
 from praxis.models.inputs import InputValue
 from praxis.models.mcp import (
     MCPElicitationRequest,
@@ -127,6 +132,7 @@ async def test_runtime_and_session_context_lifecycle(tmp_path: Path) -> None:
     async with PraxisRuntime(
         runtime_config(tmp_path),
         gateway=gateway,
+        own_gateway=True,
         session_builder=lambda runtime_instance: asyncio.sleep(0, result=runner),
     ) as runtime:
         assert runtime.started
@@ -262,7 +268,24 @@ async def test_runtime_rejects_session_before_start_and_restart_after_close(tmp_
 async def test_runtime_start_failure_closes_partial_store(tmp_path: Path) -> None:
     store = MagicMock()
     store.close = AsyncMock()
-    runtime = PraxisRuntime(runtime_config(tmp_path), gateway=FakeGateway(), store=store)
+    gateway = FakeGateway()
+    gateway.close = AsyncMock()  # type: ignore[method-assign]
+    audit = MagicMock()
+    audit.flush = AsyncMock()
+    audit.close = AsyncMock()
+    embedding = MagicMock()
+    embedding.close = AsyncMock()
+    runtime = PraxisRuntime(
+        runtime_config(tmp_path),
+        gateway=gateway,
+        store=store,
+        audit_sink=audit,
+        embedding_provider=embedding,
+        own_gateway=True,
+        own_store=True,
+        own_audit_sink=True,
+        own_embedding_provider=True,
+    )
     with (
         patch("praxis.runtime.build_guardrail_engine", side_effect=RuntimeError("bad rules")),
         pytest.raises(RuntimeError, match="bad rules"),
@@ -270,6 +293,87 @@ async def test_runtime_start_failure_closes_partial_store(tmp_path: Path) -> Non
         await runtime.start()
     assert runtime.state.value == "failed"
     store.close.assert_awaited_once()
+    gateway.close.assert_awaited_once()
+    audit.flush.assert_awaited_once()
+    audit.close.assert_awaited_once()
+    embedding.close.assert_awaited_once()
+
+
+async def test_runtime_close_collects_failures_and_closes_every_resource(
+    tmp_path: Path,
+) -> None:
+    store = MagicMock()
+    store.close = AsyncMock()
+    gateway = FakeGateway()
+    gateway.close = AsyncMock(side_effect=RuntimeError("gateway close failed"))  # type: ignore[method-assign]
+    audit = MagicMock()
+    audit.flush = AsyncMock(side_effect=RuntimeError("audit flush failed"))
+    audit.close = AsyncMock()
+    embedding = MagicMock()
+    embedding.close = AsyncMock()
+    runtime = PraxisRuntime(
+        runtime_config(tmp_path),
+        gateway=gateway,
+        store=store,
+        audit_sink=audit,
+        embedding_provider=embedding,
+        own_gateway=True,
+        own_store=True,
+        own_audit_sink=True,
+        own_embedding_provider=True,
+    )
+    await runtime.start()
+
+    with pytest.raises(RuntimeCloseError) as captured:
+        await runtime.close()
+
+    assert runtime.state.value == "closed"
+    assert len(captured.value.failures) == 2
+    store.close.assert_awaited_once()
+    gateway.close.assert_awaited_once()
+    audit.close.assert_awaited_once()
+    embedding.close.assert_awaited_once()
+
+
+async def test_session_close_cancels_active_run_promptly(tmp_path: Path) -> None:
+    started = asyncio.Event()
+    runner = FakeRunner(started, asyncio.Event())
+    runtime = PraxisRuntime(
+        runtime_config(tmp_path),
+        gateway=FakeGateway(),
+        session_builder=lambda runtime_instance: asyncio.sleep(0, result=runner),
+    )
+    await runtime.start()
+    session = runtime.session()
+    await session.__aenter__()
+    running = asyncio.create_task(session.run("blocked"))
+    await started.wait()
+
+    await asyncio.wait_for(session.close(), timeout=0.5)
+
+    assert running.cancelled()
+    assert runner.terminated
+    await runtime.close()
+
+
+async def test_failed_session_close_can_be_retried(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    runner.terminate = AsyncMock(side_effect=[RuntimeError("first close failed"), None])  # type: ignore[method-assign]
+    async with PraxisRuntime(
+        runtime_config(tmp_path),
+        gateway=FakeGateway(),
+        session_builder=lambda runtime_instance: asyncio.sleep(0, result=runner),
+    ) as runtime:
+        session = runtime.session()
+        await session.__aenter__()
+        with pytest.raises(RuntimeError, match="first close failed"):
+            await session.close()
+        assert session.closed is False
+
+        await session.close()
+
+        assert session.closed is True
+        assert runner.terminate.await_count == 2
 
 
 async def test_runtime_builds_default_session_and_wires_subagent_tools(tmp_path: Path) -> None:
@@ -352,6 +456,7 @@ async def test_health_covers_provider_failures_and_visual_ready(tmp_path: Path) 
         gateway=gateway,
         store=store,
         embedding_provider=embedding,
+        own_embedding_provider=True,
         session_builder=lambda runtime_instance: asyncio.sleep(0, result=FakeRunner()),
     )
     await runtime.start()
@@ -528,6 +633,7 @@ async def test_runtime_injects_owned_embedding_provider_into_memory(tmp_path: Pa
         runtime_config(tmp_path),
         gateway=FakeGateway(),
         embedding_provider=embedding,
+        own_embedding_provider=True,
     )
     await runtime.start()
     runner = await runtime.build_session()

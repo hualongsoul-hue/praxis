@@ -267,6 +267,19 @@ class RuntimeStateError(PraxisError):
     component = "runtime"
 
 
+class RuntimeCloseError(PraxisError):
+    """One or more resources failed to close after all cleanup was attempted."""
+
+    component = "runtime"
+
+    def __init__(self, failures: tuple[BaseException, ...]) -> None:
+        self.failures = failures
+        super().__init__(
+            f"Runtime 关闭期间发生 {len(failures)} 个错误",
+            details={"failure_types": [type(item).__name__ for item in failures]},
+        )
+
+
 # ── S13 子代理协调 ───────────────────────────────────────────────────────────
 
 

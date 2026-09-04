@@ -4,6 +4,7 @@ import asyncio
 import json
 import socket
 from pathlib import Path
+from unittest.mock import MagicMock
 from urllib.request import urlopen
 
 import pytest
@@ -150,6 +151,22 @@ class TestTracing:
         assert child_ctx.span_id != parent_ctx.span_id
         child.end()
         parent.end()
+
+    async def test_owned_tracing_lifecycle_flushes_and_shuts_down(self) -> None:
+        from praxis.telemetry.tracing import TracingLifecycle
+
+        provider = MagicMock()
+        lifecycle = TracingLifecycle(
+            tracer=MagicMock(),
+            provider=provider,
+            owns_provider=True,
+        )
+
+        await lifecycle.close()
+        await lifecycle.close()
+
+        provider.force_flush.assert_called_once()
+        provider.shutdown.assert_called_once()
 
 
 class TestAudit:
