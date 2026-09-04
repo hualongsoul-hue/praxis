@@ -441,5 +441,19 @@ def test_tracked_file_inventory_includes_task_surfaces() -> None:
     assert "examples/console.py" in relative_paths
     assert "tests/integration/test_gateway_live.py" in relative_paths
     assert "tests/integration/live_model_evidence.py" in relative_paths
-    assert ".superpowers/sdd/task-5-report.md" in relative_paths
-    assert ".superpowers/sdd/task-5-brief.md" in relative_paths
+
+
+def test_secret_candidate_inventory_includes_local_sdd_artifacts(
+    tmp_path: Path,
+) -> None:
+    subprocess.run(
+        ["git", "init", "--quiet"],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+    )
+    artifact = tmp_path / ".superpowers" / "sdd" / "task-report.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("local task evidence", encoding="utf-8")
+
+    assert artifact in tracked_secret_candidates(tmp_path)

@@ -356,6 +356,9 @@ class InputResolver:
     def open_windows_path_handle(self, path: Path) -> OpenedPath:
         """Open and identify a Windows file through a non-following Win32 handle."""
 
+        if sys.platform != "win32":
+            raise OSError("Windows secure path handles are unavailable")
+
         import ctypes
         import ctypes.wintypes as wintypes
         import msvcrt
