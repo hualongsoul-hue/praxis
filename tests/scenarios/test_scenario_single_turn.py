@@ -30,8 +30,11 @@ class TestSingleTurnExecution:
         context_config,
     ) -> None:
         """验证：用户消息 → 工具调用 → 最终响应的完整链路。"""
+        observed_paths: list[str] = []
+
         # 注册测试工具
         async def read_file_handler(args: dict[str, Any]) -> str:
+            observed_paths.append(str(args.get("path", "")))
             return f"文件内容: {args.get('path', 'unknown')}"
 
         register_tool(
@@ -63,6 +66,11 @@ class TestSingleTurnExecution:
         assert response.tool_calls_made == 1
         assert response.total_turns == 2
         assert mock_gateway.complete.await_count == 2
+        assert observed_paths == ["test.py"]
+        assert any(
+            message.get("role") == "tool" and "文件内容" in str(message.get("content"))
+            for message in loop.assembler.conversation_history
+        )
 
     async def test_no_tool_call_direct_response(
         self,
@@ -96,10 +104,14 @@ class TestSingleTurnExecution:
         context_config,
     ) -> None:
         """验证：单轮次多工具并发调用。"""
+        invocations: list[tuple[str, str]] = []
+
         async def read_handler(args: dict[str, Any]) -> str:
+            invocations.append(("read", str(args.get("path"))))
             return f"内容: {args.get('path')}"
 
         async def grep_handler(args: dict[str, Any]) -> str:
+            invocations.append(("grep", str(args.get("query"))))
             return f"搜索结果: {args.get('query')}"
 
         register_tool(registry, "read_file", read_handler, parameters={
@@ -128,6 +140,7 @@ class TestSingleTurnExecution:
         assert response.content == "分析完成"
         assert response.tool_calls_made == 2
         assert response.total_turns == 2
+        assert invocations == [("read", "a.py"), ("grep", "def main")]
 
     async def test_events_emitted(
         self,

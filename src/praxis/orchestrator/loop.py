@@ -424,9 +424,7 @@ class OrchestrationLoop:
         )
 
         # 绊线检查
-        tripwire = any(
-            o.skipped and "绊线" in o.skip_reason for o in outcomes
-        )
+        tripwire = any(outcome.skipped and outcome.tripwire for outcome in outcomes)
 
         # 记录助手响应（含工具调用）
         assistant_msg: dict[str, Any] = {

@@ -5,9 +5,10 @@ S4 生成摘要 → 替换历史消息 → 正常继续。
 """
 
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from praxis.config.schemas import ContextConfig, OrchestratorConfig
+from praxis.context.compaction import ContextCompactor
 from praxis.models.orchestrator import TerminationReason
 from tests.scenarios.conftest import (
     build_loop,
@@ -65,14 +66,16 @@ class TestContextOverflow:
         ctx_config = ContextConfig(compaction_threshold=0.5)
         orch_config = OrchestratorConfig(max_turns=5)
 
-        mock_gateway.complete = AsyncMock(
-            return_value=make_model_response(content="压缩后继续")
-        )
+        mock_gateway.complete = AsyncMock(side_effect=[
+            make_model_response(content="历史摘要"),
+            make_model_response(content="压缩后继续"),
+        ])
 
         loop = build_loop(
             mock_gateway, registry, guardrails,
             orch_config, ctx_config,
         )
+        loop.compactor = ContextCompactor(ctx_config, mock_gateway)
 
         # 注入大量历史消息模拟上下文积累
         for i in range(20):
@@ -81,10 +84,18 @@ class TestContextOverflow:
                 "content": f"这是一段较长的消息内容，用于填充上下文窗口 - 消息 {i} " * 5,
             })
 
-        response = await loop.run(
-            resolved_text_input("在已有大量上下文的情况下继续对话")
-        )
-        assert response is not None
+        with patch(
+            "praxis.context.assembler.get_token_count",
+            return_value=100_000,
+        ):
+            response = await loop.run(
+                resolved_text_input("在已有大量上下文的情况下继续对话")
+            )
+
+        assert response.content == "压缩后继续"
+        assert loop.assembler.compaction_count == 1
+        assert "<compaction_summary>" in str(loop.assembler.conversation_history)
+        assert mock_gateway.complete.await_count == 2
 
     async def test_max_turns_terminates_loop(
         self,

@@ -73,7 +73,11 @@ class TestErrorRecovery:
         context_config,
     ) -> None:
         """验证：工具多次失败后熔断器打开，后续调用被跳过。"""
+        execution_count = 0
+
         async def always_fail(args: dict[str, Any]) -> str:
+            nonlocal execution_count
+            execution_count += 1
             raise RuntimeError("持续失败")
 
         register_tool(registry, "unstable_tool", always_fail)
@@ -104,8 +108,14 @@ class TestErrorRecovery:
             loop.coordinator.circuits.record_outcome("unstable_tool", success=False)
 
         response = await loop.run(resolved_text_input("执行不稳定操作"))
-        # 熔断器应跳过工具调用
-        assert response is not None
+
+        assert response.content == "无法完成操作"
+        assert execution_count == 0
+        assert call_count == 3
+        assert any(
+            event.event_type == "tool_call_end" and event.data.skipped
+            for event in response.events
+        )
 
     async def test_tool_timeout_handled(
         self,
@@ -154,5 +164,15 @@ class TestErrorRecovery:
         )
 
         response = await loop.run(resolved_text_input("执行慢操作"))
-        assert response is not None
+
+        assert response.content == "工具超时，已跳过"
         assert call_count == 2
+        timeout_error_types = [
+            event.data.error_type
+            for event in response.events
+            if event.event_type == "tool_call_end"
+        ]
+        assert any(
+            error_type.endswith("ToolTimeoutError")
+            for error_type in timeout_error_types
+        ), timeout_error_types

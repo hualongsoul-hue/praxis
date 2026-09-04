@@ -1,7 +1,7 @@
 """Praxis 测试配置和公共 fixture。"""
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -23,8 +23,6 @@ def build_mock_gateway(default_model: str = "default") -> MagicMock:
     gw.config = MagicMock()
     gw.config.max_budget = None
     gw.config.default_model = default_model
-    gw.router = MagicMock()
-    gw.router.acompletion = AsyncMock()
     gw.capabilities.return_value = ModelCapabilities()
     return gw
 

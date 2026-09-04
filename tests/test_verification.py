@@ -297,6 +297,12 @@ class TestGAVController:
         assert response.passed is True
         assert response.context_injection == ""
 
+    def test_empty_verification_set_fails_closed(self) -> None:
+        response = GAVController().evaluate(GAVVerifyRequest(results=[]))
+
+        assert response.passed is False
+        assert "未执行" in response.context_injection
+
     def test_failure_returns_context(self) -> None:
         ctrl = GAVController()
         results = [
@@ -506,6 +512,42 @@ class TestVerifierRegistry:
         results = await reg.run_computational({"code": "test"})
         assert len(results) == 1
         assert results[0].feedback == "自定义检查通过"
+
+    @pytest.mark.parametrize(
+        ("verifier_name", "verification_type", "feedback"),
+        [
+            ("different-name", VerificationType.COMPUTATIONAL, "通过"),
+            ("custom_check", VerificationType.INFERENTIAL, "通过"),
+            ("custom_check", VerificationType.COMPUTATIONAL, ""),
+        ],
+    )
+    async def test_invalid_custom_pass_is_converted_to_error(
+        self,
+        verifier_name: str,
+        verification_type: VerificationType,
+        feedback: str,
+    ) -> None:
+        class InvalidVerifier:
+            @property
+            def name(self) -> str:
+                return "custom_check"
+
+            async def verify(self, target):
+                return VerificationResult(
+                    status=VerificationStatus.PASS,
+                    verification_type=verification_type,
+                    verifier_name=verifier_name,
+                    feedback=feedback,
+                )
+
+        registry = VerifierRegistry()
+        registry.register(InvalidVerifier())
+
+        [result] = await registry.run_computational({"code": "test"})
+
+        assert result.status is VerificationStatus.ERROR
+        assert result.verifier_name == "custom_check"
+        assert "无效" in result.feedback
 
 
 class TestVerifierConfigFlags:

@@ -70,10 +70,16 @@ class GAVController:
         Returns:
             格式化的 Verify 响应，供 S11 决定是否重新进入 Gather。
         """
-        all_passed = all(r.passed for r in request.results)
+        all_passed = bool(request.results) and all(
+            result.passed for result in request.results
+        )
 
         context_lines: list[str] = []
         retry_hints: list[str] = []
+
+        if not request.results:
+            context_lines.append("[verification] fail: 未执行任何验证器")
+            retry_hints.append("至少执行一个适用的验证器")
 
         for result in request.results:
             if not result.passed:

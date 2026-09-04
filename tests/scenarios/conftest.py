@@ -19,9 +19,10 @@ from praxis.context.assembler import PromptAssembler
 from praxis.context.tool_injection import ToolInjector
 from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
-from praxis.guardrails.permissions import PermissionManager
+from praxis.guardrails.permissions import PermissionManager, PermissionPolicy
 from praxis.guardrails.rules import RuleEngine
 from praxis.memory.core import CognitiveMemory
+from praxis.models.guardrails import VerdictType
 from praxis.models.messages import ResolvedUserInput
 from praxis.models.responses import ModelResponse, Usage
 from praxis.models.tools import FunctionCall, ToolCall, ToolDefinition
@@ -115,7 +116,7 @@ def rule_engine() -> RuleEngine:
 
 @pytest.fixture
 def permission_manager() -> PermissionManager:
-    return PermissionManager()
+    return PermissionManager(PermissionPolicy(default_permission=VerdictType.AUTO_APPROVE))
 
 
 @pytest.fixture
@@ -171,7 +172,7 @@ def build_loop(
     injector = ToolInjector(registry)
     assembler = PromptAssembler(context_config, model="test-model")
     circuits = CircuitBreakerRegistry()
-    retry_policy = RetryPolicy()
+    retry_policy = RetryPolicy(max_retries=0)
     emitter = EventEmitter()
     parser = OutputParser()
     termination = TerminationManager(orchestrator_config)

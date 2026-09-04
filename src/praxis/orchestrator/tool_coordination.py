@@ -54,6 +54,7 @@ class ToolCallOutcome:
         "result",
         "skip_reason",
         "skipped",
+        "tripwire",
         "tool_call",
     )
 
@@ -64,12 +65,14 @@ class ToolCallOutcome:
         skipped: bool = False,
         skip_reason: str = "",
         needs_user_confirm: bool = False,
+        tripwire: bool = False,
     ) -> None:
         self.tool_call = tool_call
         self.result = result
         self.skipped = skipped
         self.skip_reason = skip_reason
         self.needs_user_confirm = needs_user_confirm
+        self.tripwire = tripwire
 
 
 class ToolCoordinator:
@@ -475,6 +478,7 @@ class ToolCoordinator:
             tool_call=tool_call,
             skipped=True,
             skip_reason=reason,
+            tripwire=tripwire,
         )
 
     @staticmethod

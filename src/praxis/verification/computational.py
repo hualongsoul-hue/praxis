@@ -567,6 +567,21 @@ async def run_computational(
     results: list[VerificationResult] = []
     for verifier in verifiers:
         result = await verifier.verify(target)
+        invalid_result = (
+            result.verifier_name != verifier.name
+            or result.verification_type is not VerificationType.COMPUTATIONAL
+            or (
+                result.status is VerificationStatus.PASS
+                and not result.feedback.strip()
+            )
+        )
+        if invalid_result:
+            result = VerificationResult(
+                status=VerificationStatus.ERROR,
+                verification_type=VerificationType.COMPUTATIONAL,
+                verifier_name=verifier.name,
+                feedback="验证器返回了无效或缺少证据的结果",
+            )
         log.info(
             "计算型验证完成",
             verifier=verifier.name,

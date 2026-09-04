@@ -31,6 +31,8 @@ class TestGuardrailTripwire:
         context_config,
     ) -> None:
         """验证：危险工具调用触发绊线，循环立即终止。"""
+        execution_count = 0
+
         # 注册工具调用规则（针对 tool_call 内容检测）
         guardrails.rule_engine.register_rule(GuardrailRule(
             name="destructive_command",
@@ -42,6 +44,8 @@ class TestGuardrailTripwire:
         ))
 
         async def run_command_handler(args: dict[str, Any]) -> str:
+            nonlocal execution_count
+            execution_count += 1
             return "executed"
 
         register_tool(registry, "run_command", run_command_handler, parameters={
@@ -65,10 +69,9 @@ class TestGuardrailTripwire:
         )
 
         response = await loop.run(resolved_text_input("清理所有文件"))
-        # 绊线触发后循环应终止
-        assert response is not None
-        # 工具不应被实际执行（被护栏跳过）
+        assert response.termination_reason is TerminationReason.TRIPWIRE
         assert response.tool_calls_made >= 1
+        assert execution_count == 0
 
     async def test_input_tripwire_blocks_immediately(
         self,

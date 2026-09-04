@@ -111,6 +111,30 @@ def missing_test_oracles(root: Path) -> list[str]:
     return missing
 
 
+def implementation_coupled_gateway_mocks(root: Path) -> list[str]:
+    """Find orchestration tests that bypass the public ModelGateway protocol."""
+
+    allowed = {
+        "integration/test_gateway_litellm.py",
+        "test_gateway.py",
+    }
+    findings: list[str] = []
+    for path in sorted(root.rglob("*.py")):
+        relative = path.relative_to(root).as_posix()
+        if relative in allowed:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Attribute)
+                and node.attr == "acompletion"
+                and isinstance(node.value, ast.Attribute)
+                and node.value.attr == "router"
+            ):
+                findings.append(f"{relative}:{node.lineno}")
+    return findings
+
+
 def test_oracle_detector_accepts_direct_pytest_contexts_and_failure() -> None:
     nodes = collect_test_functions(
         """
@@ -210,7 +234,29 @@ def test_missing_oracles_scans_both_pytest_filename_patterns_once(
     ]
 
 
+def test_implementation_coupling_detector_rejects_gateway_adapter_bypass(
+    tmp_path: Path,
+) -> None:
+    candidate = tmp_path / "test_orchestration.py"
+    candidate.write_text(
+        "def test_turn(mock_gateway):\n"
+        "    mock_gateway.router.acompletion.return_value = object()\n"
+        "    assert mock_gateway is not None\n",
+        encoding="utf-8",
+    )
+
+    assert implementation_coupled_gateway_mocks(tmp_path) == [
+        "test_orchestration.py:2"
+    ]
+
+
 def test_repository_tests_have_an_explicit_observable_oracle() -> None:
     root = Path(__file__).resolve().parent
 
     assert missing_test_oracles(root) == []
+
+
+def test_orchestration_tests_mock_only_public_gateway_protocol() -> None:
+    root = Path(__file__).resolve().parent
+
+    assert implementation_coupled_gateway_mocks(root) == []
