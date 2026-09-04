@@ -3,9 +3,13 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+env:
+  UV_LINK_MODE: copy
 
 jobs:
   test:
@@ -74,3 +78,26 @@ jobs:
         with:
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@v2
+
+  live-model:
+    if: github.event_name == 'workflow_dispatch'
+    needs: [test, wheel-smoke, security, secrets]
+    runs-on: [self-hosted, linux]
+    timeout-minutes: 30
+    env:
+      PRAXIS_MODEL_API_KEY: ${{secrets.PRAXIS_MODEL_API_KEY}}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - name: Require the release credential without displaying it
+        shell: bash
+        run: test -n "$PRAXIS_MODEL_API_KEY"
+      - name: Sync locked dependencies
+        run: uv sync --all-extras --frozen
+      - name: Exercise text, streaming, tools, cancellation, timeout, and errors
+        run: uv run pytest -W error --strict-config --strict-markers tests/integration/test_gateway_live.py
+      - name: Exercise repeated multimodal capability windows
+        run: uv run pytest -W error --strict-config --strict-markers tests/integration/test_gateway_live_multimodal.py

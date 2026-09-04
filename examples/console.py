@@ -15,10 +15,17 @@ from praxis import (
     load_config,
 )
 
+EXAMPLE_CONFIG_PATH = Path(__file__).resolve().with_name("config.yaml")
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Send one Praxis agent turn.")
-    parser.add_argument("--config", default="config.yaml", help="Praxis YAML config")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=EXAMPLE_CONFIG_PATH,
+        help=f"Praxis YAML config (default: {EXAMPLE_CONFIG_PATH})",
+    )
     parser.add_argument("--prompt", default="请介绍你的能力", help="User text")
     parser.add_argument("--image", type=Path, help="Local image path")
     parser.add_argument("--audio", type=Path, help="Local WAV or MP3 path")

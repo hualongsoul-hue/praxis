@@ -31,6 +31,10 @@ Runtime。进程收到停止信号后，先停止接收请求，再等待或取�
 - liveness：事件循环与服务进程仍可响应；不要用计费模型调用做 liveness。
 - diagnostics：返回组件状态，但不要返回配置全文、Prompt、工具完整参数或异常中的凭据。
 
+`runtime.health()` 的模型检查是真实请求，并受 `gateway.health_probe_timeout` 和
+`gateway.health_probe_ttl` 控制。服务自身的 liveness 应使用本地事件循环检查；readiness 可复用
+缓存后的 Runtime 健康报告。CLI 的 `praxis doctor` 也会触发该探针，可能产生一次小额调用。
+
 ## Windows
 
 - 使用服务管理器（Windows Service、NSSM 或受管容器）保持进程存活。
@@ -48,6 +52,13 @@ Runtime。进程收到停止信号后，先停止接收请求，再等待或取�
 SDK 不覆盖宿主的 OpenTelemetry Provider。生产审计应使用持久化后端并设置备份、保留和访问控制。
 日志、审计和追踪默认不记录 Prompt、密钥或完整敏感参数。SQLite 适合单机服务；多实例部署应选
 Redis 或自定义 `StorageBackend`，并在部署层验证一致性需求。
+
+CLI 与完整控制台通过同一个 `PraxisCliApplication` 拥有本次进程创建的 Runtime、指标导出器和
+追踪 Provider，并按依赖顺序关闭。嵌入式 SDK 不配置根日志，也不启动永久指标 HTTP 线程。
+
+指定模型地址使用明文 HTTP，只适用于端点与 Agent 位于同一受信隔离网络的部署。若流量经过
+任何不受信链路，必须使用 HTTPS/mTLS 代理或等效的加密服务网格；否则密钥、Prompt、附件和模型
+响应都可能被旁路观察或篡改。
 
 ## 升级
 

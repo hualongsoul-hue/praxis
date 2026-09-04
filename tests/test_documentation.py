@@ -6,6 +6,7 @@ from pathlib import Path
 
 import yaml
 
+from examples import console, streaming_console
 from praxis import load_config
 from praxis.config.settings import PraxisConfig
 
@@ -91,3 +92,30 @@ def test_sdk_examples_compile_against_public_runtime_api() -> None:
     assert examples
     for path in examples:
         compile(path.read_text(encoding="utf-8"), str(path), "exec")
+
+
+def test_repository_examples_execute_current_configuration_boundary() -> None:
+    expected = (ROOT / "examples" / "config.yaml").resolve()
+
+    assert console.build_parser().parse_args([]).config == expected
+    assert streaming_console.build_parser().parse_args([]).config == expected
+    assert load_config(expected, environ={}).gateway.default_model == "default"
+
+
+def test_documentation_describes_final_health_event_and_transport_contracts() -> None:
+    corpus = "\n".join(path.read_text(encoding="utf-8") for path in MARKDOWN_FILES)
+
+    assert "health_probe_ttl" in corpus
+    assert "schema_version" in corpus
+    assert "HTTPS/mTLS" in corpus
+    assert "YAML 文件所在目录" in corpus
+
+
+def test_ci_has_an_explicit_credentialed_live_release_gate() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+    assert "workflow_dispatch:" in workflow
+    assert "runs-on: [self-hosted, linux]" in workflow
+    assert "test_gateway_live.py" in workflow
+    assert "test_gateway_live_multimodal.py" in workflow
+    assert "PRAXIS_MODEL_API_KEY: ${{secrets.PRAXIS_MODEL_API_KEY}}" in workflow

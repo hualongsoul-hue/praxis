@@ -37,9 +37,9 @@ gateway:
       output_cost_per_token: null
       default_max_output_tokens: 4096
       capabilities:
-        image: true
+        image: false
         audio: false
-        video: true
+        video: false
         file: false
   default_model: "default"
   routing_strategy: "simple-shuffle"

@@ -15,7 +15,7 @@ host service
         └── Runtime-owned subagent sessions (0..n)
 ```
 
-Runtime 的配置是深拷贝、冻结的快照。多个 Runtime 可以在同一进程共存，不共享可变配置、
+Runtime 的配置是递归不可变并在构造时深拷贝的快照。多个 Runtime 可以在同一进程共存，不共享可变配置、
 审计、指标或生命周期状态。模型网关和存储可由同一 Runtime 下的不同 Session 安全共享。
 
 ## 会话状态机
@@ -57,4 +57,13 @@ Provider 内容块与不含 Base64/数据 URL 的文本投影。模型只在当�
 
 `runtime.health()` 返回 `READY`、`DEGRADED` 或 `FAILED`，并逐项报告模型、存储、嵌入、视觉和
 后台任务。未配置远程 Embedding 时使用确定性本地词法检索并标记降级；禁用的可选能力不会伪装
-成已连接的外部服务。
+成已连接的外部服务。模型探针执行真实、限时的小请求并按 `health_probe_ttl` 缓存；存储探针执行
+隔离命名空间的写入、读取和删除；MCP 健康度按活动 Session 和每个 Server 汇总，不能由另一
+Session 的连接掩盖失败。
+
+## 事件协议
+
+每次运行通过 `schema_version`、`runtime_id`、`session_id`、`run_id` 和单调递增的 `sequence`
+关联事件。`event_type` 是封闭枚举，`data` 按事件类型映射到冻结的公开载荷模型；未知事件或字段
+在发射边界失败。模型正文只在 `content_delta` 中输出，工具参数与结果只提供有界脱敏摘要，避免
+事件消费者意外获得凭据或完整敏感数据。

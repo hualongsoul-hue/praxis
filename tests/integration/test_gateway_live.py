@@ -7,9 +7,11 @@ import json
 import os
 from collections.abc import AsyncIterator
 from contextlib import aclosing
+from pathlib import Path
 
 import pytest
 
+from praxis import PraxisRuntime, load_config
 from praxis.config import GatewayConfig, ModelDeployment
 from praxis.exceptions import (
     AuthenticationError,
@@ -18,11 +20,13 @@ from praxis.exceptions import (
 )
 from praxis.gateway.chat import chat, chat_stream
 from praxis.gateway.router import GatewayRouter
+from praxis.models.runtime import HealthStatus
 
 MODEL = "openai/glm-5.1-openai"
 API_BASE = "http://172.24.23.192:3000/v1"
 
 pytestmark = pytest.mark.live_model
+ROOT = Path(__file__).parents[2]
 
 
 @pytest.fixture
@@ -74,6 +78,30 @@ async def test_live_regular_response(live_gateway: GatewayRouter) -> None:
     assert response.content
     assert "pong" in response.content.lower()
     assert response.usage.total_tokens > 0
+
+
+async def test_live_runtime_health_session_and_shutdown(tmp_path: Path) -> None:
+    if not os.environ.get("PRAXIS_MODEL_API_KEY"):
+        pytest.skip("需要 PRAXIS_MODEL_API_KEY 才能执行 live model 测试")
+    config = load_config(
+        ROOT / "config.example.yaml",
+        persistence={
+            "backend": "filesystem",
+            "filesystem_path": str(tmp_path / "runtime-store"),
+        },
+    )
+
+    runtime = PraxisRuntime(config)
+    async with runtime:
+        health = await runtime.health()
+        assert health.components["model"].status is HealthStatus.READY
+        assert health.components["storage"].status is HealthStatus.READY
+        async with runtime.session() as session:
+            response = await session.run("只回复单词 runtime-ok")
+        assert response.content
+        assert "runtime-ok" in response.content.lower()
+
+    assert runtime.state.value == "closed"
 
 
 async def test_live_streaming_response(live_gateway: GatewayRouter) -> None:

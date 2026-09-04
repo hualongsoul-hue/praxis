@@ -94,7 +94,7 @@ def modality_cases() -> list[tuple[str, dict[str, Any], CapabilityClassification
                 "type": "image_url",
                 "image_url": {"url": f"data:image/png;base64,{PNG_BASE64}"},
             },
-            CapabilityClassification.SUPPORTED,
+            CapabilityClassification.UNSUPPORTED,
         ),
         (
             "audio",
@@ -110,7 +110,7 @@ def modality_cases() -> list[tuple[str, dict[str, Any], CapabilityClassification
                 "type": "video_url",
                 "video_url": {"url": f"data:video/mp4;base64,{MP4_BASE64}"},
             },
-            CapabilityClassification.SUPPORTED,
+            CapabilityClassification.UNSUPPORTED,
         ),
         (
             "file",

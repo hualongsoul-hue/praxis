@@ -84,7 +84,12 @@ API_SECRET_ASSIGNMENT_ALLOWLIST = frozenset(
     }
 )
 ENVIRONMENT_REFERENCE = re.compile(
-    rb"(?:\$\{[A-Za-z_][A-Za-z0-9_]*\}|\$[A-Za-z_][A-Za-z0-9_]*|%[A-Za-z_][A-Za-z0-9_]*%)"
+    rb"(?:"
+    rb"\$\{[A-Za-z_][A-Za-z0-9_]*\}"
+    rb"|\$\{\{\s*secrets\.[A-Za-z_][A-Za-z0-9_]*\s*\}\}"
+    rb"|\$[A-Za-z_][A-Za-z0-9_]*"
+    rb"|%[A-Za-z_][A-Za-z0-9_]*%"
+    rb")"
 )
 
 
@@ -323,11 +328,19 @@ def test_secret_scanner_ignores_diff_markers_before_assignment(
     [
         'PRAXIS_MODEL_API_KEY = "<your-key>"',
         "export PRAXIS_MODEL_API_KEY=${MODEL_KEY}",
+        "PRAXIS_MODEL_API_KEY: ${{secrets.PRAXIS_MODEL_API_KEY}}",
         "$env:PRAXIS_MODEL_API_KEY = 'fake-contract-credential'",
         'PRAXIS_MODEL_API_KEY = "intentionally-invalid-live-credential"',
         'API_KEY = "sk-example0123456789abcdef"',
     ],
-    ids=["angle-placeholder", "shell-variable", "contract-fake", "invalid-live", "example-key"],
+    ids=[
+        "angle-placeholder",
+        "shell-variable",
+        "github-secret",
+        "contract-fake",
+        "invalid-live",
+        "example-key",
+    ],
 )
 def test_secret_assignment_allowlist_is_narrow_and_explicit(
     tmp_path: Path,

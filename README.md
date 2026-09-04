@@ -113,8 +113,9 @@ SDK 能安全解析和传输这四类输入，不代表每个模型端点都接�
 稳定验证的模态才能设为 `true`；`config.example.yaml` 中的 `false` 也可能表示端点尚未产生足够稳定的成功证据。
 未声明能力会在读取文件或发起网络请求之前本地失败。
 
-当前指定端点的三窗口实测矩阵为：图片和视频 `true`，音频和文件 `false`（稳定映射为
-`GatewayError/BadRequestError`）。这只是该端点的事实快照，不代表 SDK 的传输层限制。
+截至 2026-09-04，指定端点的三个独立健康窗口实测矩阵为：图片、音频、视频和文件均为
+`false`（稳定映射为 `GatewayError/BadRequestError`）。这只是该端点的事实快照，不代表 SDK
+的传输层限制；重新启用任一模态前必须重新取得稳定的真实端点证据。
 
 单附件和单轮总大小默认分别限制为 20 MB、50 MB。`InputConfig` 的 schema 默认使用空授权根目录，
 因此拒绝所有本地路径；快速开始使用的 `config.example.yaml` 为了让上例可运行，显式授权了
@@ -131,7 +132,8 @@ praxis doctor config.yaml
 praxis chat config.yaml
 ```
 
-`config show` 默认脱敏。`doctor` 不输出密钥，也不会发起计费模型请求。
+`config show` 默认脱敏。`doctor` 不输出密钥；凭据存在时会执行有 TTL 缓存的真实模型探针，
+因此可能产生一次小额模型调用。不要把 `doctor` 当作高频 liveness 探针。
 
 ## 安全默认值
 
@@ -141,6 +143,8 @@ praxis chat config.yaml
 - 网络工具默认阻止 URL 凭据、回环、私网、链路本地地址和越界重定向。
 - 未配置审批处理器、审批超时或处理器异常时，写操作一律拒绝。
 - 不可信 Shell 必须运行在容器或操作系统沙箱中；`ToolPolicy` 不是安全沙箱。
+- 示例中的模型端点是受信管理面上的私有 HTTP 地址；只能在隔离网络中使用。跨不受信网络部署时，
+  必须通过 HTTPS/mTLS 反向代理保护凭据、请求和响应。
 
 ## 文档
 

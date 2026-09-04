@@ -3,6 +3,10 @@
 配置加载顺序为 YAML、`PRAXIS_<SECTION>__<FIELD>` 环境变量、显式 Python 覆盖。所有模型都使用
 `extra="forbid"`，未知字段、错误类型和越界数值会直接失败。加载结果是不可变快照。
 
+所有文件系统相对路径均相对于 YAML 文件所在目录解析，而不是进程当前目录；未指定 YAML 时才
+相对于当前目录。嵌套列表会冻结为 tuple，映射会冻结为只读 Mapping。模型别名和 MCP Server
+名称必须唯一，默认模型必须引用已声明部署。
+
 ## 模型部署
 
 ```yaml
@@ -14,9 +18,9 @@ gateway:
       api_key_env: PRAXIS_MODEL_API_KEY
       default_max_output_tokens: 4096
       capabilities:
-        image: true
+        image: false
         audio: false
-        video: true
+        video: false
         file: false
   default_model: default
   max_concurrent_requests: 8
@@ -32,6 +36,9 @@ gateway:
 
 启用 `max_budget` 时，每个部署必须提供可信的显式价格，或由 LiteLLM 返回可识别价格；价格未知时
 调用失败关闭。`max_total_tokens` 独立生效，不能通过零价格绕过。
+
+示例 `api_base` 是受信私有网络中的 HTTP 端点。该地址不应跨公网、共享办公网络或其他不受信
+链路直接使用；此类部署必须在端点前提供 HTTPS/mTLS 代理，并把 `api_base` 改为受保护地址。
 
 ## 用户输入
 
@@ -78,6 +85,7 @@ persistence:
 ```
 
 Redis 需要安装 `praxis[redis]`。生产环境应使用专用数据库、认证、TLS 和备份策略。
+`redis_url` 只接受带主机名的 `redis://` 或 `rediss://` 地址。
 
 ## 工具边界
 
@@ -93,6 +101,11 @@ tools:
 ```
 
 Windows 可使用绝对路径（例如 `D:\\AgentData\\workspace`）。空 `allowed_paths` 拒绝所有文件访问。
+`allow_private_networks: true` 只有在 `network_allowed: true` 时才有效并通过配置校验；这两个开关
+不影响受信模型网关的 `api_base`。
+
+远程 Embedding 以 `embedding_api_base` 为启用开关，只接受 HTTP/HTTPS。没有 Base 时配置
+`embedding_model` 或 `embedding_api_key_env` 会被拒绝；全部未配置时明确使用本地词法检索。
 
 ## 可选能力
 
