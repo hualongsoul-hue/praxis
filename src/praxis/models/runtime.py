@@ -1,5 +1,6 @@
 """Runtime 生命周期与健康检查公共模型。"""
 
+from datetime import UTC, datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -25,7 +26,10 @@ class ComponentHealth(BaseModel):
 
     status: HealthStatus
     detail: str = ""
+    reason: str = ""
     required: bool = True
+    last_probe_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    latency_ms: float = Field(default=0.0, ge=0.0)
 
 
 class RuntimeHealth(BaseModel):

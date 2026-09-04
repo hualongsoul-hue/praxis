@@ -274,8 +274,7 @@ class Session:
                 failures.append(exc)
         if self.mcp_manager is not None:
             try:
-                for server_name in self.mcp_manager.list_connected_servers():
-                    self.mcp_manager.disconnect_server(server_name)
+                await self.mcp_manager.close()
             except BaseException as exc:
                 failures.append(exc)
         if self.mcp_stack is not None:

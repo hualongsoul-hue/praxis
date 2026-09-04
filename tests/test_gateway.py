@@ -230,10 +230,22 @@ class TestGatewayRouter:
         assert gw.total_tokens == 3
         assert gw.total_spend == 0.25
 
-    async def test_health_and_close_are_non_networking(self) -> None:
-        gw = GatewayRouter(make_config())
+    async def test_health_performs_live_probe_and_caches_result(self) -> None:
+        gw = GatewayRouter(make_config(health_probe_ttl=60))
+        gw.router.acompletion = AsyncMock(return_value=make_raw_response())
+
         assert await gw.health() is True
+        assert await gw.health() is True
+        gw.router.acompletion.assert_awaited_once()
+        assert gw.last_health_error == ""
         await gw.close()
+
+    async def test_health_reports_failed_live_probe(self) -> None:
+        gw = GatewayRouter(make_config(health_probe_ttl=0))
+        gw.router.acompletion = AsyncMock(side_effect=OSError("endpoint down"))
+
+        assert await gw.health() is False
+        assert gw.last_health_error == "GatewayError"
 
 
 class TestChat:

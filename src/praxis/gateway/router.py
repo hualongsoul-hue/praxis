@@ -3,6 +3,7 @@
 import asyncio
 import os
 import threading
+import time
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -43,6 +44,10 @@ class GatewayRouter:
         self.next_reservation_id = 1
         self.budget_lock = threading.Lock()
         self.request_semaphore = asyncio.Semaphore(config.max_concurrent_requests)
+        self.health_probe_lock = asyncio.Lock()
+        self.health_probe_value: bool | None = None
+        self.health_probe_expires_at = 0.0
+        self.last_health_error = ""
 
     @staticmethod
     def to_litellm_deployment(
@@ -262,5 +267,33 @@ class GatewayRouter:
             yield chunk
 
     async def health(self) -> bool:
-        """配置级健康探针；不产生计费模型调用。"""
-        return bool(self.deployments)
+        """Execute a bounded live completion and cache the result for the configured TTL."""
+        now = time.monotonic()
+        if self.health_probe_value is not None and now < self.health_probe_expires_at:
+            return self.health_probe_value
+
+        async with self.health_probe_lock:
+            now = time.monotonic()
+            if self.health_probe_value is not None and now < self.health_probe_expires_at:
+                return self.health_probe_value
+            try:
+                async with asyncio.timeout(self.gateway_config.health_probe_timeout):
+                    await self.complete(
+                        [{"role": "user", "content": "Reply with OK."}],
+                        model=self.gateway_config.default_model,
+                        max_tokens=1,
+                        temperature=0,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                value = False
+                self.last_health_error = type(exc).__name__
+            else:
+                value = True
+                self.last_health_error = ""
+            self.health_probe_value = value
+            self.health_probe_expires_at = (
+                time.monotonic() + self.gateway_config.health_probe_ttl
+            )
+            return value

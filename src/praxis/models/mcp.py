@@ -2,8 +2,11 @@
 
 from enum import StrEnum
 from typing import Any
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field, model_validator
+
+from praxis.models.base import SafeBaseModel
 
 
 class MCPTransportType(StrEnum):
@@ -23,7 +26,7 @@ class MCPServerStatus(StrEnum):
     FAILED = "failed"
 
 
-class MCPServerConfig(BaseModel):
+class MCPServerConfig(SafeBaseModel):
     """MCP 服务器连接配置。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -38,9 +41,29 @@ class MCPServerConfig(BaseModel):
     timeout: float = Field(default=30.0, gt=0, le=300.0)
     reconnect_attempts: int = Field(default=3, ge=0, le=20)
     reconnect_delay: float = Field(default=1.0, ge=0, le=60.0)
+    reconnect_max_delay: float = Field(default=30.0, gt=0, le=300.0)
+    health_check_interval: float = Field(default=5.0, gt=0, le=300.0)
+
+    @model_validator(mode="after")
+    def validate_transport_endpoint(self) -> "MCPServerConfig":
+        if self.transport is MCPTransportType.STDIO:
+            if not self.command.strip():
+                raise ValueError("stdio MCP Server 必须配置 command")
+            if self.url:
+                raise ValueError("stdio MCP Server 不允许配置 url")
+            return self
+
+        if not self.url.strip():
+            raise ValueError("HTTP MCP Server 必须配置 url")
+        parsed = urlsplit(self.url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("HTTP MCP Server url 必须是有效的 HTTP/HTTPS 地址")
+        if self.command or self.args or self.env:
+            raise ValueError("HTTP MCP Server 不允许配置 command、args 或 env")
+        return self
 
 
-class MCPResourceInfo(BaseModel):
+class MCPResourceInfo(SafeBaseModel):
     """MCP 资源信息。"""
 
     uri: str
@@ -49,7 +72,7 @@ class MCPResourceInfo(BaseModel):
     mime_type: str = "text/plain"
 
 
-class MCPResourceContent(BaseModel):
+class MCPResourceContent(SafeBaseModel):
     """MCP 资源内容。"""
 
     uri: str
@@ -58,7 +81,7 @@ class MCPResourceContent(BaseModel):
     blob: str | None = None
 
 
-class MCPPromptInfo(BaseModel):
+class MCPPromptInfo(SafeBaseModel):
     """MCP 提示模板信息。"""
 
     name: str
@@ -66,14 +89,14 @@ class MCPPromptInfo(BaseModel):
     arguments: list[dict[str, Any]] = Field(default_factory=lambda: [])
 
 
-class MCPPromptMessage(BaseModel):
+class MCPPromptMessage(SafeBaseModel):
     """MCP 提示模板消息。"""
 
     role: str
     content: str
 
 
-class MCPToolInfo(BaseModel):
+class MCPToolInfo(SafeBaseModel):
     """MCP 工具信息。"""
 
     name: str
@@ -82,14 +105,14 @@ class MCPToolInfo(BaseModel):
     server_name: str = ""
 
 
-class MCPToolResult(BaseModel):
+class MCPToolResult(SafeBaseModel):
     """MCP 工具调用结果。"""
 
     content: list[dict[str, Any]] = Field(default_factory=lambda: [])
     is_error: bool = False
 
 
-class MCPServerCapabilities(BaseModel):
+class MCPServerCapabilities(SafeBaseModel):
     """MCP 服务器能力。"""
 
     tools: bool = False
@@ -98,7 +121,7 @@ class MCPServerCapabilities(BaseModel):
     sampling: bool = False
 
 
-class MCPElicitationRequest(BaseModel):
+class MCPElicitationRequest(SafeBaseModel):
     """MCP Elicitation 请求。"""
 
     server_name: str
@@ -107,14 +130,14 @@ class MCPElicitationRequest(BaseModel):
     url: str | None = None
 
 
-class MCPElicitationResponse(BaseModel):
+class MCPElicitationResponse(SafeBaseModel):
     """MCP Elicitation 响应。"""
 
     accepted: bool
     data: dict[str, Any] = Field(default_factory=dict)
 
 
-class MCPSamplingRequest(BaseModel):
+class MCPSamplingRequest(SafeBaseModel):
     """MCP Sampling 请求。"""
 
     server_name: str
@@ -134,7 +157,7 @@ class MCPTaskStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
-class MCPTaskInfo(BaseModel):
+class MCPTaskInfo(SafeBaseModel):
     """MCP Task 信息。"""
 
     task_id: str

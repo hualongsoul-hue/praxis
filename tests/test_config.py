@@ -12,6 +12,7 @@ from praxis.config import (
 )
 from praxis.config.schemas import GatewayConfig, MCPConfig, TelemetryConfig, ToolsConfig
 from praxis.exceptions import ConfigError, ModelValidationError
+from praxis.models.mcp import MCPServerConfig, MCPTransportType
 
 
 class TestPraxisConfig:
@@ -163,3 +164,19 @@ class TestValidation:
     def test_enabled_mcp_requires_server_configuration(self) -> None:
         with pytest.raises(ModelValidationError):
             MCPConfig(enabled=True)
+
+    def test_mcp_server_names_must_be_unique(self) -> None:
+        server = MCPServerConfig(name="duplicate", command="python")
+        with pytest.raises(ModelValidationError):
+            MCPConfig(enabled=True, servers=[server, server])
+
+    @pytest.mark.parametrize(
+        "server",
+        [
+            MCPServerConfig.model_construct(name="stdio", transport=MCPTransportType.STDIO),
+            MCPServerConfig.model_construct(name="http", transport=MCPTransportType.HTTP),
+        ],
+    )
+    def test_mcp_transport_requires_its_endpoint(self, server: MCPServerConfig) -> None:
+        with pytest.raises(ModelValidationError):
+            MCPServerConfig(**server.model_dump())

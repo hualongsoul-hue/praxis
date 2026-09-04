@@ -31,6 +31,7 @@ from praxis.models.mcp import (
     MCPElicitationRequest,
     MCPElicitationResponse,
     MCPServerConfig,
+    MCPServerStatus,
     MCPTransportType,
 )
 from praxis.models.orchestrator import AgentEvent, AgentResponse
@@ -38,7 +39,7 @@ from praxis.models.responses import ModelResponse, ModelResponseChunk, Usage
 from praxis.models.session import SessionStatus
 from praxis.models.subagent import SubagentSpec
 from praxis.models.tools import ToolDefinition, ToolMetadata
-from praxis.runtime import HealthStatus, PraxisRuntime
+from praxis.runtime import AgentSession, HealthStatus, PraxisRuntime
 from praxis.session.core import Session
 from praxis.tools.registry import ToolRegistry
 
@@ -536,16 +537,17 @@ async def test_health_covers_provider_failures_and_visual_ready(tmp_path: Path) 
     gateway.model_capabilities = ModelCapabilities(image=True)
     store = MagicMock()
     store.load = AsyncMock(return_value=None)
-    store.save = AsyncMock()
+    store.delete = AsyncMock()
 
-    async def health_sensitive_list(namespace: str, prefix: str = "") -> list[str]:
-        if namespace == "_praxis_health":
-            raise RuntimeError("storage down")
-        return []
+    async def health_sensitive_save(namespace: str, key: str, value: object) -> None:
+        if namespace == "runtime_health":
+            raise PermissionError("read-only")
 
-    store.list_keys = AsyncMock(side_effect=health_sensitive_list)
+    store.save = AsyncMock(side_effect=health_sensitive_save)
+    store.list_keys = AsyncMock(return_value=[])
     store.close = AsyncMock()
     embedding = MagicMock()
+    embedding.embed = AsyncMock(return_value=[0.0] * 256)
     embedding.close = AsyncMock()
     config = runtime_config(tmp_path).model_copy(
         update={"verification": VerificationConfig(visual_enabled=True)}
@@ -566,14 +568,77 @@ async def test_health_covers_provider_failures_and_visual_ready(tmp_path: Path) 
     assert health.components["storage"].status is HealthStatus.FAILED
     assert health.components["embedding"].status is HealthStatus.READY
     assert health.components["visual"].status is HealthStatus.READY
+    assert health.components["model"].last_probe_at is not None
+    assert health.components["model"].latency_ms >= 0
+    assert health.components["model"].reason
     await runtime.close()
     embedding.close.assert_awaited_once()
+
+
+async def test_health_rejects_empty_computational_verifier_registry(
+    tmp_path: Path,
+) -> None:
+    runtime = PraxisRuntime(runtime_config(tmp_path), gateway=FakeGateway())
+    await runtime.start()
+    empty_registry = MagicMock()
+    empty_registry.get.return_value = None
+    with patch(
+        "praxis.runtime.VerifierRegistry.from_config",
+        return_value=empty_registry,
+    ):
+        health = await runtime.health()
+    assert health.components["verification"].status is HealthStatus.FAILED
+    await runtime.close()
+
+
+async def test_mcp_health_does_not_union_servers_across_sessions(tmp_path: Path) -> None:
+    servers = [
+        MCPServerConfig(name="one", command="python"),
+        MCPServerConfig(name="two", command="python"),
+    ]
+    config = runtime_config(tmp_path).model_copy(
+        update={"mcp": MCPConfig(enabled=True, servers=servers)}
+    )
+    runtime = PraxisRuntime(config, gateway=FakeGateway())
+    await runtime.start()
+
+    wrappers: list[AgentSession] = []
+    for session_id, statuses in (
+        (
+            "first",
+            {"one": MCPServerStatus.CONNECTED, "two": MCPServerStatus.DISCONNECTED},
+        ),
+        (
+            "second",
+            {"one": MCPServerStatus.DISCONNECTED, "two": MCPServerStatus.CONNECTED},
+        ),
+    ):
+        manager = MagicMock()
+        manager.get_server_status.side_effect = statuses.get
+        runner = MagicMock(spec=Session)
+        runner.session_id = session_id
+        runner.status = SessionStatus.ACTIVE
+        runner.mcp_manager = manager
+        runner.skill_manager = None
+        runner.verifier_registry = None
+        runner.terminate = AsyncMock()
+        wrapper = AgentSession(runtime)
+        wrapper.runner = runner
+        runtime.register_session(wrapper)
+        wrappers.append(wrapper)
+
+    health = await runtime.health()
+    assert health.components["mcp"].status is HealthStatus.DEGRADED
+    assert health.components["mcp:first:two"].status is HealthStatus.DEGRADED
+    assert health.components["mcp:second:one"].status is HealthStatus.DEGRADED
+    await runtime.close()
 
 
 async def test_runtime_wires_configured_skills_verification_mcp_and_callbacks(
     tmp_path: Path,
 ) -> None:
     manager = MagicMock()
+    manager.close = AsyncMock()
     manager.list_connected_servers.return_value = ["local"]
     elicitation_handler = AsyncMock()
     sampling_review_handler = AsyncMock(return_value=True)

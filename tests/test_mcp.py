@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from anyio import ClosedResourceError
+from mcp.shared.exceptions import McpError
 from mcp.types import TextContent
 
 from praxis.models.mcp import (
@@ -110,6 +111,7 @@ def make_mock_session() -> MagicMock:
 
     # roots
     session.send_roots_list_changed = AsyncMock()
+    session.send_ping = AsyncMock()
 
     # capabilities
     caps = MagicMock()
@@ -559,8 +561,9 @@ class TestMCPWiring:
         with patch("praxis.tools.mcp.wiring.create_transport", flaky_transport):
             async with AsyncExitStack() as stack:
                 manager = await connect_mcp_servers(registry, configs, stack)
-        assert registry.has_tool("mcp_good_echo")
-        assert "bad" not in manager.list_connected_servers()
+                assert registry.has_tool("mcp_good_echo")
+                assert "bad" not in manager.list_connected_servers()
+        assert not registry.has_tool("mcp_good_echo")
 
     async def test_connect_mcp_servers_retries_then_recovers(self) -> None:
         from contextlib import AsyncExitStack, asynccontextmanager
@@ -592,6 +595,43 @@ class TestMCPWiring:
                 assert registry.has_tool("mcp_recovering_echo")
 
         assert attempts == 3
+
+    async def test_connected_server_is_reconnected_after_probe_failure(self) -> None:
+        """A transport that dies after startup must be reopened until healthy."""
+        from contextlib import AsyncExitStack, asynccontextmanager
+
+        from praxis.tools.mcp.wiring import connect_mcp_servers
+
+        first = make_mock_session()
+        first.send_ping = AsyncMock(side_effect=ClosedResourceError)
+        second = make_mock_session()
+        reconnected = asyncio.Event()
+        attempts = 0
+
+        @asynccontextmanager
+        async def restarting_transport(config: Any, *args: Any):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                yield first
+            else:
+                reconnected.set()
+                yield second
+
+        config = MCPServerConfig(
+            name="restarting",
+            command="python",
+            reconnect_delay=0.01,
+            health_check_interval=0.01,
+        )
+        with patch("praxis.tools.mcp.wiring.create_transport", restarting_transport):
+            async with AsyncExitStack() as stack:
+                manager = await connect_mcp_servers(ToolRegistry(), [config], stack)
+                await asyncio.wait_for(reconnected.wait(), timeout=1)
+                assert manager.get_server_status("restarting") is MCPServerStatus.CONNECTED
+                assert manager.connections["restarting"].reconnect_count == 1
+
+        assert attempts >= 2
 
     async def test_auth_failure_is_isolated_from_other_servers(self) -> None:
         from contextlib import AsyncExitStack, asynccontextmanager
@@ -625,8 +665,9 @@ class TestMCPWiring:
                     stack,
                     auth_manager=auth_manager,
                 )
+                assert manager.list_connected_servers() == ["good-auth"]
 
-        assert manager.list_connected_servers() == ["good-auth"]
+        assert manager.list_connected_servers() == []
 
     async def test_connection_cancellation_closes_open_transport(self) -> None:
         from contextlib import AsyncExitStack, asynccontextmanager
@@ -890,6 +931,7 @@ class TestMCPStdioIntegration:
                 "echo",
                 "request_elicitation",
                 "request_sampling",
+                "terminate_server",
             }
 
             echoed = await session.call_tool("echo", {"message": "hello"})
@@ -915,3 +957,35 @@ class TestMCPStdioIntegration:
 
         with pytest.raises(ClosedResourceError):
             await session.list_tools()
+
+    async def test_stdio_process_death_is_detected_and_restarted(self) -> None:
+        from contextlib import AsyncExitStack
+
+        from praxis.tools.mcp.wiring import connect_mcp_servers
+
+        config = MCPServerConfig(
+            name="stdio-restart",
+            transport=MCPTransportType.STDIO,
+            command=sys.executable,
+            args=[str(STDIO_TEST_SERVER)],
+            reconnect_delay=0.01,
+            health_check_interval=0.05,
+        )
+        async with AsyncExitStack() as stack:
+            manager = await connect_mcp_servers(ToolRegistry(), [config], stack)
+            with pytest.raises(McpError):
+                await manager.tools_bridge.call_tool(
+                    "stdio-restart",
+                    "terminate_server",
+                    {},
+                )
+
+            await asyncio.wait_for(
+                manager.connections["stdio-restart"].reconnected_event.wait(),
+                timeout=5,
+            )
+            assert await manager.tools_bridge.call_tool(
+                "stdio-restart",
+                "echo",
+                {"message": "after restart"},
+            ) == "after restart"

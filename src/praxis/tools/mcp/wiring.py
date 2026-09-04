@@ -1,25 +1,16 @@
-"""MCP 装配入口。
-
-将 MCP Server 连接到会话：建立传输 → 能力协商 → 工具/资源/提示桥接，
-把 MCP 工具注册进会话的统一工具注册表，供 LLM 透明调用。
-
-传输（ClientSession）的生命周期由传入的 AsyncExitStack 持有，
-随会话 terminate 时统一关闭。
-"""
+"""Wire supervised MCP transports into one Session tool registry."""
 
 import asyncio
 from contextlib import AsyncExitStack
+from functools import partial
 from typing import Any, cast
 
-from praxis.models.mcp import (
-    MCPElicitationRequest,
-    MCPSamplingRequest,
-    MCPServerConfig,
-)
+from praxis.lifecycle import TaskSupervisor
+from praxis.models.mcp import MCPElicitationRequest, MCPSamplingRequest, MCPServerConfig
 from praxis.telemetry.logger import get_logger
 from praxis.tools.mcp.access_tools import register_mcp_access_tools
 from praxis.tools.mcp.auth import MCPAuthManager
-from praxis.tools.mcp.connection import MCPConnectionManager
+from praxis.tools.mcp.connection import MCPConnectionManager, MCPTransportFactory
 from praxis.tools.mcp.elicitation import ElicitationManager
 from praxis.tools.mcp.prompts import MCPPromptsBridge
 from praxis.tools.mcp.resources import MCPResourcesBridge
@@ -33,23 +24,23 @@ log = get_logger("tools.mcp.wiring")
 
 
 def make_sampling_callback(server_name: str, manager: SamplingManager) -> Any:
-    """适配 MCP SDK sampling_callback → Praxis SamplingManager。"""
+    """Adapt the MCP SDK sampling callback to ``SamplingManager``."""
     from mcp.types import CreateMessageResult, ErrorData, TextContent
 
     async def callback(context: Any, params: Any) -> Any:
         messages: list[dict[str, Any]] = []
-        for msg in params.messages:
-            content = getattr(msg, "content", None)
+        for message in params.messages:
+            content = getattr(message, "content", None)
             text = getattr(content, "text", "") if content is not None else ""
-            messages.append({"role": getattr(msg, "role", "user"), "content": text})
-        prefs = cast(
+            messages.append({"role": getattr(message, "role", "user"), "content": text})
+        preferences = cast(
             dict[str, Any],
             params.modelPreferences.model_dump() if params.modelPreferences else {},
         )
         request = MCPSamplingRequest(
             server_name=server_name,
             messages=messages,
-            model_preferences=prefs,
+            model_preferences=preferences,
             max_tokens=params.maxTokens or 1024,
         )
         try:
@@ -66,7 +57,7 @@ def make_sampling_callback(server_name: str, manager: SamplingManager) -> Any:
 
 
 def make_elicitation_callback(server_name: str, manager: ElicitationManager) -> Any:
-    """适配 MCP SDK elicitation_callback → Praxis ElicitationManager。"""
+    """Adapt the MCP SDK elicitation callback to ``ElicitationManager``."""
     from mcp.types import ElicitResult, ErrorData
 
     async def callback(context: Any, params: Any) -> Any:
@@ -91,6 +82,20 @@ def make_elicitation_callback(server_name: str, manager: ElicitationManager) -> 
     return callback
 
 
+async def authenticate_server_config(
+    config: MCPServerConfig,
+    auth_manager: MCPAuthManager | None,
+) -> MCPServerConfig:
+    """Return a new config containing ephemeral authentication headers."""
+    if auth_manager is None:
+        return config
+    await auth_manager.initiate_auth_flow(config.name)
+    headers = auth_manager.get_auth_headers(config.name)
+    if not headers:
+        return config
+    return config.model_copy(update={"headers": {**config.headers, **headers}})
+
+
 async def connect_mcp_servers(
     registry: ToolRegistry,
     configs: list[MCPServerConfig],
@@ -98,102 +103,63 @@ async def connect_mcp_servers(
     sampling_manager: SamplingManager | None = None,
     elicitation_manager: ElicitationManager | None = None,
     auth_manager: MCPAuthManager | None = None,
+    task_supervisor: TaskSupervisor | None = None,
 ) -> MCPConnectionManager:
-    """连接一组 MCP Server，并将其工具注册到 registry。
-
-    单个服务器连接失败仅记录日志、不影响其它服务器与会话本身。
-    传入 sampling/elicitation 管理器时，将其作为 MCP 客户端回调注册，
-    使 Server → 客户端的采样/征询请求被路由到 Praxis（S4 网关 / 用户界面）。
-
-    Args:
-        registry: 会话的统一工具注册表。
-        configs: MCP 服务器配置列表。
-        exit_stack: 持有各传输上下文的退出栈（由会话负责关闭）。
-        sampling_manager: 可选 Sampling 管理器（经 S4 代理 LLM 采样）。
-        elicitation_manager: 可选 Elicitation 管理器（转发用户征询）。
-
-    Returns:
-        已装配的 MCPConnectionManager（含连接状态）。
-    """
-    tools_bridge = MCPToolsBridge(registry)
+    """Start independent reconnecting supervisors for all configured servers."""
     manager = MCPConnectionManager(
-        tools_bridge=tools_bridge,
+        tools_bridge=MCPToolsBridge(registry),
         resources_bridge=MCPResourcesBridge(),
         prompts_bridge=MCPPromptsBridge(),
         roots_mgr=RootsManager(),
+        task_supervisor=task_supervisor,
     )
+    exit_stack.push_async_callback(manager.close)
+    initial_results: list[asyncio.Future[None]] = []
 
-    for configured_server in configs:
-        config = configured_server
-        if auth_manager is not None:
-            try:
-                await auth_manager.initiate_auth_flow(config.name)
-                headers = auth_manager.get_auth_headers(config.name)
-                if headers:
-                    config = config.model_copy(
-                        update={"headers": {**config.headers, **headers}}
-                    )
-            except Exception as exc:
-                log.warning(
-                    "MCP Server 认证失败，已跳过",
-                    server=config.name,
-                    error_type=type(exc).__name__,
-                )
-                continue
+    for original_config in configs:
+        try:
+            config = await authenticate_server_config(original_config, auth_manager)
+        except Exception as exc:
+            log.warning(
+                "MCP Server 认证失败，已跳过",
+                server=original_config.name,
+                error_type=type(exc).__name__,
+            )
+            continue
 
-        sampling_cb = (
+        sampling_callback = (
             make_sampling_callback(config.name, sampling_manager)
-            if sampling_manager is not None else None
+            if sampling_manager is not None
+            else None
         )
-        elicitation_cb = (
+        elicitation_callback = (
             make_elicitation_callback(config.name, elicitation_manager)
-            if elicitation_manager is not None else None
+            if elicitation_manager is not None
+            else None
         )
-        for attempt in range(config.reconnect_attempts + 1):
-            attempt_stack = AsyncExitStack()
-            await attempt_stack.__aenter__()
-            try:
-                session = await attempt_stack.enter_async_context(
-                    create_transport(config, sampling_cb, elicitation_cb)
-                )
-                caps = await manager.connect_server(config, session)
-            except asyncio.CancelledError:
-                manager.disconnect_server(config.name)
-                await attempt_stack.aclose()
-                raise
-            except Exception as exc:
-                manager.disconnect_server(config.name)
-                await attempt_stack.aclose()
-                if attempt < config.reconnect_attempts:
-                    log.warning(
-                        "MCP Server 连接失败，准备重试",
-                        server=config.name,
-                        attempt=attempt + 1,
-                        error_type=type(exc).__name__,
-                    )
-                    if config.reconnect_delay:
-                        await asyncio.sleep(config.reconnect_delay)
-                    continue
-                log.warning(
-                    "MCP Server 连接失败，已跳过",
-                    server=config.name,
-                    attempts=attempt + 1,
-                    error=str(exc),
-                    error_type=type(exc).__name__,
-                )
-                break
-            else:
-                await exit_stack.enter_async_context(attempt_stack.pop_all())
-                log.info(
-                    "MCP Server 已装配到会话",
-                    server=config.name,
-                    tools=caps.tools,
-                    sampling=sampling_manager is not None,
-                    elicitation=elicitation_manager is not None,
-                )
-                break
+        transport_factory = cast(
+            MCPTransportFactory,
+            partial(
+                create_transport,
+                config,
+                sampling_callback,
+                elicitation_callback,
+            ),
+        )
 
-    # 将具备能力的 Server 的资源/提示暴露为 LLM 可调用工具
+        def refresh_access_tools() -> None:
+            register_mcp_access_tools(registry, manager)
+
+        initial_results.append(
+            manager.start_server(config, transport_factory, refresh_access_tools)
+        )
+
+    try:
+        if initial_results:
+            await asyncio.gather(*initial_results)
+    except BaseException:
+        await manager.close()
+        raise
+
     register_mcp_access_tools(registry, manager)
-
     return manager

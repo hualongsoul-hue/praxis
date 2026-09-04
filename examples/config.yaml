@@ -43,6 +43,8 @@ gateway:
   routing_strategy: "simple-shuffle"
   num_retries: 3
   timeout: 60.0
+  health_probe_timeout: 5.0
+  health_probe_ttl: 30.0
   max_concurrent_requests: 8
   max_total_tokens: null
   max_budget: null
@@ -171,3 +173,5 @@ mcp:
       timeout: 30.0
       reconnect_attempts: 3
       reconnect_delay: 1.0
+      reconnect_max_delay: 30.0
+      health_check_interval: 5.0

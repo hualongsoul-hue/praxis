@@ -1,11 +1,15 @@
 """应用级 PraxisRuntime 与并发安全的 AgentSession。"""
 
 import asyncio
+import math
 import os
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AsyncExitStack, aclosing
+from datetime import UTC, datetime
 from importlib.util import find_spec
+from time import perf_counter
 from typing import Any, Protocol
+from uuid import uuid4
 
 from praxis.config.settings import PraxisConfig
 from praxis.exceptions import (
@@ -25,6 +29,7 @@ from praxis.models.orchestrator import AgentEvent, AgentResponse
 from praxis.models.runtime import ComponentHealth, HealthStatus, RuntimeHealth, RuntimeState
 from praxis.models.session import SessionStatus
 from praxis.models.subagent import SubagentSpec
+from praxis.models.verification import VerificationStatus
 from praxis.persistence.store import PersistenceStore, StorageBackend, create_store
 from praxis.protocols import ApprovalHandler, AuditSink, EmbeddingProvider, ModelGateway
 from praxis.resources import ResourceController
@@ -66,6 +71,39 @@ class SessionRunner(Protocol):
 
 
 SessionBuilder = Callable[["PraxisRuntime"], Awaitable[SessionRunner]]
+
+
+async def probe_component_health(
+    check: Callable[[], Awaitable[str]],
+    *,
+    required: bool,
+    failure_status: HealthStatus = HealthStatus.FAILED,
+) -> ComponentHealth:
+    """Run one bounded probe and return metadata without leaking exception details."""
+    started = perf_counter()
+    probed_at = datetime.now(UTC)
+    try:
+        detail = await check()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        reason = type(exc).__name__
+        return ComponentHealth(
+            status=failure_status,
+            detail=f"探针失败: {reason}",
+            reason=reason,
+            required=required,
+            last_probe_at=probed_at,
+            latency_ms=(perf_counter() - started) * 1000,
+        )
+    return ComponentHealth(
+        status=HealthStatus.READY,
+        detail=detail,
+        reason=detail,
+        required=required,
+        last_probe_at=probed_at,
+        latency_ms=(perf_counter() - started) * 1000,
+    )
 
 
 class PraxisRuntime:
@@ -358,6 +396,7 @@ class PraxisRuntime:
                 stack,
                 sampling_manager=sampling_manager,
                 elicitation_manager=elicitation_manager,
+                task_supervisor=self.supervisor,
             )
         except BaseException:
             await stack.aclose()
@@ -441,44 +480,71 @@ class PraxisRuntime:
                     ),
                 },
             )
+        gateway = self.gateway
+        store = self.store
 
-        try:
-            model_ready = await self.gateway.health()
-        except Exception as exc:
-            model_ready = False
-            model_detail = f"模型网关探针失败: {type(exc).__name__}"
-        else:
-            model_detail = "模型网关配置就绪" if model_ready else "模型网关不可用"
-        components["model"] = ComponentHealth(
-            status=HealthStatus.READY if model_ready else HealthStatus.FAILED,
-            detail=model_detail,
+        probe_timeout = self.config.gateway.health_probe_timeout
+
+        async def check_model() -> str:
+            async with asyncio.timeout(probe_timeout):
+                if not await gateway.health():
+                    raise RuntimeError("model unavailable")
+            return "模型端点实时探测通过"
+
+        components["model"] = await probe_component_health(
+            check_model,
+            required=True,
         )
 
-        try:
-            await self.store.list_keys("_praxis_health")
-        except Exception as exc:
-            components["storage"] = ComponentHealth(
-                status=HealthStatus.FAILED,
-                detail=f"存储探针失败: {type(exc).__name__}",
-            )
-        else:
-            components["storage"] = ComponentHealth(
-                status=HealthStatus.READY,
-                detail="存储可读",
-            )
+        async def check_storage() -> str:
+            key = f"probe-{uuid4().hex}"
+            payload = {"status": "ok"}
+            saved = False
+            async with asyncio.timeout(probe_timeout):
+                try:
+                    await store.save("runtime_health", key, payload)
+                    saved = True
+                    loaded = await store.load("runtime_health", key)
+                    if loaded != payload:
+                        raise RuntimeError("storage round-trip mismatch")
+                finally:
+                    if saved:
+                        await store.delete("runtime_health", key)
+            return "存储读写删除探测通过"
 
-        if self.embedding_provider is None and self.config.memory.embedding_api_base is None:
-            components["embedding"] = ComponentHealth(
-                status=HealthStatus.DEGRADED,
-                detail="使用确定性本地词法检索",
-                required=False,
+        components["storage"] = await probe_component_health(
+            check_storage,
+            required=True,
+        )
+
+        async def check_embedding() -> str:
+            if self.vector_store is None:
+                raise RuntimeError("embedding store unavailable")
+            async with asyncio.timeout(self.config.memory.embedding_timeout):
+                vector = await self.vector_store.embed_func("praxis health probe")
+            self.vector_store.validate_vector(vector)
+            if not all(math.isfinite(value) for value in vector):
+                raise ValueError("embedding contains non-finite values")
+            return f"嵌入探测通过，维度 {len(vector)}"
+
+        embedding_is_local = (
+            self.embedding_provider is None
+            and self.config.memory.embedding_api_base is None
+        )
+        embedding_health = await probe_component_health(
+            check_embedding,
+            required=False,
+            failure_status=HealthStatus.DEGRADED,
+        )
+        if embedding_is_local and embedding_health.status is HealthStatus.READY:
+            embedding_health = embedding_health.model_copy(
+                update={
+                    "status": HealthStatus.DEGRADED,
+                    "detail": "本地词法嵌入探测通过；未配置语义嵌入 Provider",
+                    "reason": "local lexical fallback",
+                }
             )
-        else:
-            components["embedding"] = ComponentHealth(
-                status=HealthStatus.READY,
-                detail="嵌入 Provider 已配置",
-                required=False,
-            )
+        components["embedding"] = embedding_health
 
         if not self.config.verification.visual_enabled:
             components["visual"] = ComponentHealth(
@@ -523,18 +589,32 @@ class PraxisRuntime:
             ),
             required=False,
         )
-        verification_loaded = any(
-            session.verifier_registry is not None
-            for session in concrete_sessions
-        )
-        components["verification"] = ComponentHealth(
-            status=HealthStatus.READY,
-            detail=(
-                "验证注册表已装配"
-                if verification_loaded
-                else "验证注册表将在创建会话时装配"
-            ),
-            required=False,
+        async def check_verification() -> str:
+            config = self.config.verification
+            if not config.computational_enabled:
+                return "计算验证已禁用"
+            registry = VerifierRegistry.from_config(config, gateway=self.gateway)
+            schema_entry = registry.get("schema")
+            if schema_entry is None:
+                raise RuntimeError("schema verifier missing")
+            async with asyncio.timeout(probe_timeout):
+                result = await schema_entry.verifier.verify(
+                    {
+                        "data": {"healthy": True},
+                        "schema": {
+                            "type": "object",
+                            "required": ["healthy"],
+                            "properties": {"healthy": {"const": True}},
+                        },
+                    }
+                )
+            if result.status is not VerificationStatus.PASS:
+                raise RuntimeError("schema verifier self-test failed")
+            return "Schema 验证器自检通过"
+
+        components["verification"] = await probe_component_health(
+            check_verification,
+            required=self.config.verification.computational_enabled,
         )
 
         if not self.config.mcp.enabled:
@@ -544,19 +624,44 @@ class PraxisRuntime:
                 required=False,
             )
         else:
-            connected_servers = {
-                server_name
-                for session in concrete_sessions
-                if session.mcp_manager is not None
-                for server_name in session.mcp_manager.list_connected_servers()
-            }
             expected_servers = {server.name for server in self.config.mcp.servers}
-            mcp_ready = connected_servers == expected_servers
+            healthy_session_count = 0
+            for concrete_session in concrete_sessions:
+                manager = concrete_session.mcp_manager
+                session_ready = manager is not None
+                for server_name in sorted(expected_servers):
+                    server_status = (
+                        manager.get_server_status(server_name)
+                        if manager is not None
+                        else None
+                    )
+                    server_ready = server_status is not None and server_status.value == "connected"
+                    components[
+                        f"mcp:{concrete_session.session_id}:{server_name}"
+                    ] = ComponentHealth(
+                        status=(
+                            HealthStatus.READY if server_ready else HealthStatus.DEGRADED
+                        ),
+                        detail=(
+                            f"MCP Server 状态: {server_status.value}"
+                            if server_status is not None
+                            else "MCP Manager 未装配"
+                        ),
+                        reason=(server_status.value if server_status is not None else "missing"),
+                        required=False,
+                    )
+                    session_ready = session_ready and server_ready
+                if session_ready:
+                    healthy_session_count += 1
+            mcp_ready = bool(concrete_sessions) and (
+                healthy_session_count == len(concrete_sessions)
+            )
             components["mcp"] = ComponentHealth(
                 status=HealthStatus.READY if mcp_ready else HealthStatus.DEGRADED,
                 detail=(
-                    f"{len(connected_servers)}/{len(expected_servers)} 个 MCP Server 已连接"
+                    f"{healthy_session_count}/{len(concrete_sessions)} 个活动会话的 MCP 连接完整"
                 ),
+                reason="all session connections ready" if mcp_ready else "session connection missing",
                 required=False,
             )
 

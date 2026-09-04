@@ -1,5 +1,8 @@
 """Self-contained MCP stdio server used by integration tests."""
 
+import os
+import signal
+
 from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import SamplingMessage, TextContent
 from pydantic import BaseModel
@@ -17,6 +20,13 @@ class Approval(BaseModel):
 async def echo(message: str) -> str:
     """Echo a message."""
     return message
+
+
+@server.tool()
+async def terminate_server() -> str:
+    """Terminate this fixture so the client's reconnect supervisor can be tested."""
+    os.kill(os.getpid(), signal.SIGTERM)
+    return "terminating"
 
 
 @server.tool()

@@ -134,6 +134,8 @@ class GatewayConfig(StrictConfigModel):
     ] = "simple-shuffle"
     num_retries: int = Field(default=3, ge=0)
     timeout: float = Field(default=60.0, gt=0)
+    health_probe_timeout: float = Field(default=5.0, gt=0, le=60.0)
+    health_probe_ttl: float = Field(default=30.0, ge=0, le=3600.0)
     max_concurrent_requests: int = Field(default=8, ge=1)
     max_total_tokens: int | None = Field(default=None, ge=1)
     max_budget: float | None = Field(
@@ -296,4 +298,7 @@ class MCPConfig(StrictConfigModel):
     def validate_enabled_servers(self) -> "MCPConfig":
         if self.enabled and not self.servers:
             raise ValueError("mcp.enabled=true 时必须至少配置一个 MCP Server")
+        names = [server.name for server in self.servers]
+        if len(names) != len(set(names)):
+            raise ValueError("MCP Server 名称必须唯一")
         return self
