@@ -286,6 +286,21 @@ class TestLoopStrategy:
         assert s.plan == []
         assert s.get_plan_context() == ""
 
+    def test_request_plan_identity_round_trips_through_snapshot(self) -> None:
+        strategy = LoopStrategy(StrategyMode.PLAN_AND_EXECUTE)
+        strategy.begin_request("request-42")
+        strategy.set_plan([PlanStep("persisted step")])
+        strategy.advance_step("done")
+
+        restored = LoopStrategy()
+        restored.import_state(strategy.export_state())
+
+        assert restored.request_id == "request-42"
+        assert restored.mode is StrategyMode.PLAN_AND_EXECUTE
+        assert restored.current_step_index == 1
+        assert restored.plan[0].completed is True
+        assert restored.plan[0].result == "done"
+
 
 # ── Task 12.6: 事件发射系统 ─────────────────────────────────────────────────
 
@@ -953,6 +968,102 @@ class TestOrchestrationLoop:
         early = await loop.prepare_run(ctx)
         assert early is None
         assert loop.strategy.plan == []
+
+    @patch("praxis.orchestrator.loop.chat")
+    async def test_each_planned_request_gets_fresh_plan_state(self, mock_chat: Any) -> None:
+        """A completed response must not leak its request plan into the next request."""
+        loop = self.make_loop()
+        loop.strategy = LoopStrategy(StrategyMode.PLAN_AND_EXECUTE)
+        mock_chat.side_effect = [
+            make_model_response(content='[{"description":"first plan"}]'),
+            make_model_response(content="first answer"),
+            make_model_response(content='[{"description":"second plan"}]'),
+            make_model_response(content="second answer"),
+        ]
+
+        first = await loop.run(resolved_text_input("first request"))
+        first_request_id = loop.strategy.request_id
+        second = await loop.run(resolved_text_input("second request"))
+
+        assert first.content == "first answer"
+        assert second.content == "second answer"
+        assert mock_chat.await_count == 4
+        assert loop.strategy.request_id != first_request_id
+        assert [step.description for step in loop.strategy.plan] == ["second plan"]
+
+    @patch("praxis.orchestrator.loop.chat")
+    async def test_stream_projects_plan_before_first_turn(
+        self,
+        mock_chat: Any,
+    ) -> None:
+        loop = self.make_loop()
+        loop.strategy = LoopStrategy(StrategyMode.PLAN_AND_EXECUTE)
+        mock_chat.return_value = make_model_response(
+            content='[{"description":"stream plan"}]'
+        )
+
+        async def stream_response(
+            gateway: Any,
+            messages: list[dict[str, Any]],
+            **kwargs: Any,
+        ) -> AsyncGenerator[ModelResponseChunk, None]:
+            yield ModelResponseChunk(
+                id="stream-response",
+                delta_content="stream answer",
+                usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+                model="test-model",
+                finish_reason="stop",
+            )
+
+        with patch("praxis.orchestrator.loop.chat_stream", new=stream_response):
+            events = [event async for event in loop.run_stream(resolved_text_input("request"))]
+
+        assert [event.event_type for event in events[:2]] == [
+            "plan_created",
+            "turn_start",
+        ]
+        assert events[-1].event_type == "termination"
+        assert events[-1].data == {"reason": "natural", "content": "stream answer"}
+
+    @patch("praxis.orchestrator.loop.chat")
+    async def test_stream_and_complete_share_terminal_state_and_usage(
+        self,
+        mock_chat: Any,
+    ) -> None:
+        response = make_model_response(content="same answer")
+        complete_loop = self.make_loop()
+        mock_chat.return_value = response
+        complete_result = await complete_loop.run(resolved_text_input("request"))
+
+        async def stream_response(
+            gateway: Any,
+            messages: list[dict[str, Any]],
+            **kwargs: Any,
+        ) -> AsyncGenerator[ModelResponseChunk, None]:
+            yield ModelResponseChunk(
+                id=response.id,
+                delta_content=response.content,
+                usage=response.usage,
+                model=response.model,
+                finish_reason=response.finish_reason,
+            )
+
+        stream_loop = self.make_loop()
+        with patch("praxis.orchestrator.loop.chat_stream", new=stream_response):
+            stream_events = [
+                event async for event in stream_loop.run_stream(resolved_text_input("request"))
+            ]
+
+        complete_usage = next(
+            event.data for event in complete_result.events if event.event_type == "llm_response"
+        )
+        stream_usage = next(
+            event.data for event in stream_events if event.event_type == "llm_response"
+        )
+        assert stream_loop.get_state() == complete_loop.get_state()
+        assert stream_usage == complete_usage
+        assert stream_events[-1].data["reason"] == complete_result.termination_reason.value
+        assert stream_events[-1].data["content"] == complete_result.content
 
     async def test_gav_feedback_injected_on_verification_failure(self) -> None:
         """验证失败时，GAV 应把结构化反馈注入上下文并发 gav_feedback 事件。"""

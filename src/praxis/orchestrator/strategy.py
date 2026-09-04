@@ -5,6 +5,7 @@ Plan-and-Execute 模式（先规划后执行），运行时可切换。
 """
 
 from typing import Any, cast
+from uuid import uuid4
 
 from praxis.models.orchestrator import StrategyMode
 from praxis.telemetry.logger import get_logger
@@ -38,6 +39,14 @@ class LoopStrategy:
         self.mode = mode
         self.plan: list[PlanStep] = []
         self.current_step_index: int = 0
+        self.request_id: str = ""
+
+    def begin_request(self, request_id: str | None = None) -> str:
+        """Create isolated plan state for a new user request."""
+        self.request_id = request_id or uuid4().hex
+        self.plan.clear()
+        self.current_step_index = 0
+        return self.request_id
 
     def switch_mode(self, mode: StrategyMode) -> None:
         """运行时切换策略模式。"""
@@ -118,6 +127,7 @@ class LoopStrategy:
         """Return a JSON-safe snapshot of the complete strategy state."""
         return {
             "mode": self.mode.value,
+            "request_id": self.request_id,
             "current_step_index": self.current_step_index,
             "plan": [
                 {
@@ -134,6 +144,7 @@ class LoopStrategy:
         """Restore a snapshot produced by :meth:`export_state`."""
         mode_value = state.get("mode", StrategyMode.REACT.value)
         self.mode = StrategyMode(str(mode_value))
+        self.request_id = str(state.get("request_id", ""))
         plan_value = state.get("plan", [])
         plan_items = cast(list[object], plan_value) if isinstance(plan_value, list) else []
         restored: list[PlanStep] = []

@@ -35,12 +35,14 @@ from praxis.models.orchestrator import (
     StrategyMode,
     TerminationReason,
 )
+from praxis.models.responses import ModelResponse
 from praxis.models.verification import QualityPhase, VerificationStatus, VerificationType
+from praxis.orchestrator.engine import OrchestrationEngine
 from praxis.orchestrator.events import EventEmitter
 from praxis.orchestrator.parser import OutputParser, ParsedOutput, StreamAccumulator
 from praxis.orchestrator.strategy import LoopStrategy, PlanStep
 from praxis.orchestrator.termination import TerminationManager
-from praxis.orchestrator.tool_coordination import ToolCoordinator
+from praxis.orchestrator.tool_coordination import ToolCallOutcome, ToolCoordinator
 from praxis.protocols import ModelGateway
 from praxis.skills.manager import SkillManager
 from praxis.telemetry.logger import get_logger
@@ -113,6 +115,7 @@ class OrchestrationLoop:
         # 最近一次在关键节点（turn_start / turn_end / termination）发射的事件，
         # 供流式路径精确 yield，避免依赖 emitter.events[-1] 受子系统插入事件影响。
         self.latest_event: AgentEvent | None = None
+        self.engine = OrchestrationEngine(self)
 
     # ── 公共准备方法 ─────────────────────────────────────────────────────
 
@@ -127,6 +130,7 @@ class OrchestrationLoop:
         """初始化一次 run 的状态和上下文。"""
         self.state = LoopState(phase=LoopPhase.ASSEMBLING)
         self.emitter.clear()
+        self.strategy.begin_request()
         turn_context = TurnContext(
             user_content=user_input.content,
             user_text=user_input.text_projection,
@@ -247,7 +251,10 @@ class OrchestrationLoop:
             self.emitter.emit(
                 "plan_created",
                 turn=self.state.current_turn,
-                data={"step_count": len(steps)},
+                data={
+                    "request_id": self.strategy.request_id,
+                    "step_count": len(steps),
+                },
             )
         else:
             log.info("未解析出有效计划步骤，退化为 ReAct")
@@ -409,7 +416,7 @@ class OrchestrationLoop:
     async def process_tool_outcomes(
         self,
         parsed: ParsedOutput,
-    ) -> tuple[list[Any], bool]:
+    ) -> tuple[list[ToolCallOutcome], bool]:
         """执行工具调用并处理结果。返回 (outcomes, tripwire)。"""
         self.state.phase = LoopPhase.TOOL_EXECUTING
         outcomes = await self.coordinator.execute_tool_calls(
@@ -536,7 +543,7 @@ class OrchestrationLoop:
         return outcomes, tripwire
 
     def check_handoff_result(
-        self, parsed: ParsedOutput, outcomes: list[Any],
+        self, parsed: ParsedOutput, outcomes: list[ToolCallOutcome],
     ) -> AgentResponse | None:
         """检查 Handoff 短路。有匹配结果则返回 AgentResponse，否则 None。"""
         if not parsed.handoff_target:
@@ -594,6 +601,91 @@ class OrchestrationLoop:
 
         return None
 
+    def emit_model_request(self, prompt: AssembledPrompt) -> AgentEvent:
+        """Record a normalized model-request event."""
+        self.state.phase = LoopPhase.LLM_CALLING
+        return self.emitter.emit(
+            "llm_request",
+            turn=self.state.current_turn,
+            data={"token_count": prompt.token_count},
+        )
+
+    def emit_model_response(self, response: ModelResponse) -> AgentEvent:
+        """Record mode-neutral response metadata for accounting and diagnostics."""
+        return self.emitter.emit(
+            "llm_response",
+            turn=self.state.current_turn,
+            data={
+                "has_content": bool(response.content),
+                "has_reasoning": bool(response.reasoning_content),
+                "has_refusal": bool(response.refusal),
+                "tool_call_count": len(response.tool_calls or []),
+                "prompt_tokens": response.usage.prompt_tokens,
+                "completion_tokens": response.usage.completion_tokens,
+                "reasoning_tokens": response.usage.reasoning_tokens,
+                "cached_prompt_tokens": response.usage.cached_prompt_tokens,
+            },
+        )
+
+    async def complete_model(self, prompt: AssembledPrompt) -> ModelResponse:
+        """Execute the complete-response model phase."""
+        self.emit_model_request(prompt)
+        response = await chat(
+            self.gateway,
+            prompt.messages,
+            model=self.model,
+            tools=prompt.tools if prompt.tools else None,
+        )
+        self.emit_model_response(response)
+        return response
+
+    async def stream_model(
+        self,
+        prompt: AssembledPrompt,
+    ) -> AsyncGenerator[ModelResponse | None, None]:
+        """Execute the streaming model phase and expose event flush boundaries."""
+        self.emit_model_request(prompt)
+        yield None
+        accumulator = StreamAccumulator()
+        response_stream = chat_stream(
+            self.gateway,
+            prompt.messages,
+            model=self.model,
+            tools=prompt.tools if prompt.tools else None,
+        )
+        try:
+            async for chunk in response_stream:
+                delta = accumulator.feed(chunk)
+                if delta.reasoning:
+                    self.emitter.emit(
+                        "reasoning_delta",
+                        turn=self.state.current_turn,
+                        data={"text": delta.reasoning},
+                    )
+                    yield None
+                if delta.content:
+                    self.emitter.emit(
+                        "content_delta",
+                        turn=self.state.current_turn,
+                        data={"text": delta.content},
+                    )
+                    yield None
+        finally:
+            close_stream = getattr(response_stream, "aclose", None)
+            if callable(close_stream):
+                close_result = close_stream()
+                if isawaitable(close_result):
+                    await close_result
+
+        response = accumulator.build_response()
+        self.emit_model_response(response)
+        yield response
+
+    def parse_model_response(self, response: ModelResponse) -> ParsedOutput:
+        """Parse a normalized model response and enter the parsing phase."""
+        self.state.phase = LoopPhase.PARSING
+        return self.parser.parse(response)
+
     # ── 完整调用路径 ───────────────────────────────────────────────────────────────
 
     async def run(
@@ -627,67 +719,14 @@ class OrchestrationLoop:
             self.sanitize_run_input(ctx)
 
     async def execute_run(self, ctx: RunContext) -> AgentResponse:
-        """Execute the non-streaming state machine for an initialized run."""
-
-        early = await self.prepare_run(ctx)
-        if early is not None:
-            return early
-
-        while True:
-            start_time = time.perf_counter()
-            prompt = await self.prepare_turn(ctx)
-
-            # Step 2: LLM 推理
-            self.state.phase = LoopPhase.LLM_CALLING
-            self.emitter.emit(
-                "llm_request",
-                turn=self.state.current_turn,
-                data={"token_count": prompt.token_count},
-            )
-
-            response = await chat(
-                self.gateway,
-                prompt.messages,
-                model=self.model,
-                tools=prompt.tools if prompt.tools else None,
-            )
-
-            self.emitter.emit(
-                "llm_response",
-                turn=self.state.current_turn,
-                data={
-                    "has_content": bool(response.content),
-                    "has_reasoning": bool(response.reasoning_content),
-                    "has_refusal": bool(response.refusal),
-                    "tool_call_count": len(response.tool_calls or []),
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                    "reasoning_tokens": response.usage.reasoning_tokens,
-                    "cached_prompt_tokens": response.usage.cached_prompt_tokens,
-                },
-            )
-
-            # Step 3: 解析输出
-            self.state.phase = LoopPhase.PARSING
-            parsed = self.parser.parse(response)
-
-            # Step 4: 终止检查
-            reason = self.check_final_termination(parsed, response.finish_reason)
-            if reason is not None:
-                return await self.handle_final_response(parsed, reason)
-
-            # Step 5: 工具执行
-            outcomes, tripwire = await self.process_tool_outcomes(parsed)
-
-            # Handoff 短路
-            handoff_resp = self.check_handoff_result(parsed, outcomes)
-            if handoff_resp is not None:
-                return handoff_resp
-
-            # 轮次结束
-            end_resp = self.finish_turn(ctx, tripwire, start_time)
-            if end_resp is not None:
-                return end_resp
+        """Reduce the shared transition stream to its terminal response."""
+        terminal: AgentResponse | None = None
+        async for transition in self.engine.transitions(ctx, streaming=False):
+            if transition.response is not None:
+                terminal = transition.response
+        if terminal is None:
+            raise RuntimeError("编排状态机结束但未产生响应")
+        return terminal
 
     # ── 流式调用路径 ───────────────────────────────────────────────────────────────
 
@@ -725,112 +764,10 @@ class OrchestrationLoop:
             self.sanitize_run_input(ctx)
 
     async def stream_run(self, ctx: RunContext) -> AsyncGenerator[AgentEvent, None]:
-        """Execute the streaming state machine for an initialized run."""
-
-        early = await self.prepare_run(ctx)
-        if early is not None:
-            yield self.last_event()
-            return
-
-        while True:
-            start_time = time.perf_counter()
-            prompt = await self.prepare_turn(ctx)
-
-            # yield turn_start 事件
-            yield self.last_event()
-
-            # LLM 推理
-            self.state.phase = LoopPhase.LLM_CALLING
-            llm_req_event = self.emitter.emit(
-                "llm_request",
-                turn=self.state.current_turn,
-                data={"token_count": prompt.token_count},
-            )
-            yield llm_req_event
-
-            # 逐 chunk 消费响应
-            accumulator = StreamAccumulator()
-            response_stream = chat_stream(
-                self.gateway,
-                prompt.messages,
-                model=self.model,
-                tools=prompt.tools if prompt.tools else None,
-            )
-            try:
-                async for chunk in response_stream:
-                    delta = accumulator.feed(chunk)
-                    if delta.reasoning:
-                        reasoning_event = self.emitter.emit(
-                            "reasoning_delta",
-                            turn=self.state.current_turn,
-                            data={"text": delta.reasoning},
-                        )
-                        yield reasoning_event
-                    if delta.content:
-                        delta_event = self.emitter.emit(
-                            "content_delta",
-                            turn=self.state.current_turn,
-                            data={"text": delta.content},
-                        )
-                        yield delta_event
-            finally:
-                close_stream = getattr(response_stream, "aclose", None)
-                if callable(close_stream):
-                    close_result = close_stream()
-                    if isawaitable(close_result):
-                        await close_result
-
-            response = accumulator.build_response()
-
-            llm_resp_event = self.emitter.emit(
-                "llm_response",
-                turn=self.state.current_turn,
-                data={
-                    "has_content": bool(response.content),
-                    "has_reasoning": bool(response.reasoning_content),
-                    "has_refusal": bool(response.refusal),
-                    "tool_call_count": len(response.tool_calls or []),
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                    "reasoning_tokens": response.usage.reasoning_tokens,
-                    "cached_prompt_tokens": response.usage.cached_prompt_tokens,
-                },
-            )
-            yield llm_resp_event
-
-            # 解析输出
-            self.state.phase = LoopPhase.PARSING
-            parsed = self.parser.parse(response)
-
-            # 终止检查
-            reason = self.check_final_termination(parsed, response.finish_reason)
-            if reason is not None:
-                await self.handle_final_response(parsed, reason)
-                yield self.last_event()
-                return
-
-            # 工具执行（tool_call_start/end 事件由 coordinator 通过 emitter 产生）
-            pre_event_count = len(self.emitter.events)
-            outcomes, tripwire = await self.process_tool_outcomes(parsed)
-
-            # yield 工具执行期间产生的所有事件
-            for event in self.emitter.events[pre_event_count:]:
-                yield event
-
-            # Handoff 短路
-            handoff_resp = self.check_handoff_result(parsed, outcomes)
-            if handoff_resp is not None:
-                yield self.last_event()
-                return
-
-            # 轮次结束
-            end_resp = self.finish_turn(ctx, tripwire, start_time)
-            if end_resp is not None:
-                yield self.last_event()
-                return
-
-            # yield turn_end 事件
-            yield self.last_event()
+        """Project public events from the same transition engine used by run()."""
+        async for transition in self.engine.transitions(ctx, streaming=True):
+            if transition.event is not None:
+                yield transition.event
 
     # ── 控制方法 ──────────────────────────────────────────────────────────
 

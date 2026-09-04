@@ -6,47 +6,16 @@ S9 记录结果 → S7 更新上下文 → 第二轮 LLM 生成最终响应 →
 S8 输出护栏 → S12 自动检查点。
 """
 
-import json
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
 from tests.scenarios.conftest import (
     build_loop,
+    make_model_response,
+    make_tool_call,
     register_tool,
     resolved_text_input,
 )
-
-
-def make_raw_response(
-    content: str = "",
-    tool_calls: list | None = None,
-    finish_reason: str = "stop",
-) -> SimpleNamespace:
-    """构建 LiteLLM 原始响应 SimpleNamespace。"""
-    message = SimpleNamespace(content=content, tool_calls=tool_calls)
-    choice = SimpleNamespace(message=message, finish_reason=finish_reason)
-    usage = SimpleNamespace(prompt_tokens=50, completion_tokens=20, total_tokens=70)
-    return SimpleNamespace(
-        id="chatcmpl-e2e",
-        choices=[choice],
-        usage=usage,
-        model="test-model",
-        created=1700000000,
-    )
-
-
-def make_raw_tool_call(
-    name: str,
-    arguments: str = "{}",
-    tc_id: str = "tc-1",
-) -> SimpleNamespace:
-    """构建 LiteLLM 工具调用 SimpleNamespace。"""
-    return SimpleNamespace(
-        id=tc_id,
-        type="function",
-        function=SimpleNamespace(name=name, arguments=arguments),
-    )
 
 
 class TestSingleTurnExecution:
@@ -75,17 +44,12 @@ class TestSingleTurnExecution:
         )
 
         # LLM 调用序列：第一次返回工具调用，第二次返回最终响应
-        call_count = 0
-
-        async def mock_acompletion(**kwargs: Any) -> SimpleNamespace:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                tc = make_raw_tool_call("read_file", json.dumps({"path": "test.py"}))
-                return make_raw_response(tool_calls=[tc])
-            return make_raw_response(content="文件读取完毕，内容如下: test.py 的内容")
-
-        mock_gateway.router.acompletion = AsyncMock(side_effect=mock_acompletion)
+        mock_gateway.complete = AsyncMock(side_effect=[
+            make_model_response(tool_calls=[
+                make_tool_call("read_file", '{"path": "test.py"}'),
+            ]),
+            make_model_response(content="文件读取完毕，内容如下: test.py 的内容"),
+        ])
 
         loop = build_loop(
             mock_gateway, registry, guardrails,
@@ -98,7 +62,7 @@ class TestSingleTurnExecution:
         assert response.content == "文件读取完毕，内容如下: test.py 的内容"
         assert response.tool_calls_made == 1
         assert response.total_turns == 2
-        assert call_count == 2
+        assert mock_gateway.complete.await_count == 2
 
     async def test_no_tool_call_direct_response(
         self,
@@ -109,8 +73,8 @@ class TestSingleTurnExecution:
         context_config,
     ) -> None:
         """验证：无需工具调用时直接返回最终响应。"""
-        mock_gateway.router.acompletion = AsyncMock(
-            return_value=make_raw_response(content="你好，有什么可以帮你的？")
+        mock_gateway.complete = AsyncMock(
+            return_value=make_model_response(content="你好，有什么可以帮你的？")
         )
 
         loop = build_loop(
@@ -147,18 +111,13 @@ class TestSingleTurnExecution:
             "properties": {"query": {"type": "string"}},
         })
 
-        call_count = 0
-
-        async def mock_acompletion(**kwargs: Any) -> SimpleNamespace:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                tc1 = make_raw_tool_call("read_file", json.dumps({"path": "a.py"}), "tc-1")
-                tc2 = make_raw_tool_call("grep_search", json.dumps({"query": "def main"}), "tc-2")
-                return make_raw_response(tool_calls=[tc1, tc2])
-            return make_raw_response(content="分析完成")
-
-        mock_gateway.router.acompletion = AsyncMock(side_effect=mock_acompletion)
+        mock_gateway.complete = AsyncMock(side_effect=[
+            make_model_response(tool_calls=[
+                make_tool_call("read_file", '{"path": "a.py"}', "tc-1"),
+                make_tool_call("grep_search", '{"query": "def main"}', "tc-2"),
+            ]),
+            make_model_response(content="分析完成"),
+        ])
 
         loop = build_loop(
             mock_gateway, registry, guardrails,
@@ -179,8 +138,8 @@ class TestSingleTurnExecution:
         context_config,
     ) -> None:
         """验证：编排循环过程中事件正确发射。"""
-        mock_gateway.router.acompletion = AsyncMock(
-            return_value=make_raw_response(content="完成")
+        mock_gateway.complete = AsyncMock(
+            return_value=make_model_response(content="完成")
         )
 
         loop = build_loop(
