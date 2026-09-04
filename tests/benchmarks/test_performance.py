@@ -10,7 +10,6 @@
 
 import time
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -30,7 +29,8 @@ from praxis.guardrails.permissions import PermissionManager
 from praxis.guardrails.rules import GuardrailRule, RuleEngine, RuleTarget
 from praxis.models.context import TurnContext
 from praxis.models.guardrails import VerdictType
-from praxis.models.tools import ToolDefinition
+from praxis.models.responses import ModelResponse, Usage
+from praxis.models.tools import FunctionCall, ToolCall, ToolDefinition
 from praxis.persistence.store import PersistenceStore, create_store
 from praxis.session.core import SessionFactory
 from praxis.tools.executor import ToolExecutor
@@ -42,14 +42,17 @@ from praxis.tools.registry import ToolRegistry
 
 def make_raw_response(
     content: str = "bench response",
-    tool_calls: list | None = None,
-) -> SimpleNamespace:
-    message = SimpleNamespace(content=content, tool_calls=tool_calls)
-    choice = SimpleNamespace(message=message, finish_reason="stop")
-    usage = SimpleNamespace(prompt_tokens=50, completion_tokens=20, total_tokens=70)
-    return SimpleNamespace(
-        id="chatcmpl-bench", choices=[choice], usage=usage,
-        model="test-model", created=1700000000,
+    tool_calls: list[ToolCall] | None = None,
+    finish_reason: str = "stop",
+) -> ModelResponse:
+    return ModelResponse(
+        id="chatcmpl-bench",
+        content=content,
+        tool_calls=tool_calls,
+        usage=Usage(prompt_tokens=50, completion_tokens=20, total_tokens=70),
+        model="test-model",
+        created=1700000000,
+        finish_reason=finish_reason,
     )
 
 
@@ -276,8 +279,7 @@ class TestOrchestrationLoopOverhead:
         mock_gw.config = MagicMock()
         mock_gw.config.max_budget = None
         mock_gw.config.default_model = "test-model"
-        mock_gw.router = MagicMock()
-        mock_gw.router.acompletion = AsyncMock(
+        mock_gw.complete = AsyncMock(
             return_value=make_raw_response(content="快速响应")
         )
         session = await factory.create_session(guardrails=guardrails, gateway=mock_gw)
@@ -288,7 +290,7 @@ class TestOrchestrationLoopOverhead:
         iterations = 20
         start = time.perf_counter()
         for i in range(iterations):
-            mock_gw.router.acompletion = AsyncMock(
+            mock_gw.complete = AsyncMock(
                 return_value=make_raw_response(content=f"响应 {i}")
             )
             await session.run_turn(f"测试 {i}")
@@ -310,7 +312,6 @@ class TestOrchestrationLoopOverhead:
         mock_gw.config = MagicMock()
         mock_gw.config.max_budget = None
         mock_gw.config.default_model = "test-model"
-        mock_gw.router = MagicMock()
         session = await factory.create_session(guardrails=guardrails, gateway=mock_gw)
 
         async def noop_handler(args: dict[str, Any]) -> str:
@@ -325,30 +326,33 @@ class TestOrchestrationLoopOverhead:
             noop_handler,
         )
 
-        def make_tool_call_response() -> SimpleNamespace:
-            tc = SimpleNamespace(
-                id="tc-bench", type="function",
-                function=SimpleNamespace(name="noop", arguments="{}"),
+        def make_tool_call_response() -> ModelResponse:
+            tc = ToolCall(
+                id="tc-bench",
+                type="function",
+                function=FunctionCall(name="noop", arguments="{}"),
             )
-            return make_raw_response(tool_calls=[tc])
+            return make_raw_response(
+                content="", tool_calls=[tc], finish_reason="tool_calls"
+            )
 
         # 预热
         call_count = 0
 
-        async def mock_acompletion(**kwargs: Any) -> SimpleNamespace:
+        async def mock_completion(*args: Any, **kwargs: Any) -> ModelResponse:
             nonlocal call_count
             call_count += 1
             if call_count % 2 == 1:
                 return make_tool_call_response()
             return make_raw_response(content="done")
 
-        mock_gw.router.acompletion = AsyncMock(side_effect=mock_acompletion)
+        mock_gw.complete = AsyncMock(side_effect=mock_completion)
         await session.run_turn("预热")
 
         iterations = 10
         start = time.perf_counter()
         for i in range(iterations):
-            mock_gw.router.acompletion = AsyncMock(side_effect=mock_acompletion)
+            mock_gw.complete = AsyncMock(side_effect=mock_completion)
             await session.run_turn(f"工具测试 {i}")
         elapsed = (time.perf_counter() - start) / iterations * 1000
 

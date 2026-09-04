@@ -7,9 +7,7 @@ S6（记忆管线）→ S4（模型网关）→ S2（遥测）→ S1（配置）
 重点：状态传递、接口契约、组件间数据流正确性。
 """
 
-import json
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -36,8 +34,15 @@ from praxis.models.orchestrator import (
     AgentResponse,
     TerminationReason,
 )
+from praxis.models.responses import ModelResponse, Usage
 from praxis.models.session import SessionMetadata, SessionStatus
-from praxis.models.tools import ToolDefinition, ToolMetadata, ToolResult
+from praxis.models.tools import (
+    FunctionCall,
+    ToolCall,
+    ToolDefinition,
+    ToolMetadata,
+    ToolResult,
+)
 from praxis.persistence.store import PersistenceStore, create_store
 from praxis.recovery.circuit_breaker import CircuitBreakerRegistry
 from praxis.recovery.retry import RetryPolicy
@@ -54,22 +59,29 @@ from praxis.tools.registry import ToolRegistry
 
 def make_raw_response(
     content: str = "",
-    tool_calls: list | None = None,
+    tool_calls: list[ToolCall] | None = None,
     finish_reason: str = "stop",
-) -> SimpleNamespace:
-    message = SimpleNamespace(content=content, tool_calls=tool_calls)
-    choice = SimpleNamespace(message=message, finish_reason=finish_reason)
-    usage = SimpleNamespace(prompt_tokens=50, completion_tokens=20, total_tokens=70)
-    return SimpleNamespace(
-        id="chatcmpl-chain", choices=[choice], usage=usage,
-        model="test-model", created=1700000000,
+) -> ModelResponse:
+    return ModelResponse(
+        id="chatcmpl-chain",
+        content=content,
+        tool_calls=tool_calls,
+        usage=Usage(prompt_tokens=50, completion_tokens=20, total_tokens=70),
+        model="test-model",
+        created=1700000000,
+        finish_reason=finish_reason,
     )
 
 
-def make_raw_tool_call(name: str, arguments: str = "{}", tc_id: str = "tc-1") -> SimpleNamespace:
-    return SimpleNamespace(
-        id=tc_id, type="function",
-        function=SimpleNamespace(name=name, arguments=arguments),
+def make_raw_tool_call(
+    name: str,
+    arguments: str = "{}",
+    tc_id: str = "tc-1",
+) -> ToolCall:
+    return ToolCall(
+        id=tc_id,
+        type="function",
+        function=FunctionCall(name=name, arguments=arguments),
     )
 
 
@@ -383,8 +395,7 @@ class TestS11S12OrchestrationSessionChain:
         mock_gw.config = MagicMock()
         mock_gw.config.max_budget = None
         mock_gw.config.default_model = "test-model"
-        mock_gw.router = MagicMock()
-        mock_gw.router.acompletion = AsyncMock(
+        mock_gw.complete = AsyncMock(
             return_value=make_raw_response(content="集成测试响应")
         )
         session = await factory.create_session(guardrails=guardrails, gateway=mock_gw)
@@ -414,7 +425,6 @@ class TestS11S12OrchestrationSessionChain:
         mock_gw.config = MagicMock()
         mock_gw.config.max_budget = None
         mock_gw.config.default_model = "test-model"
-        mock_gw.router = MagicMock()
         session = await factory.create_session(guardrails=guardrails, gateway=mock_gw)
 
         # 注册测试工具
@@ -436,15 +446,17 @@ class TestS11S12OrchestrationSessionChain:
         # Mock Gateway: 第一次返回工具调用，第二次返回最终响应
         call_count = 0
 
-        async def mock_acompletion(**kwargs: Any) -> SimpleNamespace:
+        async def mock_completion(*args: Any, **kwargs: Any) -> ModelResponse:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                tc = make_raw_tool_call("greet", json.dumps({"name": "Praxis"}))
-                return make_raw_response(tool_calls=[tc])
+                tc = make_raw_tool_call("greet", '{"name": "Praxis"}')
+                return make_raw_response(
+                    tool_calls=[tc], finish_reason="tool_calls"
+                )
             return make_raw_response(content="问候完成: Hello, Praxis!")
 
-        mock_gw.router.acompletion = AsyncMock(side_effect=mock_acompletion)
+        mock_gw.complete = AsyncMock(side_effect=mock_completion)
 
         response = await session.run_turn("请问候 Praxis")
         await session.terminate()
@@ -504,8 +516,7 @@ class TestS11S12OrchestrationSessionChain:
         mock_gw.config = MagicMock()
         mock_gw.config.max_budget = None
         mock_gw.config.default_model = "test-model"
-        mock_gw.router = MagicMock()
-        mock_gw.router.acompletion = AsyncMock(
+        mock_gw.complete = AsyncMock(
             return_value=make_raw_response(content="事件测试")
         )
         session = await factory.create_session(guardrails=guardrails, gateway=mock_gw)

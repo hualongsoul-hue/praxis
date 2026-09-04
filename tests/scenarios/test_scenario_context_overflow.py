@@ -4,23 +4,17 @@ Token 用量接近窗口限制 → S7 触发压缩 →
 S4 生成摘要 → 替换历史消息 → 正常继续。
 """
 
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
 from praxis.config.schemas import ContextConfig, OrchestratorConfig
 from praxis.models.orchestrator import TerminationReason
-from tests.scenarios.conftest import build_loop, resolved_text_input
-
-
-def make_raw_response(content: str = "") -> SimpleNamespace:
-    message = SimpleNamespace(content=content, tool_calls=None)
-    choice = SimpleNamespace(message=message, finish_reason="stop")
-    usage = SimpleNamespace(prompt_tokens=50, completion_tokens=20, total_tokens=70)
-    return SimpleNamespace(
-        id="chatcmpl-ctx", choices=[choice], usage=usage,
-        model="test-model", created=1700000000,
-    )
+from tests.scenarios.conftest import (
+    build_loop,
+    make_model_response,
+    make_tool_call,
+    resolved_text_input,
+)
 
 
 class TestContextOverflow:
@@ -37,12 +31,12 @@ class TestContextOverflow:
         """验证：多轮交互后上下文正确累积消息。"""
         call_count = 0
 
-        async def mock_acompletion(**kwargs: Any) -> SimpleNamespace:
+        async def mock_completion(*args: Any, **kwargs: Any):
             nonlocal call_count
             call_count += 1
-            return make_raw_response(content=f"回复 {call_count}")
+            return make_model_response(content=f"回复 {call_count}")
 
-        mock_gateway.router.acompletion = AsyncMock(side_effect=mock_acompletion)
+        mock_gateway.complete = AsyncMock(side_effect=mock_completion)
 
         loop = build_loop(
             mock_gateway, registry, guardrails,
@@ -71,8 +65,8 @@ class TestContextOverflow:
         ctx_config = ContextConfig(compaction_threshold=0.5)
         orch_config = OrchestratorConfig(max_turns=5)
 
-        mock_gateway.router.acompletion = AsyncMock(
-            return_value=make_raw_response(content="压缩后继续")
+        mock_gateway.complete = AsyncMock(
+            return_value=make_model_response(content="压缩后继续")
         )
 
         loop = build_loop(
@@ -103,31 +97,16 @@ class TestContextOverflow:
         orch_config = OrchestratorConfig(max_turns=2)
 
         # 始终返回工具调用，不返回最终响应
-        def make_raw_tool_call() -> SimpleNamespace:
-            return SimpleNamespace(
-                id="tc-loop", type="function",
-                function=SimpleNamespace(name="noop", arguments="{}"),
-            )
-
         async def noop_handler(args: dict[str, Any]) -> str:
             return "ok"
 
         from tests.scenarios.conftest import register_tool
         register_tool(registry, "noop", noop_handler)
 
-        mock_gateway.router.acompletion = AsyncMock(
-            return_value=SimpleNamespace(
-                id="chatcmpl-loop",
-                choices=[SimpleNamespace(
-                    message=SimpleNamespace(
-                        content=None,
-                        tool_calls=[make_raw_tool_call()],
-                    ),
-                    finish_reason="tool_calls",
-                )],
-                usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5, total_tokens=15),
-                model="test-model",
-                created=1700000000,
+        mock_gateway.complete = AsyncMock(
+            return_value=make_model_response(
+                tool_calls=[make_tool_call("noop", tc_id="tc-loop")],
+                finish_reason="tool_calls",
             )
         )
 

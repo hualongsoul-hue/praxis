@@ -10,14 +10,19 @@ from praxis.telemetry.metrics import (
     emit_metric,
     export_prometheus,
 )
-from praxis.telemetry.tracing import configure_tracing, start_span
+from praxis.telemetry.tracing import (
+    TracingLifecycle,
+    configure_tracing,
+    configure_tracing_lifecycle,
+    start_span,
+)
 
 
-def configure_cli_telemetry(config: TelemetryConfig) -> None:
-    """由 CLI 显式配置进程级日志/指标/追踪；SDK Runtime 不调用。"""
+def configure_cli_telemetry(config: TelemetryConfig) -> TracingLifecycle:
+    """Configure CLI telemetry and return the tracing resource that must be closed."""
     configure_logging(config)
     configure_metrics(config)
-    configure_tracing(config)
+    return configure_tracing_lifecycle(config)
 
 
 __all__ = [

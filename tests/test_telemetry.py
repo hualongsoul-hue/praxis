@@ -25,7 +25,7 @@ from praxis.telemetry.metrics import (
     emit_metric,
     export_prometheus,
 )
-from praxis.telemetry.tracing import configure_tracing, start_span
+from praxis.telemetry.tracing import configure_tracing, current_tracer, start_span
 
 
 class TestStructuredLogger:
@@ -157,25 +157,31 @@ class TestMetrics:
 class TestTracing:
     """Task 3.3: 分布式追踪验证。"""
 
-    def test_start_span_basic(self) -> None:
+    async def test_start_span_basic(self) -> None:
         config = TelemetryConfig(tracing_enabled=True, tracing_export="console")
-        configure_tracing(config)
-        span = start_span("test-operation", component="gateway", operation="chat")
-        assert span is not None
-        assert span.is_recording()
-        span.end()
+        lifecycle = configure_tracing(config)
+        try:
+            span = start_span("test-operation", component="gateway", operation="chat")
+            assert span is not None
+            assert span.is_recording()
+            span.end()
+        finally:
+            await lifecycle.close()
 
-    def test_parent_child_span(self) -> None:
+    async def test_parent_child_span(self) -> None:
         config = TelemetryConfig(tracing_enabled=True, tracing_export="console")
-        configure_tracing(config)
-        parent = start_span("parent-op", component="orchestrator")
-        child = start_span("child-op", parent=parent, component="gateway")
-        child_ctx = child.get_span_context()
-        parent_ctx = parent.get_span_context()
-        assert child_ctx.trace_id == parent_ctx.trace_id
-        assert child_ctx.span_id != parent_ctx.span_id
-        child.end()
-        parent.end()
+        lifecycle = configure_tracing(config)
+        try:
+            parent = start_span("parent-op", component="orchestrator")
+            child = start_span("child-op", parent=parent, component="gateway")
+            child_ctx = child.get_span_context()
+            parent_ctx = parent.get_span_context()
+            assert child_ctx.trace_id == parent_ctx.trace_id
+            assert child_ctx.span_id != parent_ctx.span_id
+            child.end()
+            parent.end()
+        finally:
+            await lifecycle.close()
 
     async def test_owned_tracing_lifecycle_flushes_and_shuts_down(self) -> None:
         from praxis.telemetry.tracing import TracingLifecycle
@@ -185,6 +191,7 @@ class TestTracing:
             tracer=MagicMock(),
             provider=provider,
             owns_provider=True,
+            context_token=current_tracer.set(MagicMock()),
         )
 
         await lifecycle.close()
@@ -363,16 +370,18 @@ class TestTelemetryProductionHardening:
         finally:
             await store.close()
 
-    def test_configure_telemetry_applies(self) -> None:
+    async def test_configure_telemetry_applies(self) -> None:
         from praxis.telemetry import configure_cli_telemetry
         from praxis.telemetry.metrics import get_collector
 
-        configure_cli_telemetry(TelemetryConfig(
+        lifecycle = configure_cli_telemetry(TelemetryConfig(
             metrics_enabled=True, metrics_export="file", tracing_enabled=False,
         ))
-        # 指标采集器可用
-        get_collector().counter("probe", 1.0)
-        assert "probe" in get_collector().export_prometheus()
+        try:
+            get_collector().counter("probe", 1.0)
+            assert "probe" in get_collector().export_prometheus()
+        finally:
+            await lifecycle.close()
 
 
 class TestMetricsConcurrency:

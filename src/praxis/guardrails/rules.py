@@ -8,7 +8,7 @@ import re
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from praxis.models.guardrails import GuardrailVerdict, VerdictType
 
@@ -24,41 +24,43 @@ class RuleTarget(StrEnum):
 class GuardrailRule(BaseModel):
     """护栏规则定义。"""
 
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     name: str
     description: str
     target: RuleTarget
     enabled: bool = True
     priority: int = Field(default=100, description="优先级，数值越小越先评估")
-    patterns: list[str] = Field(default_factory=list, description="正则表达式检测模式")
+    patterns: tuple[str, ...] = Field(default_factory=tuple, description="正则表达式检测模式")
     verdict: VerdictType = VerdictType.BLOCK
     tripwire: bool = False
 
 
-BUILTIN_INPUT_RULES: list[GuardrailRule] = [
+BUILTIN_INPUT_RULES: tuple[GuardrailRule, ...] = (
     GuardrailRule(
         name="prompt_injection_basic",
         description="检测基础提示注入模式",
         target=RuleTarget.INPUT,
         priority=10,
-        patterns=[
+        patterns=(
             r"(?i)ignore\s+(previous|above|all)\s+(instructions?|prompts?)",
             r"(?i)you\s+are\s+now\s+(a|an|the)\s+",
             r"(?i)system\s*:\s*",
             r"(?i)jailbreak",
             r"(?i)do\s+anything\s+now",
-        ],
+        ),
         verdict=VerdictType.BLOCK,
         tripwire=True,
     ),
-]
+)
 
-BUILTIN_OUTPUT_RULES: list[GuardrailRule] = [
+BUILTIN_OUTPUT_RULES: tuple[GuardrailRule, ...] = (
     GuardrailRule(
         name="sensitive_data_leak",
         description="检测输出中的敏感信息泄露",
         target=RuleTarget.OUTPUT,
         priority=10,
-        patterns=[
+        patterns=(
             # 键名上下文 + 取值，避免对任意长字符串误报
             r"(?i)(api[_-]?key|secret[_-]?key|access[_-]?token)\s*[:=]\s*['\"]?\w{16,}",
             r"(?i)(password|passwd)\s*[:=]\s*['\"]?\S{6,}",
@@ -68,11 +70,11 @@ BUILTIN_OUTPUT_RULES: list[GuardrailRule] = [
             r"\bgh[pousr]_[A-Za-z0-9]{36,}\b",           # GitHub token
             r"\bsk-[A-Za-z0-9]{20,}\b",                  # OpenAI 风格密钥
             r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b",         # Slack token
-        ],
+        ),
         verdict=VerdictType.BLOCK,
         tripwire=False,
     ),
-]
+)
 
 
 class RuleEngine:

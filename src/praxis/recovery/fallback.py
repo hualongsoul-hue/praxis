@@ -4,6 +4,8 @@
 降级事件可观测（日志 + 指标）。
 """
 
+from collections.abc import Mapping
+
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
 
@@ -56,7 +58,7 @@ class FallbackRegistry:
             )
         return fallback
 
-    def load_mappings(self, mappings: dict[str, str]) -> None:
+    def load_mappings(self, mappings: Mapping[str, str]) -> None:
         """批量加载降级映射（如从配置文件）。"""
         self.mappings.update(mappings)
 

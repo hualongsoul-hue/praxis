@@ -408,6 +408,31 @@ class TestExecutor:
         with pytest.raises(ToolNotFoundError):
             await executor.execute("nonexistent", {})
 
+    async def test_tool_without_override_uses_configured_default_timeout(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        policy = ToolPolicy(
+            ToolsConfig(allowed_paths=[str(tmp_path)], default_timeout=0.01)
+        )
+        registry = ToolRegistry()
+
+        async def slow_handler(arguments: dict[str, Any]) -> str:
+            await asyncio.sleep(1)
+            return "late"
+
+        registry.register(
+            ToolDefinition(
+                name="slow",
+                description="slow",
+                parameters={"type": "object"},
+                metadata=ToolMetadata(readonly=True),
+            ),
+            slow_handler,
+        )
+        with pytest.raises(ToolTimeoutError):
+            await ToolExecutor(registry, policy).execute("slow", {})
+
     async def test_readonly_concurrency_uses_configured_limit(self, tmp_path: Path) -> None:
         policy = ToolPolicy(
             ToolsConfig(

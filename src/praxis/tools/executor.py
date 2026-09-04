@@ -10,6 +10,7 @@
 
 import asyncio
 import time
+from collections.abc import Mapping
 from typing import Any
 
 import jsonschema
@@ -125,7 +126,10 @@ class ToolExecutor:
         )
 
 
-def validate_arguments(schema: dict[str, Any], arguments: dict[str, Any]) -> str | None:
+def validate_arguments(
+    schema: Mapping[str, Any],
+    arguments: Mapping[str, Any],
+) -> str | None:
     """基于 JSON Schema 校验参数。
 
     Returns:

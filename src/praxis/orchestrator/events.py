@@ -60,7 +60,7 @@ class EventEmitter:
         Returns:
             发射的事件。
         """
-        event = AgentEvent.model_validate({
+        event_data = {
             "event_type": event_type,
             "runtime_id": self.runtime_id,
             "session_id": self.session_id,
@@ -68,7 +68,8 @@ class EventEmitter:
             "sequence": self.next_sequence,
             "turn": turn,
             "data": data or {},
-        })
+        }
+        event = AgentEvent.model_validate(event_data)
         self.next_sequence += 1
         self.events.append(event)
 

@@ -36,7 +36,7 @@ from praxis.telemetry.metrics import MetricsCollector, use_metrics
 
 SAMPLE_DEPLOYMENTS = [
     ModelDeployment(model_name="default", model="openai/gpt-4o"),
-    ModelDeployment(model_name="default", model="anthropic/claude-sonnet-4-20250514"),
+    ModelDeployment(model_name="claude", model="anthropic/claude-sonnet-4-20250514"),
     ModelDeployment(model_name="fast", model="openai/gpt-4o-mini"),
 ]
 
@@ -151,7 +151,7 @@ class TestGatewayRouter:
         names = gw.get_model_names()
         assert "default" in names
         assert "fast" in names
-        assert len(names) == 2
+        assert len(names) == 3
 
     def test_get_model_list(self) -> None:
         gw = GatewayRouter(make_config())

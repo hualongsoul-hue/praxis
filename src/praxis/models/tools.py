@@ -1,11 +1,12 @@
 """工具相关类型定义——跨 S5、S8、S11 共享。"""
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class FunctionCall(BaseModel):
@@ -61,18 +62,27 @@ class ToolExecutionRecord(BaseModel):
 class ToolMetadata(BaseModel):
     """工具元数据，供 S8 护栏裁决使用。"""
 
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
     category: str = "general"
     # None 表示"未声明"，由 S8 权限策略的 default_permission 兜底；
     # 显式声明时该声明优先于全局默认。
     permission_level: Literal["auto_approve", "confirm", "deny"] | None = None
     readonly: bool = False
     idempotent: bool = False
-    timeout_seconds: float = 30.0
-    tags: list[str] = Field(default_factory=list)
+    timeout_seconds: float | None = Field(default=None, gt=0)
+    tags: Sequence[str] = ()
+
+    @field_validator("tags")
+    @classmethod
+    def freeze_tags(cls, value: Sequence[str]) -> tuple[str, ...]:
+        return tuple(value)
 
 
 class ToolDefinition(BaseModel):
     """完整工具定义，用于 S5 工具注册。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     name: str
     description: str

@@ -13,6 +13,17 @@ from praxis.config.settings import PraxisConfig
 from praxis.exceptions import ConfigError
 
 OBJECT_MAP = TypeAdapter(dict[str, object])
+PATH_FIELDS: tuple[tuple[str, str, bool], ...] = (
+    ("telemetry", "log_file", False),
+    ("telemetry", "metrics_file", False),
+    ("persistence", "sqlite_path", False),
+    ("persistence", "filesystem_path", False),
+    ("inputs", "allowed_paths", True),
+    ("tools", "allowed_paths", True),
+    ("guardrails", "permissions_file", False),
+    ("memory", "project_root", False),
+    ("skills", "skill_paths", True),
+)
 
 
 def merge_config(base: dict[str, object], update: Mapping[str, object]) -> dict[str, object]:
@@ -67,6 +78,39 @@ def load_yaml_config(path: Path) -> dict[str, object]:
         raise ConfigError("配置文件根节点必须是映射") from exc
 
 
+def anchor_path(value: str, base_directory: Path) -> str:
+    """Resolve one path relative to the configuration file, never the process CWD."""
+    candidate = Path(value).expanduser()
+    if not candidate.is_absolute():
+        candidate = base_directory / candidate
+    return str(candidate.resolve(strict=False))
+
+
+def anchor_config_paths(
+    data: dict[str, object],
+    base_directory: Path,
+) -> dict[str, object]:
+    """Return a detached config mapping with every filesystem path anchored."""
+    anchored = deepcopy(data)
+    for section_name, field_name, multiple in PATH_FIELDS:
+        section_value = anchored.get(section_name)
+        if not isinstance(section_value, dict):
+            continue
+        section = cast(dict[str, object], section_value)
+        value = section.get(field_name)
+        if value is None:
+            continue
+        if multiple:
+            if isinstance(value, (list, tuple)):
+                section[field_name] = [
+                    anchor_path(str(item), base_directory)
+                    for item in cast(list[object] | tuple[object, ...], value)
+                ]
+        elif isinstance(value, str):
+            section[field_name] = anchor_path(value, base_directory)
+    return anchored
+
+
 def load_config(
     config_path: Path | str | None = None,
     *,
@@ -75,16 +119,20 @@ def load_config(
 ) -> PraxisConfig:
     """加载一个独立、不可变的配置快照，不修改任何进程级状态。"""
     data: dict[str, object] = {}
+    base_directory = Path.cwd().resolve()
     if config_path is not None:
         path = Path(config_path).expanduser().resolve()
         if not path.is_file():
             raise ConfigError(f"配置文件不存在: {path}")
         data = load_yaml_config(path)
+        base_directory = path.parent
 
     env_data = environment_config(os.environ if environ is None else environ)
     merged = merge_config(data, env_data)
     merged = merge_config(merged, overrides)
-    return PraxisConfig.model_validate(merged)
+    validated = PraxisConfig.model_validate(merged)
+    anchored = anchor_config_paths(validated.model_dump(mode="python"), base_directory)
+    return PraxisConfig.model_validate(anchored)
 
 
 def get_component_config[ModelT: BaseModel](

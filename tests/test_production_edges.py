@@ -1,5 +1,6 @@
 """Production boundary regression tests for optional and failure-path adapters."""
 
+import asyncio
 import json
 import socket
 from datetime import UTC, datetime, timedelta
@@ -501,8 +502,12 @@ class TestClassifierAndTracingEdges:
         assert classify_by_type_name("unknown.Error") is None
 
     def test_tracing_disabled_otlp_and_span_attributes(self) -> None:
-        tracer = configure_tracing(TelemetryConfig(tracing_enabled=False))
-        assert tracer is get_tracer()
+        async def verify_lifecycle() -> None:
+            lifecycle = configure_tracing(TelemetryConfig(tracing_enabled=False))
+            assert lifecycle.tracer is get_tracer()
+            await lifecycle.close()
+
+        asyncio.run(verify_lifecycle())
         exporter = MagicMock()
         with patch(
             "opentelemetry.exporter.otlp.proto.grpc.trace_exporter.OTLPSpanExporter",

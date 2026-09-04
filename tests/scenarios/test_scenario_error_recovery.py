@@ -4,34 +4,16 @@
 降级方案 → 错误信息返回 LLM。
 """
 
-import json
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
-from tests.scenarios.conftest import build_loop, register_tool, resolved_text_input
-
-
-def make_raw_response(
-    content: str = "",
-    tool_calls: list | None = None,
-) -> SimpleNamespace:
-    message = SimpleNamespace(content=content, tool_calls=tool_calls)
-    choice = SimpleNamespace(message=message, finish_reason="stop")
-    usage = SimpleNamespace(prompt_tokens=50, completion_tokens=20, total_tokens=70)
-    return SimpleNamespace(
-        id="chatcmpl-err", choices=[choice], usage=usage,
-        model="test-model", created=1700000000,
-    )
-
-
-def make_raw_tool_call(
-    name: str, arguments: str = "{}", tc_id: str = "tc-1",
-) -> SimpleNamespace:
-    return SimpleNamespace(
-        id=tc_id, type="function",
-        function=SimpleNamespace(name=name, arguments=arguments),
-    )
+from tests.scenarios.conftest import (
+    build_loop,
+    make_model_response,
+    make_tool_call,
+    register_tool,
+    resolved_text_input,
+)
 
 
 class TestErrorRecovery:
@@ -56,16 +38,21 @@ class TestErrorRecovery:
             "properties": {"url": {"type": "string"}},
         })
 
-        async def mock_acompletion(**kwargs: Any) -> SimpleNamespace:
+        async def mock_completion(*args: Any, **kwargs: Any):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                tc = make_raw_tool_call("web_fetch", json.dumps({"url": "https://example.com"}))
-                return make_raw_response(tool_calls=[tc])
+                return make_model_response(
+                    tool_calls=[make_tool_call(
+                        "web_fetch",
+                        '{"url": "https://example.com"}',
+                    )],
+                    finish_reason="tool_calls",
+                )
             # LLM 收到错误后给出替代回复
-            return make_raw_response(content="网络请求失败，我将使用缓存数据回答。")
+            return make_model_response(content="网络请求失败，我将使用缓存数据回答。")
 
-        mock_gateway.router.acompletion = AsyncMock(side_effect=mock_acompletion)
+        mock_gateway.complete = AsyncMock(side_effect=mock_completion)
 
         loop = build_loop(
             mock_gateway, registry, guardrails,
@@ -93,15 +80,19 @@ class TestErrorRecovery:
 
         call_count = 0
 
-        async def mock_acompletion(**kwargs: Any) -> SimpleNamespace:
+        async def mock_completion(*args: Any, **kwargs: Any):
             nonlocal call_count
             call_count += 1
             if call_count <= 2:
-                tc = make_raw_tool_call("unstable_tool", "{}", f"tc-{call_count}")
-                return make_raw_response(tool_calls=[tc])
-            return make_raw_response(content="无法完成操作")
+                return make_model_response(
+                    tool_calls=[make_tool_call(
+                        "unstable_tool", "{}", f"tc-{call_count}"
+                    )],
+                    finish_reason="tool_calls",
+                )
+            return make_model_response(content="无法完成操作")
 
-        mock_gateway.router.acompletion = AsyncMock(side_effect=mock_acompletion)
+        mock_gateway.complete = AsyncMock(side_effect=mock_completion)
 
         loop = build_loop(
             mock_gateway, registry, guardrails,
@@ -137,19 +128,25 @@ class TestErrorRecovery:
         )
         # 设置工具超时为极短时间
         entry = registry.get_entry("slow_tool")
-        entry.definition.metadata.timeout_seconds = 0.01
+        entry.definition = entry.definition.model_copy(update={
+            "metadata": entry.definition.metadata.model_copy(
+                update={"timeout_seconds": 0.01}
+            )
+        })
 
         call_count = 0
 
-        async def mock_acompletion(**kwargs: Any) -> SimpleNamespace:
+        async def mock_completion(*args: Any, **kwargs: Any):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                tc = make_raw_tool_call("slow_tool")
-                return make_raw_response(tool_calls=[tc])
-            return make_raw_response(content="工具超时，已跳过")
+                return make_model_response(
+                    tool_calls=[make_tool_call("slow_tool")],
+                    finish_reason="tool_calls",
+                )
+            return make_model_response(content="工具超时，已跳过")
 
-        mock_gateway.router.acompletion = AsyncMock(side_effect=mock_acompletion)
+        mock_gateway.complete = AsyncMock(side_effect=mock_completion)
 
         loop = build_loop(
             mock_gateway, registry, guardrails,

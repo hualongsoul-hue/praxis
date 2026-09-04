@@ -5,6 +5,7 @@
 """
 
 import re
+from collections.abc import Sequence
 from pathlib import Path
 
 from praxis.models.skills import SkillAuditResult, SkillDefinition
@@ -31,7 +32,7 @@ class SkillDiscovery:
     def __init__(self) -> None:
         self.parser = SkillParser()
 
-    def discover_skills(self, paths: list[str]) -> list[SkillDefinition]:
+    def discover_skills(self, paths: Sequence[str]) -> list[SkillDefinition]:
         """从多个路径发现技能。
 
         Args:

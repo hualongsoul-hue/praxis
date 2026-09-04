@@ -149,7 +149,7 @@ class TestSessionFactory:
             **kwargs: Any,
         ) -> AsyncGenerator[AgentEvent, None]:
             assert resolved_input is resolved
-            yield session.loop.emitter.emit("stream_test", turn=0)
+            yield session.loop.emitter.emit("turn_start", turn=0)
 
         try:
             session.input_resolver = resolver
@@ -327,7 +327,7 @@ class TestSessionFactory:
             resolved_input: ResolvedUserInput,
             **kwargs: Any,
         ) -> AsyncGenerator[AgentEvent, None]:
-            yield session.loop.emitter.emit("stream_test", turn=1)
+            yield session.loop.emitter.emit("turn_start", turn=1)
 
         stream = session.run_turn_stream("stop early")
         try:

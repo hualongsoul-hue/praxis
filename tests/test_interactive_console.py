@@ -435,28 +435,29 @@ async def test_main_wires_all_runtime_handlers_and_telemetry(tmp_path: Path) -> 
             runtime_state=RuntimeState.ACTIVE,
         )
     )
-    runtime.__aenter__ = AsyncMock(return_value=runtime)
-    runtime.__aexit__ = AsyncMock(return_value=None)
     session = MagicMock()
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=None)
     runtime.session.return_value = session
+    application = MagicMock()
+    application.__aenter__ = AsyncMock(return_value=runtime)
+    application.__aexit__ = AsyncMock(return_value=None)
 
     with (
         patch("examples.interactive_console.load_config", return_value=config),
-        patch("examples.interactive_console.configure_cli_telemetry") as telemetry,
-        patch("examples.interactive_console.PraxisRuntime", return_value=runtime) as runtime_type,
-        patch("examples.interactive_console.MetricsExporter") as exporter,
+        patch(
+            "examples.interactive_console.PraxisCliApplication",
+            return_value=application,
+        ) as application_type,
         patch("examples.interactive_console.interactive_loop", AsyncMock()) as loop,
     ):
-        exporter.return_value.__enter__.return_value = exporter.return_value
         await main(Namespace(config=tmp_path / "config.yaml", prompt=None, show_reasoning=False))
 
-    telemetry.assert_called_once_with(config.telemetry)
-    runtime_keywords = runtime_type.call_args.kwargs
-    assert isinstance(runtime_keywords["approval_handler"], ConsoleApprovalHandler)
-    assert runtime_keywords["mcp_elicitation_handler"] is handle_mcp_elicitation
-    assert runtime_keywords["mcp_sampling_review_handler"] is review_mcp_sampling
+    application_keywords = application_type.call_args.kwargs
+    runtime_options = application_keywords["runtime_options"]
+    assert isinstance(runtime_options["approval_handler"], ConsoleApprovalHandler)
+    assert runtime_options["mcp_elicitation_handler"] is handle_mcp_elicitation
+    assert runtime_options["mcp_sampling_review_handler"] is review_mcp_sampling
     loop.assert_awaited_once()
 
 

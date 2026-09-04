@@ -38,8 +38,8 @@ async def create_stdio_transport(
     """
     params = StdioServerParameters(
         command=config.command,
-        args=config.args,
-        env=config.env or None,
+        args=list(config.args),
+        env=dict(config.env) or None,
     )
     async with stdio_client(params) as (read_stream, write_stream), ClientSession(
         read_stream,

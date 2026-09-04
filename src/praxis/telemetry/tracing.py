@@ -1,6 +1,6 @@
 """复用宿主 Provider 的上下文级 OpenTelemetry 适配。"""
 
-from contextvars import ContextVar
+from contextvars import ContextVar, Token
 from typing import Any
 
 from opentelemetry import trace
@@ -27,27 +27,32 @@ class TracingLifecycle:
         tracer: Tracer,
         provider: TracerProvider | None,
         owns_provider: bool,
+        context_token: Token[Tracer | None],
     ) -> None:
         self.tracer = tracer
         self.provider = provider
         self.owns_provider = owns_provider
+        self.context_token = context_token
         self.closed = False
 
     async def close(self) -> None:
         if self.closed:
             return
         self.closed = True
-        if self.provider is not None and self.owns_provider:
-            self.provider.force_flush()
-            self.provider.shutdown()
+        try:
+            if self.provider is not None and self.owns_provider:
+                self.provider.force_flush()
+                self.provider.shutdown()
+        finally:
+            current_tracer.reset(self.context_token)
 
 
 def configure_tracing_lifecycle(config: TelemetryConfig) -> TracingLifecycle:
     """Configure context-local tracing and return its explicit lifecycle."""
     if not config.tracing_enabled or config.tracing_export == "none":
         tracer = trace.get_tracer("praxis")
-        current_tracer.set(tracer)
-        return TracingLifecycle(tracer, None, False)
+        context_token = current_tracer.set(tracer)
+        return TracingLifecycle(tracer, None, False, context_token)
 
     provider = TracerProvider()
     if config.tracing_export == "otlp":
@@ -55,8 +60,8 @@ def configure_tracing_lifecycle(config: TelemetryConfig) -> TracingLifecycle:
     else:
         provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
     tracer = provider.get_tracer("praxis")
-    current_tracer.set(tracer)
-    return TracingLifecycle(tracer, provider, True)
+    context_token = current_tracer.set(tracer)
+    return TracingLifecycle(tracer, provider, True, context_token)
 
 
 def otlp_processor(endpoint: str | None) -> Any:
@@ -68,9 +73,9 @@ def otlp_processor(endpoint: str | None) -> Any:
     return BatchSpanProcessor(exporter)
 
 
-def configure_tracing(config: TelemetryConfig) -> Tracer:
-    """为 CLI 当前上下文创建 Provider，不覆盖宿主全局 Provider。"""
-    return configure_tracing_lifecycle(config).tracer
+def configure_tracing(config: TelemetryConfig) -> TracingLifecycle:
+    """Create an explicitly owned tracing lifecycle for the current context."""
+    return configure_tracing_lifecycle(config)
 
 
 def get_tracer() -> Tracer:

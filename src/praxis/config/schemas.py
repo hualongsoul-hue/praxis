@@ -4,10 +4,13 @@
 配置 Schema 由此模块集中定义，通过 PraxisConfig 组合为顶层配置树。
 """
 
-from typing import Literal
+from collections.abc import Mapping
+from typing import Any, Literal, cast
+from urllib.parse import urlsplit
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, field_serializer, model_validator
 
+from praxis.config.immutable import FrozenMapping, freeze_mapping, thaw_value
 from praxis.models.base import SafeBaseModel
 from praxis.models.mcp import MCPServerConfig
 
@@ -18,6 +21,20 @@ class StrictConfigModel(SafeBaseModel):
     """拒绝未知字段的配置基类，避免拼写错误被静默忽略。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+    @model_validator(mode="after")
+    def freeze_nested_mappings(self) -> "StrictConfigModel":
+        """Replace every Mapping field with a recursively immutable value."""
+        for field_name in type(self).model_fields:
+            value = getattr(self, field_name)
+            if isinstance(value, Mapping) and not isinstance(value, FrozenMapping):
+                mapping = cast(Mapping[str, object], value)
+                object.__setattr__(self, field_name, freeze_mapping(mapping))
+        return self
+
+    @field_serializer("*", when_used="always")
+    def serialize_immutable_value(self, value: Any) -> Any:
+        return thaw_value(value)
 
 
 class ModelCapabilities(StrictConfigModel):
@@ -32,7 +49,7 @@ class ModelCapabilities(StrictConfigModel):
 class InputConfig(StrictConfigModel):
     """Fail-closed attachment resolution policy."""
 
-    allowed_paths: list[str] = Field(default_factory=list)
+    allowed_paths: tuple[str, ...] = ()
     remote_enabled: bool = False
     allow_private_networks: bool = False
     max_attachment_bytes: int = Field(default=20_000_000, ge=1, le=100_000_000)
@@ -59,6 +76,14 @@ class InputConfig(StrictConfigModel):
         )
     )
 
+    @model_validator(mode="after")
+    def validate_input_limits(self) -> "InputConfig":
+        if self.max_total_bytes < self.max_attachment_bytes:
+            raise ValueError("max_total_bytes 不能小于 max_attachment_bytes")
+        if self.allow_private_networks and not self.remote_enabled:
+            raise ValueError("allow_private_networks 需要 remote_enabled=true")
+        return self
+
 
 class TelemetryConfig(StrictConfigModel):
     """S2 遥测系统配置。"""
@@ -69,8 +94,8 @@ class TelemetryConfig(StrictConfigModel):
         default=None,
         description="日志输出文件路径；None 表示输出到 stderr",
     )
-    log_levels: dict[str, LogLevel] = Field(
-        default_factory=dict,
+    log_levels: Mapping[str, LogLevel] = Field(
+        default_factory=FrozenMapping,
         description="按组件独立设置日志级别，如 {'gateway': 'DEBUG'}",
     )
     metrics_enabled: bool = True
@@ -90,6 +115,12 @@ class TelemetryConfig(StrictConfigModel):
     )
     audit_enabled: bool = True
 
+    @model_validator(mode="after")
+    def validate_export_targets(self) -> "TelemetryConfig":
+        if self.metrics_enabled and self.metrics_export == "file" and not self.metrics_file:
+            raise ValueError("文件指标导出必须配置 metrics_file")
+        return self
+
 
 class PersistenceConfig(StrictConfigModel):
     """S3 持久化引擎配置。"""
@@ -98,6 +129,16 @@ class PersistenceConfig(StrictConfigModel):
     sqlite_path: str = Field(default="data/praxis.db", min_length=1)
     redis_url: str | None = None
     filesystem_path: str = Field(default="data/storage", min_length=1)
+
+    @model_validator(mode="after")
+    def validate_backend_fields(self) -> "PersistenceConfig":
+        if self.backend == "redis" and not self.redis_url:
+            raise ValueError("Redis 后端必须配置 redis_url")
+        if self.redis_url:
+            parsed = urlsplit(self.redis_url)
+            if parsed.scheme not in {"redis", "rediss"} or not parsed.hostname:
+                raise ValueError("redis_url 必须是有效的 redis:// 或 rediss:// 地址")
+        return self
 
 
 class ModelDeployment(StrictConfigModel):
@@ -112,6 +153,13 @@ class ModelDeployment(StrictConfigModel):
     default_max_output_tokens: int = Field(default=4096, ge=1)
     capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
 
+    @model_validator(mode="after")
+    def validate_api_base(self) -> "ModelDeployment":
+        parsed = urlsplit(self.api_base)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("模型 api_base 必须是有效的 HTTP/HTTPS 地址")
+        return self
+
 
 class GatewayConfig(StrictConfigModel):
     """S4 模型网关配置。
@@ -119,8 +167,8 @@ class GatewayConfig(StrictConfigModel):
     deployments 会在 LiteLLM 适配器边界转换，配置树中永不包含 API Key。
     """
 
-    deployments: list[ModelDeployment] = Field(
-        default_factory=lambda: [ModelDeployment()],
+    deployments: tuple[ModelDeployment, ...] = Field(
+        default_factory=lambda: (ModelDeployment(),),
         min_length=1,
     )
     default_model: str = "default"
@@ -146,6 +194,9 @@ class GatewayConfig(StrictConfigModel):
 
     @model_validator(mode="after")
     def validate_default_model(self) -> "GatewayConfig":
+        aliases = [item.model_name for item in self.deployments]
+        if len(aliases) != len(set(aliases)):
+            raise ValueError("模型部署别名必须唯一")
         if self.default_model not in {item.model_name for item in self.deployments}:
             raise ValueError("default_model 必须引用 deployments 中的 model_name")
         return self
@@ -154,15 +205,15 @@ class GatewayConfig(StrictConfigModel):
 class ToolsConfig(StrictConfigModel):
     """S5 工具系统配置。"""
 
-    allowed_paths: list[str] = Field(
-        default_factory=list,
+    allowed_paths: tuple[str, ...] = Field(
+        default_factory=tuple,
         description="沙箱文件系统白名单路径",
     )
     default_timeout: float = Field(default=30.0, gt=0)
     max_concurrent_readonly: int = Field(default=5, ge=1)
     shell_timeout: float = Field(default=120.0, gt=0)
     shell_enabled: bool = False
-    shell_environment_allowlist: list[str] = Field(default_factory=list)
+    shell_environment_allowlist: tuple[str, ...] = ()
     network_allowed: bool = False
     allow_private_networks: bool = False
     network_max_response_bytes: int = Field(default=1_000_000, ge=1, le=100_000_000)
@@ -173,10 +224,18 @@ class ToolsConfig(StrictConfigModel):
     search_timeout: float = Field(default=10.0, gt=0, le=300.0)
     search_max_pattern_length: int = Field(default=512, ge=1, le=4096)
     approval_timeout: float = Field(default=60.0, gt=0)
-    fallback_mappings: dict[str, str] = Field(
-        default_factory=dict,
+    fallback_mappings: Mapping[str, str] = Field(
+        default_factory=FrozenMapping,
         description="工具降级映射（首选工具名 → 降级替代工具名），S9 优雅降级使用",
     )
+
+    @model_validator(mode="after")
+    def validate_enabled_tool_boundaries(self) -> "ToolsConfig":
+        if self.shell_enabled and not self.allowed_paths:
+            raise ValueError("启用 Shell 时必须配置至少一个 allowed_paths")
+        if self.allow_private_networks and not self.network_allowed:
+            raise ValueError("allow_private_networks 需要 network_allowed=true")
+        return self
 
 
 class MemoryConfig(StrictConfigModel):
@@ -187,7 +246,7 @@ class MemoryConfig(StrictConfigModel):
     embedding_api_key_env: str | None = None
     embedding_timeout: float = Field(default=30.0, gt=0)
     embedding_dimensions: int = Field(default=256, ge=1, le=65536)
-    extraction_prompts: dict[str, str] = Field(default_factory=dict)
+    extraction_prompts: Mapping[str, str] = Field(default_factory=FrozenMapping)
     consolidation_similarity_threshold: float = Field(default=0.75, ge=0, le=1)
     background_enabled: bool = True
     background_batch_threshold: int = Field(default=3, ge=1)
@@ -196,7 +255,7 @@ class MemoryConfig(StrictConfigModel):
     dream_min_hours: float = Field(default=24.0, ge=0)
     dream_min_sessions: int = Field(default=5, ge=1)
     dream_check_interval_seconds: float = Field(default=3600.0, gt=0)
-    dream_scopes: list[str] = Field(default_factory=lambda: ["global"])
+    dream_scopes: tuple[str, ...] = ("global",)
     max_memories: int = Field(default=10000, ge=1)
     decay_enabled: bool = True
     decay_half_life_days: float = Field(default=30.0, gt=0)
@@ -204,6 +263,18 @@ class MemoryConfig(StrictConfigModel):
     project_root: str | None = None
     project_name: str | None = None
     load_project_praxis_md: bool = True
+
+    @model_validator(mode="after")
+    def validate_embedding_endpoint(self) -> "MemoryConfig":
+        if self.embedding_api_base:
+            parsed = urlsplit(self.embedding_api_base)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                raise ValueError("embedding_api_base 必须是有效的 HTTP/HTTPS 地址")
+        elif self.embedding_model or self.embedding_api_key_env:
+            raise ValueError(
+                "embedding_model 和 embedding_api_key_env 需要 embedding_api_base"
+            )
+        return self
 
 
 class ContextConfig(StrictConfigModel):
@@ -277,8 +348,8 @@ class SubagentConfig(StrictConfigModel):
 class SkillsConfig(StrictConfigModel):
     """S14 技能系统配置。"""
 
-    skill_paths: list[str] = Field(
-        default_factory=lambda: [".praxis/skills", "~/.praxis/skills"],
+    skill_paths: tuple[str, ...] = Field(
+        default_factory=lambda: (".praxis/skills", "~/.praxis/skills"),
     )
     auto_discover: bool = True
     max_skills_in_context: int = Field(default=10, ge=1)
@@ -290,9 +361,7 @@ class MCPConfig(StrictConfigModel):
     enabled: bool = False
     connect_timeout: float = Field(default=30.0, gt=0)
     sampling_enabled: bool = True
-    servers: list[MCPServerConfig] = Field(
-        default_factory=lambda: list[MCPServerConfig](),
-    )
+    servers: tuple[MCPServerConfig, ...] = ()
 
     @model_validator(mode="after")
     def validate_enabled_servers(self) -> "MCPConfig":

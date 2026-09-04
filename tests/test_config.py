@@ -10,7 +10,15 @@ from praxis.config import (
     get_component_config,
     load_config,
 )
-from praxis.config.schemas import GatewayConfig, MCPConfig, TelemetryConfig, ToolsConfig
+from praxis.config.schemas import (
+    GatewayConfig,
+    MCPConfig,
+    MemoryConfig,
+    ModelDeployment,
+    PersistenceConfig,
+    TelemetryConfig,
+    ToolsConfig,
+)
 from praxis.exceptions import ConfigError, ModelValidationError
 from praxis.models.mcp import MCPServerConfig, MCPTransportType
 
@@ -180,3 +188,77 @@ class TestValidation:
     def test_mcp_transport_requires_its_endpoint(self, server: MCPServerConfig) -> None:
         with pytest.raises(ModelValidationError):
             MCPServerConfig(**server.model_dump())
+
+    def test_nested_configuration_collections_are_immutable(self) -> None:
+        config = PraxisConfig(
+            telemetry=TelemetryConfig(log_levels={"gateway": "DEBUG"}),
+            tools=ToolsConfig(fallback_mappings={"primary": "fallback"}),
+            mcp=MCPConfig(
+                enabled=True,
+                servers=[MCPServerConfig(name="local", command="python")],
+            ),
+        )
+        with pytest.raises(AttributeError):
+            config.gateway.deployments.append(ModelDeployment())
+        with pytest.raises(TypeError):
+            config.telemetry.log_levels["gateway"] = "INFO"  # type: ignore[index]
+        with pytest.raises(TypeError):
+            config.tools.fallback_mappings["primary"] = "other"  # type: ignore[index]
+        with pytest.raises(TypeError):
+            config.mcp.servers[0].headers["Authorization"] = "value"  # type: ignore[index]
+        assert "gateway" in config.model_dump_json()
+
+    def test_duplicate_model_aliases_are_rejected(self) -> None:
+        with pytest.raises(ModelValidationError):
+            GatewayConfig(deployments=[ModelDeployment(), ModelDeployment()])
+
+    def test_incomplete_backend_and_export_configs_are_rejected(self) -> None:
+        with pytest.raises(ModelValidationError):
+            PersistenceConfig(backend="redis")
+        with pytest.raises(ModelValidationError):
+            PersistenceConfig(backend="redis", redis_url="https://cache.example.com")
+        with pytest.raises(ModelValidationError):
+            TelemetryConfig(metrics_enabled=True, metrics_export="file", metrics_file=None)
+
+    def test_dependent_network_and_embedding_fields_are_rejected(self) -> None:
+        with pytest.raises(ModelValidationError):
+            ToolsConfig(allow_private_networks=True)
+        with pytest.raises(ModelValidationError):
+            MemoryConfig(embedding_model="orphaned-model")
+        with pytest.raises(ModelValidationError):
+            MemoryConfig(embedding_api_base="file:///tmp/embed")
+
+    def test_paths_are_anchored_to_the_configuration_directory(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        config_directory = tmp_path / "config"
+        other_directory = tmp_path / "other"
+        config_directory.mkdir()
+        other_directory.mkdir()
+        config_file = config_directory / "praxis.yaml"
+        config_file.write_text(
+            textwrap.dedent("""\
+                persistence:
+                  sqlite_path: ./state/praxis.db
+                tools:
+                  allowed_paths: [./workspace]
+                telemetry:
+                  metrics_file: ./metrics/praxis.prom
+            """),
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(other_directory)
+
+        config = load_config(config_file)
+
+        assert Path(config.persistence.sqlite_path) == (
+            config_directory / "state" / "praxis.db"
+        ).resolve()
+        assert Path(config.tools.allowed_paths[0]) == (
+            config_directory / "workspace"
+        ).resolve()
+        assert Path(config.telemetry.metrics_file or "") == (
+            config_directory / "metrics" / "praxis.prom"
+        ).resolve()

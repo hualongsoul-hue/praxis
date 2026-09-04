@@ -142,7 +142,7 @@ def test_user_input_requires_text_or_attachment() -> None:
 
 def test_input_config_fails_closed() -> None:
     config = InputConfig()
-    assert config.allowed_paths == []
+    assert config.allowed_paths == ()
     assert config.remote_enabled is False
     assert config.allow_private_networks is False
     assert config.max_attachment_bytes == 20_000_000

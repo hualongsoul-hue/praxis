@@ -93,7 +93,10 @@ async def authenticate_server_config(
     headers = auth_manager.get_auth_headers(config.name)
     if not headers:
         return config
-    return config.model_copy(update={"headers": {**config.headers, **headers}})
+    return MCPServerConfig.model_validate({
+        **config.model_dump(mode="python"),
+        "headers": {**config.headers, **headers},
+    })
 
 
 async def connect_mcp_servers(

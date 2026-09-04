@@ -25,26 +25,26 @@ from praxis.models.recovery import (
     RecoveryStrategy,
 )
 
-TRANSIENT_TYPES: set[type] = {
+TRANSIENT_TYPES: frozenset[type[Exception]] = frozenset({
     GatewayTimeoutError,
     RateLimitError,
     ProviderUnavailableError,
     ToolTimeoutError,
-}
+})
 
-MODEL_RECOVERABLE_TYPES: set[type] = {
+MODEL_RECOVERABLE_TYPES: frozenset[type[Exception]] = frozenset({
     ToolNotFoundError,
     ToolExecutionError,
     ContextWindowExceededError,
     ModelNotFoundError,
-}
+})
 
-USER_FIXABLE_TYPES: set[type] = {
+USER_FIXABLE_TYPES: frozenset[type[Exception]] = frozenset({
     AuthenticationError,
     BudgetExceededError,
     ToolPolicyViolationError,
     GuardrailError,
-}
+})
 
 
 def classify_by_type_name(

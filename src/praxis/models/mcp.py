@@ -1,11 +1,13 @@
 """MCP 集成数据模型——S5 MCP 组件共享类型。"""
 
+from collections.abc import Mapping
 from enum import StrEnum
 from typing import Any
 from urllib.parse import urlsplit
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import ConfigDict, Field, field_serializer, model_validator
 
+from praxis.config.immutable import FrozenMapping, freeze_mapping, thaw_value
 from praxis.models.base import SafeBaseModel
 
 
@@ -34,10 +36,10 @@ class MCPServerConfig(SafeBaseModel):
     name: str = Field(min_length=1)
     transport: MCPTransportType = MCPTransportType.STDIO
     command: str = ""
-    args: list[str] = Field(default_factory=list)
-    env: dict[str, str] = Field(default_factory=dict)
+    args: tuple[str, ...] = ()
+    env: Mapping[str, str] = Field(default_factory=FrozenMapping)
     url: str = ""
-    headers: dict[str, str] = Field(default_factory=dict)
+    headers: Mapping[str, str] = Field(default_factory=FrozenMapping)
     timeout: float = Field(default=30.0, gt=0, le=300.0)
     reconnect_attempts: int = Field(default=3, ge=0, le=20)
     reconnect_delay: float = Field(default=1.0, ge=0, le=60.0)
@@ -51,7 +53,7 @@ class MCPServerConfig(SafeBaseModel):
                 raise ValueError("stdio MCP Server 必须配置 command")
             if self.url:
                 raise ValueError("stdio MCP Server 不允许配置 url")
-            return self
+            return self.freeze_config_mappings()
 
         if not self.url.strip():
             raise ValueError("HTTP MCP Server 必须配置 url")
@@ -60,7 +62,16 @@ class MCPServerConfig(SafeBaseModel):
             raise ValueError("HTTP MCP Server url 必须是有效的 HTTP/HTTPS 地址")
         if self.command or self.args or self.env:
             raise ValueError("HTTP MCP Server 不允许配置 command、args 或 env")
+        return self.freeze_config_mappings()
+
+    def freeze_config_mappings(self) -> "MCPServerConfig":
+        object.__setattr__(self, "env", freeze_mapping(self.env))
+        object.__setattr__(self, "headers", freeze_mapping(self.headers))
         return self
+
+    @field_serializer("env", "headers", when_used="always")
+    def serialize_config_mapping(self, value: Mapping[str, str]) -> object:
+        return thaw_value(value)
 
 
 class MCPResourceInfo(SafeBaseModel):

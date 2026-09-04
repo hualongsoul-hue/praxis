@@ -36,12 +36,12 @@ from praxis import (
     VideoInput,
     load_config,
 )
+from praxis.bootstrap import PraxisCliApplication
 from praxis.exceptions import PraxisError
 from praxis.models.mcp import MCPElicitationRequest, MCPElicitationResponse
 from praxis.models.orchestrator import AgentEvent
 from praxis.models.runtime import RuntimeHealth
 from praxis.models.tools import ApprovalDecision, ApprovalRequest
-from praxis.telemetry import MetricsExporter, configure_cli_telemetry
 
 EXAMPLE_CONFIG_PATH = Path(__file__).resolve().with_name("config.yaml")
 ATTACHMENT_TYPES: dict[str, type[AttachmentInput]] = {
@@ -395,24 +395,25 @@ async def main(arguments: argparse.Namespace) -> None:
 
     try:
         config = load_config(arguments.config)
-        configure_cli_telemetry(config.telemetry)
         approval_handler = ConsoleApprovalHandler()
-        async with PraxisRuntime(
+        async with PraxisCliApplication(
             config,
-            approval_handler=approval_handler,
-            mcp_elicitation_handler=handle_mcp_elicitation,
-            mcp_sampling_review_handler=review_mcp_sampling,
+            runtime_factory=PraxisRuntime,
+            runtime_options={
+                "approval_handler": approval_handler,
+                "mcp_elicitation_handler": handle_mcp_elicitation,
+                "mcp_sampling_review_handler": review_mcp_sampling,
+            },
         ) as runtime:
-            with MetricsExporter(runtime.metrics, config.telemetry):
-                health = await runtime.health()
-                print_health(health)
-                async with runtime.session() as session:
-                    await interactive_loop(
-                        runtime,
-                        session,
-                        arguments.prompt,
-                        arguments.show_reasoning,
-                    )
+            health = await runtime.health()
+            print_health(health)
+            async with runtime.session() as session:
+                await interactive_loop(
+                    runtime,
+                    session,
+                    arguments.prompt,
+                    arguments.show_reasoning,
+                )
     except (PraxisError, OSError, ValueError) as error:
         print(f"[startup error] {format_error(error)}", file=sys.stderr)
         raise SystemExit(2) from error

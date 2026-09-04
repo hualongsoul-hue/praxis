@@ -4,6 +4,7 @@
 按类型实例化 SemanticMemory/EpisodicMemory/ProceduralMemory 保留结构化字段。
 """
 
+from collections.abc import Mapping
 from typing import Any, cast
 
 from json_repair import repair_json
@@ -85,7 +86,7 @@ class MemoryExtractor:
         self,
         gateway: ModelGateway,
         model: str | None = None,
-        prompts: dict[str, str] | None = None,
+        prompts: Mapping[str, str] | None = None,
     ) -> None:
         self.gateway = gateway
         self.model = model

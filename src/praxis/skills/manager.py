@@ -6,6 +6,7 @@ register_skill/unregister_skill 运行时热加载，
 索引缓存通过 S3 持久化。
 """
 
+from collections.abc import Sequence
 from typing import Any, cast
 
 from praxis.config.schemas import SkillsConfig
@@ -49,7 +50,7 @@ class SkillManager:
         self.versions: dict[str, dict[str, SkillDefinition]] = {}
         self.usage_stats: dict[str, dict[str, int]] = {}
 
-    async def initialize(self, paths: list[str]) -> list[SkillDefinition]:
+    async def initialize(self, paths: Sequence[str]) -> list[SkillDefinition]:
         """启动时初始化：发现并注册所有技能。
 
         Args:

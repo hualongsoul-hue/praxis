@@ -10,8 +10,8 @@ from pathlib import Path
 from typing import cast
 
 from praxis import PraxisRuntime, __version__, load_config
+from praxis.bootstrap import PraxisCliApplication
 from praxis.config.settings import PraxisConfig
-from praxis.persistence.store import create_store
 
 SECRET_CONFIG_KEYS = frozenset({
     "api_key",
@@ -79,33 +79,26 @@ async def doctor_command(args: argparse.Namespace) -> int:
         print(f"[FAILED] config: {type(exc).__name__}: {exc}")
         return 1
 
-    failed = False
     print("[READY] config: 严格配置有效")
     key_name = config.gateway.deployments[0].api_key_env
     if os.environ.get(key_name):
         print(f"[READY] model_credentials: {key_name} 已设置")
     else:
-        failed = True
         print(f"[FAILED] model_credentials: 缺少 {key_name}")
+        return 1
 
-    store = None
     try:
-        store = await create_store(config.persistence)
-        await store.list_keys("_praxis_doctor")
+        async with PraxisCliApplication(
+            config,
+            runtime_factory=PraxisRuntime,
+        ) as runtime:
+            health = await runtime.health()
     except Exception as exc:
-        failed = True
-        print(f"[FAILED] storage: {type(exc).__name__}")
-    else:
-        print("[READY] storage: 可读写后端已初始化")
-    finally:
-        if store is not None:
-            await store.close()
-
-    if config.memory.embedding_api_base is None:
-        print("[DEGRADED] embedding: 使用确定性本地词法检索")
-    else:
-        print("[READY] embedding: 远程 Provider 已配置")
-    return 1 if failed else 0
+        print(f"[FAILED] runtime: {type(exc).__name__}")
+        return 1
+    for name, component in health.components.items():
+        print(f"[{component.status.value.upper()}] {name}: {component.detail}")
+    return 1 if health.status.value == "failed" else 0
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
@@ -114,7 +107,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 async def chat_command(args: argparse.Namespace) -> int:
     config = load_cli_config(config_path_argument(args))
-    async with PraxisRuntime(config) as runtime:
+    async with PraxisCliApplication(
+        config,
+        runtime_factory=PraxisRuntime,
+    ) as runtime:
         async with runtime.session() as session:
             while True:
                 try:
