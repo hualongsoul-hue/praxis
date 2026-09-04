@@ -210,6 +210,7 @@ class PraxisRuntime:
         verifier_registry = VerifierRegistry.from_config(
             self.config.verification,
             gateway=cast(Any, self.gateway),
+            policy=session.loop.coordinator.executor.sandbox,
         )
         session.verifier_registry = verifier_registry
         session.loop.verifier_registry = verifier_registry

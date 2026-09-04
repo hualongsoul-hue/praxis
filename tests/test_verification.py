@@ -1,6 +1,8 @@
 """S10 验证引擎验证测试。"""
 
+import sys
 import textwrap
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -57,8 +59,8 @@ class TestLintVerifier:
     async def test_file_not_found(self) -> None:
         v = LintVerifier()
         result = await v.verify({"file": "/nonexistent/path.py"})
-        assert result.status == VerificationStatus.FAIL
-        assert result.failures[0].rule == "file_not_found"
+        assert result.status == VerificationStatus.ERROR
+        assert result.feedback
 
     async def test_valid_file(self, tmp_path) -> None:
         f = tmp_path / "good.py"
@@ -74,6 +76,15 @@ class TestLintVerifier:
         result = await v.verify({"file": str(f)})
         assert result.status == VerificationStatus.FAIL
         assert result.failures[0].line is not None
+
+    async def test_real_ruff_failure_is_not_reported_as_pass(self, tmp_path: Path) -> None:
+        source = tmp_path / "unused.py"
+        source.write_text("import os\n", encoding="utf-8")
+
+        result = await LintVerifier(tool="ruff").verify({"file": str(source)})
+
+        assert result.status is VerificationStatus.FAIL
+        assert any(item.rule == "F401" for item in result.failures)
 
     def test_parse_lint_output(self) -> None:
         output = textwrap.dedent("""\
@@ -126,14 +137,46 @@ class TestTypeCheckVerifier:
         result = await v.verify({"code": "def f(:\n"})
         assert result.status == VerificationStatus.FAIL
 
+    async def test_real_pyright_semantic_error_fails(self, tmp_path: Path) -> None:
+        source = tmp_path / "typed.py"
+        source.write_text('value: int = "wrong"\n', encoding="utf-8")
+
+        result = await TypeCheckVerifier(tool="pyright").verify({"file": str(source)})
+
+        assert result.status is VerificationStatus.FAIL
+        assert result.failures
+
 
 class TestSuiteTestVerifier:
     """测试套件验证器测试。"""
 
-    async def test_verify_returns_metadata(self) -> None:
-        v = SuiteTestVerifier()
-        result = await v.verify({"path": "tests/"})
-        assert result.metadata.get("command") is not None
+    async def test_verify_executes_command_and_reports_failure(self, tmp_path: Path) -> None:
+        verifier = SuiteTestVerifier()
+
+        result = await verifier.verify({
+            "path": str(tmp_path),
+            "command": [sys.executable, "-c", "raise SystemExit(7)"],
+        })
+
+        assert result.status is VerificationStatus.FAIL
+        assert result.metadata["exit_code"] == 7
+
+    async def test_verify_reports_missing_executable_as_error(self, tmp_path: Path) -> None:
+        result = await SuiteTestVerifier().verify({
+            "path": str(tmp_path),
+            "command": [str(tmp_path / "missing-program")],
+        })
+
+        assert result.status is VerificationStatus.ERROR
+
+    async def test_verify_enforces_timeout(self, tmp_path: Path) -> None:
+        result = await SuiteTestVerifier(timeout=0.01).verify({
+            "path": str(tmp_path),
+            "command": [sys.executable, "-c", "import time; time.sleep(10)"],
+        })
+
+        assert result.status is VerificationStatus.ERROR
+        assert "超时" in result.feedback
 
     def test_parse_pytest_output_pass(self) -> None:
         result = SuiteTestVerifier.parse_pytest_output("5 passed\n", 0)
@@ -314,6 +357,18 @@ class TestVerifierRegistry:
         assert entry is not None
         assert entry.verification_type == VerificationType.COMPUTATIONAL
 
+    def test_from_config_registers_enabled_builtins(self) -> None:
+        from praxis.config.schemas import VerificationConfig
+
+        registry = VerifierRegistry.from_config(VerificationConfig())
+
+        assert {entry.verifier.name for entry in registry.list_verifiers()} == {
+            "lint_ruff",
+            "schema",
+            "test_suite",
+            "typecheck_pyright",
+        }
+
     def test_unregister(self) -> None:
         reg = VerifierRegistry()
         reg.register(LintVerifier())
@@ -377,7 +432,7 @@ class TestVerifierRegistry:
         reg.register(LintVerifier(), phases=[QualityPhase.PRE_INTEGRATION])
         reg.register(TypeCheckVerifier(), phases=[QualityPhase.PRE_INTEGRATION])
         names = reg.get_phase_config(QualityPhase.PRE_INTEGRATION)
-        assert set(names) == {"lint_ruff", "typecheck_mypy"}
+        assert set(names) == {"lint_ruff", "typecheck_pyright"}
 
     async def test_run_inferential_via_registry(self) -> None:
         """注册表持有网关时，可驱动推理型验证。"""

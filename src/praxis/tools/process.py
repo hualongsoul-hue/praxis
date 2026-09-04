@@ -65,6 +65,55 @@ class ProcessRunner:
             stderr_bytes.decode("utf-8", errors="replace").rstrip(),
         )
 
+    async def run_exec(
+        self,
+        command: list[str] | tuple[str, ...],
+        *,
+        cwd: Path,
+        timeout: float,
+        environment: dict[str, str],
+    ) -> ProcessResult:
+        """Execute an argument vector without invoking a command shell."""
+        if not command or not command[0].strip():
+            raise ValueError("命令参数不能为空")
+        if os.name == "nt":
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(cwd),
+                env=environment,
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+            )
+        else:
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=str(cwd),
+                env=environment,
+                start_new_session=True,
+            )
+        try:
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                process.communicate(),
+                timeout=timeout,
+            )
+        except TimeoutError:
+            await self.terminate_process_tree(process)
+            raise ToolTimeoutError(
+                f"命令执行超时（{timeout}s）",
+                details={"timeout": timeout},
+            ) from None
+        except asyncio.CancelledError:
+            await asyncio.shield(self.terminate_process_tree(process))
+            raise
+        return ProcessResult(
+            process.returncode or 0,
+            stdout_bytes.decode("utf-8", errors="replace").rstrip(),
+            stderr_bytes.decode("utf-8", errors="replace").rstrip(),
+        )
+
     @staticmethod
     async def terminate_process_tree(process: asyncio.subprocess.Process) -> None:
         if process.returncode is not None:

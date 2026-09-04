@@ -4,11 +4,17 @@
 内置：测试套件、类型检查、Lint、Schema 校验。
 """
 
+import json
+import os
+import re
+import tempfile
 import time
-from typing import Any, Protocol, runtime_checkable
+from pathlib import Path
+from typing import Any, Protocol, cast, runtime_checkable
 
 import jsonschema
 
+from praxis.exceptions import ToolPolicyViolationError, ToolTimeoutError
 from praxis.models.verification import (
     FailureDetail,
     VerificationResult,
@@ -17,6 +23,8 @@ from praxis.models.verification import (
 )
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
+from praxis.tools.policy import ToolPolicy
+from praxis.tools.process import ProcessResult, ProcessRunner
 
 log = get_logger("verification.computational")
 
@@ -38,8 +46,18 @@ class LintVerifier:
     解析结构化输出。
     """
 
-    def __init__(self, tool: str = "ruff") -> None:
+    def __init__(
+        self,
+        tool: str = "ruff",
+        *,
+        runner: ProcessRunner | None = None,
+        policy: ToolPolicy | None = None,
+        timeout: float = 30.0,
+    ) -> None:
         self.tool = tool
+        self.runner = runner or ProcessRunner()
+        self.policy = policy
+        self.timeout = timeout
 
     @property
     def name(self) -> str:
@@ -61,20 +79,50 @@ class LintVerifier:
 
         if not file_path and not code:
             return VerificationResult(
-                status=VerificationStatus.ERROR,
+                status=(
+                    VerificationStatus.SKIP
+                    if set(target) == {"tool_outcomes"}
+                    else VerificationStatus.ERROR
+                ),
                 verification_type=VerificationType.COMPUTATIONAL,
                 verifier_name=self.name,
                 feedback="缺少 file 或 code 参数",
                 duration_ms=(time.perf_counter() - start) * 1000,
             )
 
-        if code:
-            failures = self.check_syntax(code, file_path or "<inline>")
-        else:
-            failures = await self.run_lint(file_path)
+        temporary: tempfile.TemporaryDirectory[str] | None = None
+        try:
+            if code:
+                syntax_failures = self.check_syntax(str(code), file_path or "<inline>")
+                if syntax_failures:
+                    return VerificationResult(
+                        status=VerificationStatus.FAIL,
+                        verification_type=VerificationType.COMPUTATIONAL,
+                        verifier_name=self.name,
+                        failures=syntax_failures,
+                        feedback=f"{len(syntax_failures)} 个问题",
+                        duration_ms=(time.perf_counter() - start) * 1000,
+                    )
+                temporary = tempfile.TemporaryDirectory(prefix="praxis-lint-")
+                lint_path = Path(temporary.name) / (Path(file_path).name or "inline.py")
+                lint_path.write_text(str(code), encoding="utf-8")
+            else:
+                lint_path = self.resolve_path(str(file_path))
+            process = await self.runner.run_exec(
+                [self.tool, "check", "--output-format", "concise", str(lint_path)],
+                cwd=lint_path.parent,
+                timeout=self.timeout,
+                environment=dict(os.environ),
+            )
+            failures = self.parse_lint_output(process.stdout or process.stderr)
+            status = self.process_status(process)
+        except (OSError, ValueError, ToolPolicyViolationError, ToolTimeoutError) as exc:
+            return self.error_result(str(exc), start)
+        finally:
+            if temporary is not None:
+                temporary.cleanup()
 
         elapsed = (time.perf_counter() - start) * 1000
-        status = VerificationStatus.PASS if not failures else VerificationStatus.FAIL
 
         emit_metric(
             "verification_computational",
@@ -89,6 +137,29 @@ class LintVerifier:
             failures=failures,
             feedback=f"{len(failures)} 个问题" if failures else "通过",
             duration_ms=elapsed,
+        )
+
+    def resolve_path(self, file_path: str) -> Path:
+        path = Path(file_path).expanduser().resolve()
+        if self.policy is not None:
+            return self.policy.check_path(path)
+        return path
+
+    @staticmethod
+    def process_status(process: ProcessResult) -> VerificationStatus:
+        if process.returncode == 0:
+            return VerificationStatus.PASS
+        if process.returncode == 1:
+            return VerificationStatus.FAIL
+        return VerificationStatus.ERROR
+
+    def error_result(self, feedback: str, start: float) -> VerificationResult:
+        return VerificationResult(
+            status=VerificationStatus.ERROR,
+            verification_type=VerificationType.COMPUTATIONAL,
+            verifier_name=self.name,
+            feedback=feedback,
+            duration_ms=(time.perf_counter() - start) * 1000,
         )
 
     @staticmethod
@@ -155,32 +226,16 @@ class LintVerifier:
         """
         failures: list[FailureDetail] = []
         for line in output.strip().splitlines():
-            parts = line.split(":", maxsplit=3)
-            if len(parts) < 4:
+            match = re.match(r"^(.*?):(\d+):(\d+):\s+([^\s]+)\s+(.*)$", line)
+            if match is None:
                 continue
-            file_name = parts[0].strip()
-            try:
-                line_no = int(parts[1].strip())
-                col_no = int(parts[2].strip())
-            except ValueError:
-                continue
-            rest = parts[3].strip()
-            rule_code = ""
-            msg = rest
-            if " " in rest:
-                maybe_code, maybe_msg = rest.split(" ", maxsplit=1)
-                if maybe_code.isalnum() or (
-                    len(maybe_code) <= 10 and maybe_code[0].isalpha()
-                ):
-                    rule_code = maybe_code
-                    msg = maybe_msg
             failures.append(FailureDetail(
-                file=file_name,
-                line=line_no,
-                column=col_no,
-                message=msg,
+                file=match.group(1).strip(),
+                line=int(match.group(2)),
+                column=int(match.group(3)),
+                message=match.group(5).strip(),
                 severity="warning",
-                rule=rule_code,
+                rule=match.group(4).strip(),
             ))
         return failures
 
@@ -188,8 +243,18 @@ class LintVerifier:
 class TypeCheckVerifier:
     """类型检查验证器——通过 mypy/pyright 检查类型。"""
 
-    def __init__(self, tool: str = "mypy") -> None:
+    def __init__(
+        self,
+        tool: str = "pyright",
+        *,
+        runner: ProcessRunner | None = None,
+        policy: ToolPolicy | None = None,
+        timeout: float = 30.0,
+    ) -> None:
         self.tool = tool
+        self.runner = runner or ProcessRunner()
+        self.policy = policy
+        self.timeout = timeout
 
     @property
     def name(self) -> str:
@@ -210,19 +275,54 @@ class TypeCheckVerifier:
 
         if not file_path and not code:
             return VerificationResult(
-                status=VerificationStatus.ERROR,
+                status=(
+                    VerificationStatus.SKIP
+                    if set(target) == {"tool_outcomes"}
+                    else VerificationStatus.ERROR
+                ),
                 verification_type=VerificationType.COMPUTATIONAL,
                 verifier_name=self.name,
                 feedback="缺少 file 或 code 参数",
                 duration_ms=(time.perf_counter() - start) * 1000,
             )
 
-        failures: list[FailureDetail] = []
-        if code:
-            failures = LintVerifier.check_syntax(code, file_path or "<inline>")
+        temporary: tempfile.TemporaryDirectory[str] | None = None
+        try:
+            if code:
+                temporary = tempfile.TemporaryDirectory(prefix="praxis-types-")
+                checked_path = Path(temporary.name) / (Path(file_path).name or "inline.py")
+                checked_path.write_text(str(code), encoding="utf-8")
+            else:
+                checked_path = Path(str(file_path)).expanduser().resolve()
+                if self.policy is not None:
+                    checked_path = self.policy.check_path(checked_path)
+            command = [self.tool, "--outputjson", str(checked_path)]
+            process = await self.runner.run_exec(
+                command,
+                cwd=checked_path.parent,
+                timeout=self.timeout,
+                environment=dict(os.environ),
+            )
+            failures = self.parse_output(process.stdout or process.stderr)
+            if process.returncode == 0:
+                status = VerificationStatus.PASS
+            elif process.returncode == 1:
+                status = VerificationStatus.FAIL
+            else:
+                status = VerificationStatus.ERROR
+        except (OSError, ValueError, ToolPolicyViolationError, ToolTimeoutError) as exc:
+            return VerificationResult(
+                status=VerificationStatus.ERROR,
+                verification_type=VerificationType.COMPUTATIONAL,
+                verifier_name=self.name,
+                feedback=str(exc),
+                duration_ms=(time.perf_counter() - start) * 1000,
+            )
+        finally:
+            if temporary is not None:
+                temporary.cleanup()
 
         elapsed = (time.perf_counter() - start) * 1000
-        status = VerificationStatus.PASS if not failures else VerificationStatus.FAIL
         return VerificationResult(
             status=status,
             verification_type=VerificationType.COMPUTATIONAL,
@@ -231,6 +331,44 @@ class TypeCheckVerifier:
             feedback=f"{len(failures)} 个问题" if failures else "通过",
             duration_ms=elapsed,
         )
+
+    @staticmethod
+    def parse_output(output: str) -> list[FailureDetail]:
+        try:
+            decoded: object = json.loads(output)
+        except json.JSONDecodeError:
+            return [FailureDetail(message=output[:4000], rule="typecheck_error")] if output else []
+        if not isinstance(decoded, dict):
+            return []
+        payload = cast(dict[str, object], decoded)
+        diagnostics_value = payload.get("generalDiagnostics", [])
+        if not isinstance(diagnostics_value, list):
+            return []
+        diagnostics = cast(list[object], diagnostics_value)
+        failures: list[FailureDetail] = []
+        for diagnostic_value in diagnostics:
+            if not isinstance(diagnostic_value, dict):
+                continue
+            diagnostic = cast(dict[str, object], diagnostic_value)
+            range_value = diagnostic.get("range", {})
+            range_mapping = (
+                cast(dict[str, object], range_value) if isinstance(range_value, dict) else {}
+            )
+            start_value = range_mapping.get("start", {})
+            start_mapping = (
+                cast(dict[str, object], start_value) if isinstance(start_value, dict) else {}
+            )
+            line = start_mapping.get("line")
+            character = start_mapping.get("character")
+            failures.append(FailureDetail(
+                file=str(diagnostic.get("file", "")),
+                line=int(line) + 1 if isinstance(line, int) else None,
+                column=int(character) + 1 if isinstance(character, int) else None,
+                message=str(diagnostic.get("message", "类型检查失败")),
+                severity=str(diagnostic.get("severity", "error")),
+                rule=str(diagnostic.get("rule", "type_error")),
+            ))
+        return failures
 
 
 class SchemaVerifier:
@@ -255,7 +393,11 @@ class SchemaVerifier:
 
         if schema is None:
             return VerificationResult(
-                status=VerificationStatus.ERROR,
+                status=(
+                    VerificationStatus.SKIP
+                    if set(target) == {"tool_outcomes"}
+                    else VerificationStatus.ERROR
+                ),
                 verification_type=VerificationType.COMPUTATIONAL,
                 verifier_name=self.name,
                 feedback="缺少 schema 参数",
@@ -288,8 +430,18 @@ class SchemaVerifier:
 class SuiteTestVerifier:
     """测试套件验证器——通过 S5 执行测试命令，解析结果。"""
 
-    def __init__(self, command: str = "pytest --tb=short -q") -> None:
+    def __init__(
+        self,
+        command: tuple[str, ...] = ("pytest", "--tb=short", "-q"),
+        *,
+        runner: ProcessRunner | None = None,
+        policy: ToolPolicy | None = None,
+        timeout: float = 120.0,
+    ) -> None:
         self.command = command
+        self.runner = runner or ProcessRunner()
+        self.policy = policy
+        self.timeout = timeout
 
     @property
     def name(self) -> str:
@@ -305,18 +457,64 @@ class SuiteTestVerifier:
             验证结果。
         """
         start = time.perf_counter()
-        test_path = target.get("path", "tests/")
-        command = target.get("command", self.command)
-
-        elapsed = (time.perf_counter() - start) * 1000
-        return VerificationResult(
-            status=VerificationStatus.PASS,
-            verification_type=VerificationType.COMPUTATIONAL,
-            verifier_name=self.name,
-            feedback=f"测试套件（{test_path}）需通过 S5 工具系统执行: {command}",
-            metadata={"command": command, "path": test_path},
-            duration_ms=elapsed,
+        if target and "path" not in target and "command" not in target:
+            return VerificationResult(
+                status=VerificationStatus.SKIP,
+                verification_type=VerificationType.COMPUTATIONAL,
+                verifier_name=self.name,
+                feedback="目标不包含测试套件请求",
+                duration_ms=(time.perf_counter() - start) * 1000,
+            )
+        test_path = str(target.get("path", "."))
+        command_value: object = target.get("command", self.command)
+        command = self.parse_command(command_value)
+        if command is None:
+            return VerificationResult(
+                status=VerificationStatus.ERROR,
+                verification_type=VerificationType.COMPUTATIONAL,
+                verifier_name=self.name,
+                feedback="测试命令必须是字符串参数列表",
+                duration_ms=(time.perf_counter() - start) * 1000,
+            )
+        try:
+            path = Path(test_path).expanduser().resolve()
+            if self.policy is not None:
+                path = self.policy.check_path(path)
+            process = await self.runner.run_exec(
+                command,
+                cwd=path,
+                timeout=self.timeout,
+                environment=dict(os.environ),
+            )
+        except (OSError, ValueError, ToolPolicyViolationError, ToolTimeoutError) as exc:
+            return VerificationResult(
+                status=VerificationStatus.ERROR,
+                verification_type=VerificationType.COMPUTATIONAL,
+                verifier_name=self.name,
+                feedback=str(exc),
+                metadata={"path": test_path},
+                duration_ms=(time.perf_counter() - start) * 1000,
+            )
+        parsed = self.parse_pytest_output(
+            "\n".join(item for item in (process.stdout, process.stderr) if item),
+            process.returncode,
         )
+        parsed.metadata = {
+            "command": command,
+            "path": str(path),
+            "exit_code": process.returncode,
+        }
+        parsed.duration_ms = (time.perf_counter() - start) * 1000
+        return parsed
+
+    @staticmethod
+    def parse_command(value: object) -> list[str] | None:
+        if not isinstance(value, (list, tuple)):
+            return None
+        items = cast(list[object] | tuple[object, ...], value)
+        if not items or not all(isinstance(item, str) and item for item in items):
+            return None
+        return [cast(str, item) for item in items]
 
     @staticmethod
     def parse_pytest_output(output: str, exit_code: int) -> VerificationResult:

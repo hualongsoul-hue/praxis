@@ -16,7 +16,16 @@ from praxis.models.verification import (
     VerificationType,
 )
 from praxis.telemetry.logger import get_logger
-from praxis.verification.computational import Verifier, run_computational
+from praxis.tools.policy import ToolPolicy
+from praxis.tools.process import ProcessRunner
+from praxis.verification.computational import (
+    LintVerifier,
+    SchemaVerifier,
+    SuiteTestVerifier,
+    TypeCheckVerifier,
+    Verifier,
+    run_computational,
+)
 from praxis.verification.inferential import run_inferential
 
 log = get_logger("verification.registry")
@@ -61,14 +70,22 @@ class VerifierRegistry:
         cls,
         config: VerificationConfig,
         gateway: GatewayRouter | None = None,
+        policy: ToolPolicy | None = None,
+        runner: ProcessRunner | None = None,
     ) -> "VerifierRegistry":
         """按 S10 配置构建注册表（消费三类验证的启停开关）。"""
-        return cls(
+        registry = cls(
             gateway=gateway,
             computational_enabled=config.computational_enabled,
             inferential_enabled=config.inferential_enabled,
             visual_enabled=config.visual_enabled,
         )
+        if config.computational_enabled:
+            registry.register(LintVerifier(runner=runner, policy=policy))
+            registry.register(TypeCheckVerifier(runner=runner, policy=policy))
+            registry.register(SchemaVerifier())
+            registry.register(SuiteTestVerifier(runner=runner, policy=policy))
+        return registry
 
     def register(
         self,

@@ -514,12 +514,12 @@ class OrchestrationLoop:
                             verification_type=VerificationType.COMPUTATIONAL,
                         ),
                     ))
-                    # 仅在存在真正的 FAIL 时注入自我修正反馈；SKIP（未运行）与
-                    # ERROR（验证器自身故障）不应打扰模型。
-                    has_fail = any(
-                        r.status == VerificationStatus.FAIL for r in verification_results
+                    # 验证基础设施故障同样不能静默批准模型输出。
+                    has_failure = any(
+                        r.status in {VerificationStatus.FAIL, VerificationStatus.ERROR}
+                        for r in verification_results
                     )
-                    if not gav_response.passed and has_fail:
+                    if not gav_response.passed and has_failure:
                         feedback = GAVController.format_for_context(gav_response)
                         self.assembler.update_with_result([{
                             "role": "system",
