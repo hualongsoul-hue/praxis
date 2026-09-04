@@ -8,6 +8,7 @@
 import time
 from collections.abc import AsyncGenerator
 from contextlib import aclosing
+from inspect import isawaitable
 from typing import Any, cast
 
 from json_repair import repair_json
@@ -18,8 +19,8 @@ from praxis.context.compaction import ContextCompactor
 from praxis.context.jit_retrieval import JITRetriever
 from praxis.context.masking import ObservationMasker
 from praxis.context.tool_injection import ToolInjector
-from praxis.gateway.chat import chat, chat_stream
-from praxis.gateway.router import GatewayRouter
+from praxis.gateway.calls import complete as chat
+from praxis.gateway.calls import stream as chat_stream
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.memory.core import CognitiveMemory
 from praxis.models.context import AssembledPrompt, RunContext, TurnContext
@@ -40,6 +41,7 @@ from praxis.orchestrator.parser import OutputParser, ParsedOutput, StreamAccumul
 from praxis.orchestrator.strategy import LoopStrategy, PlanStep
 from praxis.orchestrator.termination import TerminationManager
 from praxis.orchestrator.tool_coordination import ToolCoordinator
+from praxis.protocols import ModelGateway
 from praxis.skills.manager import SkillManager
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
@@ -67,7 +69,7 @@ class OrchestrationLoop:
     def __init__(
         self,
         config: OrchestratorConfig,
-        gateway: GatewayRouter,
+        gateway: ModelGateway,
         assembler: PromptAssembler,
         tool_coordinator: ToolCoordinator,
         guardrails: GuardrailEngine,
@@ -754,7 +756,7 @@ class OrchestrationLoop:
                 model=self.model,
                 tools=prompt.tools if prompt.tools else None,
             )
-            async with aclosing(response_stream):
+            try:
                 async for chunk in response_stream:
                     delta = accumulator.feed(chunk)
                     if delta.reasoning:
@@ -771,6 +773,12 @@ class OrchestrationLoop:
                             data={"text": delta.content},
                         )
                         yield delta_event
+            finally:
+                close_stream = getattr(response_stream, "aclose", None)
+                if callable(close_stream):
+                    close_result = close_stream()
+                    if isawaitable(close_result):
+                        await close_result
 
             response = accumulator.build_response()
 

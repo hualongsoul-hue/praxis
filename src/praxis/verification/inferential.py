@@ -6,13 +6,13 @@
 
 import time
 
-from praxis.gateway.router import GatewayRouter
 from praxis.gateway.tasks import judge
 from praxis.models.verification import (
     VerificationResult,
     VerificationStatus,
     VerificationType,
 )
+from praxis.protocols import ModelGateway
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
 
@@ -28,7 +28,7 @@ class InferentialVerifier:
 
     def __init__(
         self,
-        gateway: GatewayRouter,
+        gateway: ModelGateway,
         pass_threshold: float = 0.7,
     ) -> None:
         self.gateway = gateway
@@ -109,7 +109,7 @@ class InferentialVerifier:
 
 
 async def run_inferential(
-    gateway: GatewayRouter,
+    gateway: ModelGateway,
     criteria: str,
     content: str,
     pass_threshold: float = 0.7,

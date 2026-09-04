@@ -14,6 +14,7 @@ from praxis.config.schemas import (
     GatewayConfig,
     InputConfig,
     MCPConfig,
+    MemoryConfig,
     ModelCapabilities,
     PersistenceConfig,
     SkillsConfig,
@@ -116,6 +117,46 @@ class FakeRunner:
         self.status = SessionStatus.TERMINATED
 
 
+class FakeStorageBackend:
+    """Minimal byte backend used to exercise the public storage protocol."""
+
+    def __init__(self) -> None:
+        self.values: dict[tuple[str, str], bytes] = {}
+        self.closed = False
+
+    async def save(self, namespace: str, key: str, data: bytes) -> None:
+        self.values[(namespace, key)] = data
+
+    async def save_if_absent(self, namespace: str, key: str, data: bytes) -> bool:
+        identity = (namespace, key)
+        if identity in self.values:
+            return False
+        self.values[identity] = data
+        return True
+
+    async def load(self, namespace: str, key: str) -> bytes | None:
+        return self.values.get((namespace, key))
+
+    async def delete(self, namespace: str, key: str) -> None:
+        self.values.pop((namespace, key), None)
+
+    async def list_keys(self, namespace: str, prefix: str | None = None) -> list[str]:
+        return sorted(
+            key
+            for item_namespace, key in self.values
+            if item_namespace == namespace and (prefix is None or key.startswith(prefix))
+        )
+
+    async def clear_namespace(self, namespace: str) -> int:
+        identities = [item for item in self.values if item[0] == namespace]
+        for identity in identities:
+            del self.values[identity]
+        return len(identities)
+
+    async def close(self) -> None:
+        self.closed = True
+
+
 def runtime_config(tmp_path: Path) -> PraxisConfig:
     return PraxisConfig(
         persistence=PersistenceConfig(
@@ -144,6 +185,38 @@ async def test_runtime_and_session_context_lifecycle(tmp_path: Path) -> None:
 
     assert gateway.closed
     assert not runtime.started
+
+
+async def test_public_model_gateway_runs_default_session_without_router_internals(
+    tmp_path: Path,
+) -> None:
+    config = runtime_config(tmp_path).model_copy(update={
+        "memory": MemoryConfig(background_enabled=False, dream_enabled=False),
+    })
+    async with PraxisRuntime(config, gateway=FakeGateway()) as runtime:
+        async with runtime.session() as session:
+            response = await session.run("protocol request")
+
+    assert response.content == "unused"
+
+
+async def test_runtime_accepts_and_owns_public_storage_backend(tmp_path: Path) -> None:
+    backend = FakeStorageBackend()
+    config = runtime_config(tmp_path).model_copy(update={
+        "memory": MemoryConfig(background_enabled=False, dream_enabled=False),
+    })
+
+    async with PraxisRuntime(
+        config,
+        gateway=FakeGateway(),
+        storage_backend=backend,
+        own_storage_backend=True,
+    ) as runtime:
+        assert runtime.store is not None
+        await runtime.store.save("contract", "key", {"ok": True})
+        assert await runtime.store.load("contract", "key") == {"ok": True}
+
+    assert backend.closed is True
 
 
 async def test_start_and_close_are_idempotent(tmp_path: Path) -> None:

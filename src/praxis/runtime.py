@@ -5,7 +5,7 @@ import os
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AsyncExitStack, aclosing
 from importlib.util import find_spec
-from typing import Any, Protocol, cast
+from typing import Any, Protocol
 
 from praxis.config.settings import PraxisConfig
 from praxis.exceptions import (
@@ -25,7 +25,7 @@ from praxis.models.orchestrator import AgentEvent, AgentResponse
 from praxis.models.runtime import ComponentHealth, HealthStatus, RuntimeHealth, RuntimeState
 from praxis.models.session import SessionStatus
 from praxis.models.subagent import SubagentSpec
-from praxis.persistence.store import PersistenceStore, create_store
+from praxis.persistence.store import PersistenceStore, StorageBackend, create_store
 from praxis.protocols import ApprovalHandler, AuditSink, EmbeddingProvider, ModelGateway
 from praxis.session.core import Session, SessionFactory
 from praxis.skills.manager import build_skill_manager
@@ -88,7 +88,13 @@ class PraxisRuntime:
         own_embedding_provider: bool = False,
         vector_store: VectorStore | None = None,
         own_vector_store: bool = False,
+        storage_backend: StorageBackend | None = None,
+        own_storage_backend: bool = False,
     ) -> None:
+        if store is not None and storage_backend is not None:
+            raise ValueError("store 与 storage_backend 不能同时提供")
+        if storage_backend is not None:
+            store = PersistenceStore(storage_backend, own_backend=own_storage_backend)
         self.config = config.model_copy(deep=True)
         self.gateway = gateway
         self.store = store
@@ -108,7 +114,7 @@ class PraxisRuntime:
         self.lifecycle_lock = asyncio.Lock()
         self.resource_owner = AsyncResourceOwner()
         self.gateway_owned = gateway is None or own_gateway
-        self.store_owned = store is None or own_store
+        self.store_owned = storage_backend is not None or store is None or own_store
         self.audit_sink_owned = audit_sink is None or own_audit_sink
         self.embedding_provider_owned = own_embedding_provider
         self.vector_store_owned = vector_store is None or own_vector_store
@@ -257,7 +263,7 @@ class PraxisRuntime:
         )
         session = await factory.create_session(
             guardrails=self.guardrails,
-            gateway=cast(Any, self.gateway),
+            gateway=self.gateway,
             model=self.config.gateway.default_model,
             tools_config=self.config.tools,
         )
@@ -268,7 +274,7 @@ class PraxisRuntime:
             session=session,
             store=self.store,
             guardrails=self.guardrails,
-            gateway=cast(Any, self.gateway),
+            gateway=self.gateway,
             orchestrator_config=self.config.orchestrator,
             context_config=self.config.context,
             input_config=self.config.inputs,
@@ -296,7 +302,7 @@ class PraxisRuntime:
 
         verifier_registry = VerifierRegistry.from_config(
             self.config.verification,
-            gateway=cast(Any, self.gateway),
+            gateway=self.gateway,
             policy=session.loop.coordinator.executor.sandbox,
         )
         session.verifier_registry = verifier_registry
@@ -390,7 +396,7 @@ class PraxisRuntime:
         )
         child = await factory.create_session(
             guardrails=self.guardrails,
-            gateway=cast(Any, self.gateway),
+            gateway=self.gateway,
             registry=child_registry,
             model=self.config.gateway.default_model,
             tools_config=self.config.tools,

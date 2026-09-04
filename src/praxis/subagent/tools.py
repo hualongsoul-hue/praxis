@@ -13,11 +13,11 @@ from praxis.config.schemas import (
     OrchestratorConfig,
     SubagentConfig,
 )
-from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.lifecycle import TaskSupervisor
 from praxis.models.tools import ToolDefinition, ToolMetadata
 from praxis.persistence.store import PersistenceStore
+from praxis.protocols import ModelGateway
 from praxis.session.core import Session
 from praxis.subagent.aggregation import ResultAggregator
 from praxis.subagent.fork import ForkManager
@@ -207,7 +207,7 @@ def wire_subagent(
     session: Session,
     store: PersistenceStore,
     guardrails: GuardrailEngine,
-    gateway: GatewayRouter,
+    gateway: ModelGateway,
     orchestrator_config: OrchestratorConfig,
     context_config: ContextConfig,
     input_config: InputConfig,

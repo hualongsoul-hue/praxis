@@ -24,7 +24,6 @@ from praxis.context.compaction import ContextCompactor
 from praxis.context.masking import ObservationMasker
 from praxis.context.tool_injection import ToolInjector
 from praxis.exceptions import SessionError
-from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.input_resolver import InputResolver
 from praxis.memory.core import CognitiveMemory
@@ -43,7 +42,7 @@ from praxis.orchestrator.strategy import LoopStrategy
 from praxis.orchestrator.termination import TerminationManager
 from praxis.orchestrator.tool_coordination import ToolCoordinator
 from praxis.persistence.store import PersistenceStore
-from praxis.protocols import ApprovalHandler, AuditSink, EmbeddingProvider
+from praxis.protocols import ApprovalHandler, AuditSink, EmbeddingProvider, ModelGateway
 from praxis.recovery.circuit_breaker import CircuitBreakerRegistry
 from praxis.recovery.fallback import FallbackRegistry
 from praxis.recovery.retry import RetryPolicy
@@ -322,7 +321,7 @@ class SessionFactory:
     async def create_session(
         self,
         guardrails: GuardrailEngine,
-        gateway: GatewayRouter,
+        gateway: ModelGateway,
         registry: ToolRegistry | None = None,
         model: str = "default",
         memory: CognitiveMemory | None = None,

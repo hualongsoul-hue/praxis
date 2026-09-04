@@ -12,12 +12,12 @@ from typing import Any, cast
 from json_repair import repair_json
 from pydantic import BaseModel, Field
 
-from praxis.gateway.chat import chat
-from praxis.gateway.router import GatewayRouter
+from praxis.gateway.calls import complete as chat
 from praxis.memory.retention import RetentionManager
 from praxis.memory.store import ScopedMemoryStore
 from praxis.models.memory import MemoryEntry, MemoryScope, SemanticMemory
 from praxis.persistence.store import PersistenceStore
+from praxis.protocols import ModelGateway
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
 
@@ -64,7 +64,7 @@ class DreamConsolidator:
 
     def __init__(
         self,
-        gateway: GatewayRouter,
+        gateway: ModelGateway,
         scoped_store: ScopedMemoryStore,
         retention: RetentionManager,
         meta_store: PersistenceStore,

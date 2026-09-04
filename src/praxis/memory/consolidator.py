@@ -9,14 +9,14 @@ from typing import Any
 from json_repair import repair_json
 from pydantic import BaseModel
 
-from praxis.gateway.chat import chat
-from praxis.gateway.router import GatewayRouter
+from praxis.gateway.calls import complete as chat
 from praxis.memory.retention import RetentionManager
 from praxis.memory.vector import VectorStore
 from praxis.models.memory import (
     ConsolidationAction,
     MemoryEntry,
 )
+from praxis.protocols import ModelGateway
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
 
@@ -47,7 +47,7 @@ class MemoryConsolidator:
 
     def __init__(
         self,
-        gateway: GatewayRouter,
+        gateway: ModelGateway,
         vector_store: VectorStore,
         retention: RetentionManager,
         model: str | None = None,

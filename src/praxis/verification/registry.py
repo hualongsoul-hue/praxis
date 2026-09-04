@@ -8,13 +8,13 @@ from importlib.util import find_spec
 from typing import Any
 
 from praxis.config.schemas import VerificationConfig
-from praxis.gateway.router import GatewayRouter
 from praxis.models.verification import (
     QualityPhase,
     VerificationResult,
     VerificationStatus,
     VerificationType,
 )
+from praxis.protocols import ModelGateway
 from praxis.telemetry.logger import get_logger
 from praxis.tools.policy import ToolPolicy
 from praxis.tools.process import ProcessRunner
@@ -53,7 +53,7 @@ class VerifierRegistry:
 
     def __init__(
         self,
-        gateway: GatewayRouter | None = None,
+        gateway: ModelGateway | None = None,
         computational_enabled: bool = True,
         inferential_enabled: bool = True,
         visual_enabled: bool = True,
@@ -69,7 +69,7 @@ class VerifierRegistry:
     def from_config(
         cls,
         config: VerificationConfig,
-        gateway: GatewayRouter | None = None,
+        gateway: ModelGateway | None = None,
         policy: ToolPolicy | None = None,
         runner: ProcessRunner | None = None,
     ) -> "VerifierRegistry":

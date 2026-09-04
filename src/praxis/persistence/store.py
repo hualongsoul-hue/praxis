@@ -70,8 +70,9 @@ class PersistenceStore:
     在 StorageBackend 上叠加 JSON 序列化/反序列化，对上层组件屏蔽存储细节。
     """
 
-    def __init__(self, backend: StorageBackend) -> None:
+    def __init__(self, backend: StorageBackend, *, own_backend: bool = True) -> None:
         self.backend = backend
+        self.own_backend = own_backend
         self.closed = False
         self.closing = False
         self.active_operations = 0
@@ -139,7 +140,8 @@ class PersistenceStore:
             self.closing = True
             await self.operation_condition.wait_for(lambda: self.active_operations == 0)
         try:
-            await self.backend.close()
+            if self.own_backend:
+                await self.backend.close()
         finally:
             async with self.operation_condition:
                 self.closed = True

@@ -6,7 +6,6 @@ resume_session 从 S3 加载检查点，
 
 from typing import Any, cast
 
-from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.memory.core import CognitiveMemory
 from praxis.models.orchestrator import LoopState
@@ -16,6 +15,7 @@ from praxis.models.session import (
     SessionStatus,
 )
 from praxis.models.tools import ToolExecutionRecord, ToolExecutionState
+from praxis.protocols import ModelGateway
 from praxis.session.checkpoint import CheckpointManager
 from praxis.session.core import Session, SessionFactory
 from praxis.skills.manager import SkillManager
@@ -44,7 +44,7 @@ class SessionResumer:
         self,
         session_id: str,
         guardrails: GuardrailEngine,
-        gateway: GatewayRouter,
+        gateway: ModelGateway,
         registry: ToolRegistry | None = None,
         model: str = "default",
         checkpoint_id: str | None = None,

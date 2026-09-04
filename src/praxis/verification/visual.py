@@ -11,14 +11,14 @@ from typing import Any
 
 from json_repair import repair_json
 
-from praxis.gateway.chat import chat
-from praxis.gateway.router import GatewayRouter
+from praxis.gateway.calls import complete as chat
 from praxis.models.verification import (
     FailureDetail,
     VerificationResult,
     VerificationStatus,
     VerificationType,
 )
+from praxis.protocols import ModelGateway
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
 
@@ -43,7 +43,7 @@ class VisualVerifier:
 
     def __init__(
         self,
-        gateway: GatewayRouter,
+        gateway: ModelGateway,
         screenshot_dir: str = "data/screenshots",
     ) -> None:
         self.gateway = gateway
@@ -211,7 +211,7 @@ class VisualVerifier:
 
 
 async def run_visual(
-    gateway: GatewayRouter,
+    gateway: ModelGateway,
     url: str,
     expectations: str,
 ) -> VerificationResult:

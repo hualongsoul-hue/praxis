@@ -8,9 +8,9 @@ from typing import Any
 
 from json_repair import repair_json
 
-from praxis.gateway.chat import chat
-from praxis.gateway.router import GatewayRouter
+from praxis.gateway.calls import complete as chat
 from praxis.models.gateway import JudgeResult
+from praxis.protocols import ModelGateway
 
 SUMMARIZE_SYSTEM_PROMPT = (
     "你是一个精准的文本摘要助手。请根据用户提供的指令对内容进行摘要，"
@@ -28,7 +28,7 @@ JUDGE_SYSTEM_PROMPT = (
 
 
 async def summarize(
-    gateway: GatewayRouter,
+    gateway: ModelGateway,
     content: str,
     instruction: str = "请对以下内容进行精炼摘要",
     model: str | None = None,
@@ -55,7 +55,7 @@ async def summarize(
 
 
 async def judge(
-    gateway: GatewayRouter,
+    gateway: ModelGateway,
     criteria: str,
     content: str,
     model: str | None = None,

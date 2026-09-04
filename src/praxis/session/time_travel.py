@@ -5,10 +5,10 @@ list_checkpoints 查看历史，
 回退后 S6/S7/S11 状态全部恢复，可从回退点重新运行。
 """
 
-from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.memory.core import CognitiveMemory
 from praxis.models.session import CheckpointInfo
+from praxis.protocols import ModelGateway
 from praxis.session.checkpoint import CheckpointManager
 from praxis.session.core import Session
 from praxis.session.resume import SessionResumer
@@ -50,7 +50,7 @@ class TimeTravelManager:
         session_id: str,
         checkpoint_id: str,
         guardrails: GuardrailEngine,
-        gateway: GatewayRouter,
+        gateway: ModelGateway,
         registry: ToolRegistry | None = None,
         model: str = "default",
         memory: CognitiveMemory | None = None,
@@ -108,7 +108,7 @@ class TimeTravelManager:
         session_id: str,
         checkpoint_id: str,
         guardrails: GuardrailEngine,
-        gateway: GatewayRouter,
+        gateway: ModelGateway,
         registry: ToolRegistry | None = None,
         model: str = "default",
         memory: CognitiveMemory | None = None,

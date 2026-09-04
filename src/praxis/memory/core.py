@@ -11,7 +11,6 @@ from datetime import UTC, datetime
 from typing import Any, cast
 
 from praxis.config.schemas import MemoryConfig
-from praxis.gateway.router import GatewayRouter
 from praxis.memory.consolidator import MemoryConsolidator
 from praxis.memory.dream import DreamConsolidator, DreamReport, DreamScheduler
 from praxis.memory.extractor import MemoryExtractor
@@ -36,7 +35,7 @@ from praxis.models.memory import (
     WorkingMemoryMessage,
 )
 from praxis.persistence.store import PersistenceStore
-from praxis.protocols import EmbeddingProvider
+from praxis.protocols import EmbeddingProvider, ModelGateway
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
 
@@ -54,7 +53,7 @@ class CognitiveMemory:
     def __init__(
         self,
         store: PersistenceStore,
-        gateway: GatewayRouter,
+        gateway: ModelGateway,
         session_id: str,
         config: MemoryConfig | None = None,
         default_scope: MemoryScope | None = None,

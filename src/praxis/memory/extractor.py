@@ -8,8 +8,7 @@ from typing import Any, cast
 
 from json_repair import repair_json
 
-from praxis.gateway.chat import chat
-from praxis.gateway.router import GatewayRouter
+from praxis.gateway.calls import complete as chat
 from praxis.models.memory import (
     EpisodicMemory,
     MemoryEntry,
@@ -18,6 +17,7 @@ from praxis.models.memory import (
     ProceduralMemory,
     SemanticMemory,
 )
+from praxis.protocols import ModelGateway
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
 
@@ -83,7 +83,7 @@ class MemoryExtractor:
 
     def __init__(
         self,
-        gateway: GatewayRouter,
+        gateway: ModelGateway,
         model: str | None = None,
         prompts: dict[str, str] | None = None,
     ) -> None:

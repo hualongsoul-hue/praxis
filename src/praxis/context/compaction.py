@@ -10,9 +10,9 @@ from typing import Any
 
 from praxis.config.schemas import ContextConfig
 from praxis.gateway.metering import get_token_count
-from praxis.gateway.router import GatewayRouter
 from praxis.gateway.tasks import summarize
 from praxis.models.context import CompactionResult
+from praxis.protocols import ModelGateway
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
 
@@ -33,7 +33,7 @@ class ContextCompactor:
     def __init__(
         self,
         config: ContextConfig,
-        gateway: GatewayRouter,
+        gateway: ModelGateway,
         model: str = "default",
     ) -> None:
         self.config = config
