@@ -26,7 +26,6 @@ from praxis.verification.computational import (
     Verifier,
     run_computational,
 )
-from praxis.verification.inferential import run_inferential
 
 log = get_logger("verification.registry")
 
@@ -195,6 +194,8 @@ class VerifierRegistry:
                 verifier_name="inferential",
                 feedback="未配置网关，推理型验证不可用",
             )
+        from praxis.verification.inferential import run_inferential
+
         return await run_inferential(
             self.gateway,
             criteria=criteria,

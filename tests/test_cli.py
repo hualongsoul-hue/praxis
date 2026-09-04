@@ -1,5 +1,7 @@
 """命令行入口测试。"""
 
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -17,6 +19,45 @@ def test_version(capsys) -> None:
     rc = main(["version"])
     assert rc == 0
     assert "praxis" in capsys.readouterr().out
+
+
+def test_package_import_does_not_eagerly_load_model_adapter() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import sys; import praxis; import praxis.memory.vector; "
+                "from praxis.verification import VerifierRegistry; "
+                "assert VerifierRegistry is not None; "
+                "from praxis.verification.visual import VisualVerifier; "
+                "assert VisualVerifier is not None; "
+                "assert 'litellm' not in sys.modules"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_lazy_public_facades_resolve_exports_and_reject_unknown_names() -> None:
+    import praxis
+    import praxis.gateway as gateway
+    import praxis.memory as memory
+    import praxis.verification as verification
+
+    assert praxis.PraxisRuntime.__name__ == "PraxisRuntime"
+    assert gateway.GatewayRouter.__name__ == "GatewayRouter"
+    assert memory.CognitiveMemory.__name__ == "CognitiveMemory"
+    assert verification.VerifierRegistry.__name__ == "VerifierRegistry"
+    missing_name = "missing_" + "public_export"
+    for facade in (praxis, gateway, memory, verification):
+        with pytest.raises(AttributeError):
+            getattr(facade, missing_name)
 
 
 def test_validate_defaults_ok() -> None:
@@ -50,7 +91,10 @@ def test_doctor_reports_missing_key_without_leaking_value(monkeypatch, tmp_path,
         encoding="utf-8",
     )
     assert main(["doctor", str(config)]) == 1
-    assert "PRAXIS_MODEL_API_KEY" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "PRAXIS_MODEL_API_KEY" in output
+    assert "[READY] storage" in output
+    assert "[DEGRADED] embedding" in output
 
 
 def test_show_and_doctor_report_configuration_load_failures(tmp_path: Path, capsys) -> None:
@@ -89,7 +133,7 @@ def test_doctor_success_with_remote_embedding(monkeypatch, tmp_path: Path, capsy
     application = MagicMock()
     application.__aenter__ = AsyncMock(return_value=runtime)
     application.__aexit__ = AsyncMock(return_value=None)
-    with patch("praxis.__main__.PraxisCliApplication", return_value=application):
+    with patch("praxis.__main__.create_cli_application", return_value=application):
         assert main(["doctor", str(config)]) == 0
     output = capsys.readouterr().out
     assert "model_credentials" in output
@@ -133,7 +177,7 @@ class FakeChatRuntime:
 def test_chat_handles_messages_empty_input_and_exit(capsys) -> None:
     inputs = iter(["", "hello", "quit"])
     with (
-        patch("praxis.__main__.PraxisRuntime", FakeChatRuntime),
+        patch("praxis.__main__.create_runtime", FakeChatRuntime),
         patch("builtins.input", side_effect=lambda prompt: next(inputs)),
     ):
         assert main(["chat"]) == 0

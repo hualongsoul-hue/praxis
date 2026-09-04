@@ -1,17 +1,25 @@
 """Praxis 生产 CLI：配置、诊断、交互聊天和版本。"""
 
+from __future__ import annotations
+
 import argparse
 import asyncio
 import json
+import math
 import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
+from uuid import uuid4
 
-from praxis import PraxisRuntime, __version__, load_config
-from praxis.bootstrap import PraxisCliApplication
+from praxis import __version__
+from praxis.config import load_config
 from praxis.config.settings import PraxisConfig
+
+if TYPE_CHECKING:
+    from praxis.bootstrap import PraxisCliApplication
+    from praxis.runtime import PraxisRuntime
 
 SECRET_CONFIG_KEYS = frozenset({
     "api_key",
@@ -46,6 +54,27 @@ def load_cli_config(path: str | None) -> PraxisConfig:
     return load_config(Path(path) if path else None)
 
 
+def create_runtime(config: PraxisConfig) -> PraxisRuntime:
+    """Create the production runtime without loading adapters for light commands."""
+    from praxis.runtime import PraxisRuntime
+
+    return PraxisRuntime(config)
+
+
+def create_cli_application(
+    config: PraxisConfig,
+    *,
+    runtime_factory: Callable[..., PraxisRuntime] | None = None,
+) -> PraxisCliApplication:
+    """Create the CLI lifecycle owner through a lazy import boundary."""
+    from praxis.bootstrap import PraxisCliApplication
+
+    return PraxisCliApplication(
+        config,
+        runtime_factory=runtime_factory or create_runtime,
+    )
+
+
 def cmd_version(arguments: argparse.Namespace) -> int:
     print(f"praxis {__version__}")
     return 0
@@ -72,6 +101,72 @@ def cmd_config_show(args: argparse.Namespace) -> int:
     return 0
 
 
+async def probe_local_components(config: PraxisConfig) -> bool:
+    """Probe storage and embedding without requiring model credentials."""
+    from praxis.memory.vector import local_lexical_embed, tei_embed
+    from praxis.persistence import create_store
+
+    storage_ready = False
+    store = None
+    try:
+        store = await create_store(config.persistence)
+        key = f"doctor-{uuid4().hex}"
+        payload = {"status": "ok"}
+        async with asyncio.timeout(config.gateway.health_probe_timeout):
+            await store.save("cli_doctor", key, payload)
+            try:
+                if await store.load("cli_doctor", key) != payload:
+                    raise RuntimeError("storage round-trip mismatch")
+            finally:
+                await store.delete("cli_doctor", key)
+        storage_ready = True
+        print("[READY] storage: 存储读写删除探测通过")
+    except Exception as exc:
+        print(f"[FAILED] storage: {type(exc).__name__}")
+    finally:
+        if store is not None:
+            try:
+                await store.close()
+            except Exception as exc:
+                storage_ready = False
+                print(f"[FAILED] storage_close: {type(exc).__name__}")
+
+    memory = config.memory
+    try:
+        async with asyncio.timeout(memory.embedding_timeout):
+            if memory.embedding_api_base is None:
+                vector = await local_lexical_embed(
+                    "praxis doctor probe",
+                    dimensions=memory.embedding_dimensions or 256,
+                )
+            else:
+                vector = await tei_embed(
+                    "praxis doctor probe",
+                    api_base=memory.embedding_api_base,
+                    api_key=(
+                        os.environ.get(memory.embedding_api_key_env, "")
+                        if memory.embedding_api_key_env
+                        else ""
+                    ),
+                    model=memory.embedding_model,
+                    timeout=memory.embedding_timeout,
+                )
+        if not vector or not all(math.isfinite(value) for value in vector):
+            raise ValueError("embedding vector invalid")
+        if memory.embedding_dimensions and len(vector) != memory.embedding_dimensions:
+            raise ValueError("embedding dimensions mismatch")
+        if memory.embedding_api_base is None:
+            print(
+                "[DEGRADED] embedding: "
+                "本地词法嵌入探测通过；未配置语义嵌入 Provider"
+            )
+        else:
+            print(f"[READY] embedding: 远程 Provider 探测通过，维度 {len(vector)}")
+    except Exception as exc:
+        print(f"[DEGRADED] embedding: {type(exc).__name__}")
+    return storage_ready
+
+
 async def doctor_command(args: argparse.Namespace) -> int:
     try:
         config = load_cli_config(config_path_argument(args))
@@ -81,16 +176,18 @@ async def doctor_command(args: argparse.Namespace) -> int:
 
     print("[READY] config: 严格配置有效")
     key_name = config.gateway.deployments[0].api_key_env
-    if os.environ.get(key_name):
+    credentials_ready = bool(os.environ.get(key_name))
+    if credentials_ready:
         print(f"[READY] model_credentials: {key_name} 已设置")
     else:
         print(f"[FAILED] model_credentials: 缺少 {key_name}")
+        await probe_local_components(config)
         return 1
 
     try:
-        async with PraxisCliApplication(
+        async with create_cli_application(
             config,
-            runtime_factory=PraxisRuntime,
+            runtime_factory=create_runtime,
         ) as runtime:
             health = await runtime.health()
     except Exception as exc:
@@ -107,9 +204,9 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 async def chat_command(args: argparse.Namespace) -> int:
     config = load_cli_config(config_path_argument(args))
-    async with PraxisCliApplication(
+    async with create_cli_application(
         config,
-        runtime_factory=PraxisRuntime,
+        runtime_factory=create_runtime,
     ) as runtime:
         async with runtime.session() as session:
             while True:
