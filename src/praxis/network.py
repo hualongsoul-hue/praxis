@@ -3,9 +3,10 @@
 import asyncio
 import ipaddress
 import socket
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -23,6 +24,17 @@ class ValidatedHttpTarget:
     port: int
     host_header: str
     addresses: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class HttpFetchResult:
+    """Bounded response returned by the shared network policy."""
+
+    status_code: int
+    headers: dict[str, str]
+    body: bytes
+    final_url: str
+    truncated: bool = False
 
 
 async def validate_http_url(
@@ -200,3 +212,84 @@ async def send_pinned_http_request(
             continue
         return response, client
     raise ValueError("安全 HTTP 连接失败") from None
+
+
+class NetworkPolicy:
+    """Validate, DNS-pin, redirect-check, and bound every HTTP request hop."""
+
+    def __init__(
+        self,
+        allow_private_networks: bool = False,
+        max_response_bytes: int = 1_000_000,
+        max_redirects: int = 5,
+    ) -> None:
+        if max_response_bytes < 1:
+            raise ValueError("HTTP 响应字节上限必须大于零")
+        if max_redirects < 0:
+            raise ValueError("HTTP 重定向上限不能为负数")
+        self.allow_private_networks = allow_private_networks
+        self.max_response_bytes = max_response_bytes
+        self.max_redirects = max_redirects
+
+    async def validate_url(self, url: str) -> ValidatedHttpTarget:
+        """Validate and resolve one URL using this policy."""
+        return await validate_http_url(url, self.allow_private_networks)
+
+    async def fetch(
+        self,
+        url: str,
+        transport_factory: TransportFactory | None = None,
+        *,
+        max_bytes: int | None = None,
+        timeout: float = 30.0,
+    ) -> HttpFetchResult:
+        """Fetch a response with per-hop validation and a hard streamed byte bound."""
+        requested_limit = self.max_response_bytes if max_bytes is None else max_bytes
+        if requested_limit < 1:
+            raise ValueError("HTTP 响应字节上限必须大于零")
+        byte_limit = min(requested_limit, self.max_response_bytes)
+        target = await self.validate_url(url)
+
+        for redirect_attempt in range(self.max_redirects + 1):
+            response, client = await send_pinned_http_request(
+                target,
+                transport_factory,
+                timeout=timeout,
+            )
+            try:
+                if response.status_code in HTTP_REDIRECT_STATUS_CODES:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise ValueError("重定向响应缺少 Location")
+                    if redirect_attempt == self.max_redirects:
+                        raise ValueError("重定向次数超过上限")
+                    target = await self.validate_url(urljoin(target.original_url, location))
+                    continue
+
+                body = bytearray()
+                truncated = False
+                try:
+                    async for chunk in response.aiter_bytes():
+                        remaining = byte_limit - len(body)
+                        if remaining <= 0:
+                            truncated = True
+                            break
+                        body.extend(chunk[:remaining])
+                        if len(chunk) > remaining:
+                            truncated = True
+                            break
+                except (httpx.HTTPError, OSError):
+                    raise ValueError("HTTP 响应读取失败") from None
+                return HttpFetchResult(
+                    status_code=response.status_code,
+                    headers=dict(response.headers),
+                    body=bytes(body),
+                    final_url=target.original_url,
+                    truncated=truncated,
+                )
+            finally:
+                active_error = sys.exc_info()[0] is not None
+                close_failed = await close_http_resources(response, client)
+                if close_failed and not active_error:
+                    raise ValueError("HTTP 响应关闭失败") from None
+        raise ValueError("重定向次数超过上限")

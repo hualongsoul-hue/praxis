@@ -3,9 +3,11 @@
 读取指定文件内容，支持行范围限制。
 """
 
+from pathlib import Path
 from typing import Any
 
 from praxis.models.tools import ToolDefinition, ToolMetadata
+from praxis.tools.filesystem import read_file_text
 from praxis.tools.policy import ToolPolicy
 
 DEFINITION = ToolDefinition(
@@ -42,14 +44,14 @@ def create_handler(sandbox: ToolPolicy):
     """创建绑定沙箱的处理函数。"""
 
     async def handle(args: dict[str, Any]) -> str:
-        path = sandbox.check_path(args["file_path"])
+        path = Path(str(args["file_path"]))
 
-        if not path.exists():
+        try:
+            text = await read_file_text(path, sandbox)
+        except FileNotFoundError:
             return f"文件不存在: {path}"
-        if not path.is_file():
+        except IsADirectoryError:
             return f"路径不是文件: {path}"
-
-        text = path.read_text(encoding="utf-8")
         lines = text.splitlines(keepends=True)
 
         offset = args.get("offset", 1)

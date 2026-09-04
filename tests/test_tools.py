@@ -4,6 +4,7 @@ import asyncio
 import os
 import socket
 import sys
+import time
 import traceback
 from pathlib import Path
 from typing import Any
@@ -21,8 +22,10 @@ from praxis.exceptions import (
 )
 from praxis.models.tools import ToolDefinition, ToolMetadata
 from praxis.subagent.resource_control import ResourceController
-from praxis.tools.builtins.network import web_fetch
+from praxis.tools.builtins.file_ops.read_file import create_handler as read_file_handler
+from praxis.tools.builtins.network import web_fetch, web_search
 from praxis.tools.builtins.registration import register_builtins
+from praxis.tools.builtins.search.grep_search import create_handler as grep_search_handler
 from praxis.tools.executor import ToolExecutor, validate_arguments
 from praxis.tools.override import override_tool
 from praxis.tools.policy import ToolPolicy
@@ -187,6 +190,48 @@ class TestFileOps:
         assert "已写入" in result
         assert test_file.read_text() == "hello"
 
+    async def test_atomic_write_preserves_original_on_replace_failure(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        sandbox = make_sandbox(tmp_path)
+        target = tmp_path / "important.txt"
+        target.write_text("original", encoding="utf-8")
+        from praxis.tools.builtins.file_ops.write_file import create_handler
+
+        with patch("praxis.tools.filesystem.os.replace", side_effect=OSError("disk")):
+            with pytest.raises(OSError, match="disk"):
+                await create_handler(sandbox)({
+                    "file_path": str(target),
+                    "content": "replacement",
+                })
+
+        assert target.read_text(encoding="utf-8") == "original"
+        assert list(tmp_path.glob("praxis-write-*.tmp")) == []
+
+    async def test_write_rejects_symlink_escape(self, tmp_path: Path) -> None:
+        safe = tmp_path / "safe"
+        outside = tmp_path / "outside"
+        safe.mkdir()
+        outside.mkdir()
+        outside_target = outside / "target.txt"
+        outside_target.write_text("original", encoding="utf-8")
+        link = safe / "link.txt"
+        try:
+            link.symlink_to(outside_target)
+        except OSError as exc:
+            pytest.skip(f"当前平台不允许创建测试符号链接: {exc}")
+        sandbox = ToolPolicy(ToolsConfig(allowed_paths=[str(safe)]))
+        from praxis.tools.builtins.file_ops.write_file import create_handler
+
+        with pytest.raises(ToolPolicyViolationError):
+            await create_handler(sandbox)({
+                "file_path": str(link),
+                "content": "escaped",
+            })
+
+        assert outside_target.read_text(encoding="utf-8") == "original"
+
     async def test_edit_file(self, tmp_path: Path) -> None:
         sandbox = make_sandbox(tmp_path)
         test_file = tmp_path / "edit.txt"
@@ -217,40 +262,23 @@ class TestFileOps:
         assert "b.py" in result
         assert "sub/" in result
 
-    async def test_list_dir_streams_descendant_count(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        class StreamingPaths:
-            def __init__(self, paths: list[Path]) -> None:
-                self.paths = iter(paths)
-
-            def __iter__(self) -> "StreamingPaths":
-                return self
-
-            def __next__(self) -> Path:
-                return next(self.paths)
-
-            def __length_hint__(self) -> int:
-                raise AssertionError("descendants must not be materialized")
-
-        sandbox = make_sandbox(tmp_path)
+    async def test_list_dir_bounds_recursive_descendant_count(self, tmp_path: Path) -> None:
+        sandbox = ToolPolicy(ToolsConfig(
+            allowed_paths=[str(tmp_path)],
+            search_max_files=2,
+        ))
         subdirectory = tmp_path / "sub"
         subdirectory.mkdir()
-
-        def streaming_rglob(path: Path, pattern: str) -> StreamingPaths:
-            assert path == subdirectory
-            assert pattern == "*"
-            return StreamingPaths([subdirectory / "a", subdirectory / "b"])
-
-        monkeypatch.setattr(Path, "rglob", streaming_rglob)
+        (subdirectory / "a").write_text("a", encoding="utf-8")
+        (subdirectory / "b").write_text("b", encoding="utf-8")
+        (subdirectory / "c").write_text("c", encoding="utf-8")
 
         from praxis.tools.builtins.file_ops.list_dir import create_handler
 
         result = await create_handler(sandbox)({"dir_path": str(tmp_path)})
 
-        assert "sub/  (2 items)" in result
+        assert "sub/  (1 items)" in result
+        assert "目录统计已截断" in result
 
 
 # ── Task 5.3: 内置搜索工具 ──────────────────────────────────────────────────
@@ -723,6 +751,87 @@ class TestWebFetchSecurity:
         )
         assert "web_fetch_close_secret_marker" not in rendered
         assert "web_fetch_close_secret_marker" not in caplog.text
+
+
+class TestBoundedFileAndSearchSecurity:
+    async def test_read_file_rejects_oversized_input_without_blocking_loop(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        target = tmp_path / "large.txt"
+        target.write_text("0123456789", encoding="utf-8")
+        policy = ToolPolicy(ToolsConfig(
+            allowed_paths=[str(tmp_path)],
+            max_file_bytes=4,
+        ))
+        original_read_bytes = Path.read_bytes
+
+        def slow_read(path: Path) -> bytes:
+            time.sleep(0.05)
+            return original_read_bytes(path)
+
+        monkeypatch.setattr(Path, "read_bytes", slow_read)
+        task = asyncio.create_task(read_file_handler(policy)({"file_path": str(target)}))
+        await asyncio.sleep(0.01)
+        assert not task.done()
+        with pytest.raises(ToolPolicyViolationError, match="大小上限"):
+            await task
+
+    async def test_search_rejects_nested_quantifier_regex(self, tmp_path: Path) -> None:
+        target = tmp_path / "input.txt"
+        target.write_text("a" * 100 + "!", encoding="utf-8")
+        policy = ToolPolicy(ToolsConfig(allowed_paths=[str(tmp_path)]))
+
+        with pytest.raises(ToolPolicyViolationError, match="正则"):
+            await grep_search_handler(policy)({
+                "pattern": "(a+)+$",
+                "search_path": str(tmp_path),
+            })
+
+    async def test_search_stops_at_configured_file_and_byte_bounds(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        (tmp_path / "a.txt").write_text("needle\n", encoding="utf-8")
+        (tmp_path / "b.txt").write_text("needle\n", encoding="utf-8")
+        policy = ToolPolicy(ToolsConfig(
+            allowed_paths=[str(tmp_path)],
+            search_max_files=1,
+            search_max_bytes=64,
+            search_max_matches=10,
+        ))
+
+        result = await grep_search_handler(policy)({
+            "pattern": "needle",
+            "search_path": str(tmp_path),
+        })
+
+        assert result.count("needle") == 1
+        assert "搜索范围已截断" in result
+
+    async def test_web_search_validates_redirect_targets(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        policy = ToolPolicy(ToolsConfig(network_allowed=True))
+
+        def resolve_host(*args: Any, **kwargs: Any) -> list[tuple[Any, ...]]:
+            host = str(args[0])
+            address = "127.0.0.1" if host == "localhost" else "93.184.216.34"
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 443))]
+
+        monkeypatch.setattr(socket, "getaddrinfo", resolve_host)
+        handler = web_search.create_handler(
+            policy,
+            lambda: httpx.MockTransport(lambda request: httpx.Response(
+                302,
+                headers={"location": "http://localhost/private"},
+            )),
+        )
+
+        with pytest.raises(ToolPolicyViolationError, match="私网"):
+            await handler({"query": "praxis"})
 
     async def test_close_failure_does_not_mask_redirect_policy_error(
         self,

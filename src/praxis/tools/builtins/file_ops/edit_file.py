@@ -3,9 +3,11 @@
 在文件中执行精确字符串替换。
 """
 
+from pathlib import Path
 from typing import Any
 
 from praxis.models.tools import ToolDefinition, ToolMetadata
+from praxis.tools.filesystem import atomic_write_text, read_file_text
 from praxis.tools.policy import ToolPolicy
 
 DEFINITION = ToolDefinition(
@@ -42,14 +44,14 @@ def create_handler(sandbox: ToolPolicy):
     """创建绑定沙箱的处理函数。"""
 
     async def handle(args: dict[str, Any]) -> str:
-        path = sandbox.check_path(args["file_path"])
+        path = Path(str(args["file_path"]))
         old_string = args["old_string"]
         new_string = args["new_string"]
 
-        if not path.exists():
+        try:
+            content = await read_file_text(path, sandbox)
+        except FileNotFoundError:
             return f"文件不存在: {path}"
-
-        content = path.read_text(encoding="utf-8")
         count = content.count(old_string)
 
         if count == 0:
@@ -58,7 +60,7 @@ def create_handler(sandbox: ToolPolicy):
             return f"old_string 在文件中匹配 {count} 处，必须唯一匹配"
 
         new_content = content.replace(old_string, new_string, 1)
-        path.write_text(new_content, encoding="utf-8")
+        await atomic_write_text(path, new_content, sandbox)
         return f"已替换 1 处匹配（文件: {path}）"
 
     return handle

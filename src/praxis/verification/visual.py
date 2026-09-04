@@ -4,6 +4,7 @@
 返回截图路径 + 视觉判定 + 差异描述。
 """
 
+import asyncio
 import base64
 import time
 from pathlib import Path
@@ -18,6 +19,7 @@ from praxis.models.verification import (
     VerificationStatus,
     VerificationType,
 )
+from praxis.network import NetworkPolicy
 from praxis.protocols import ModelGateway
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
@@ -45,9 +47,22 @@ class VisualVerifier:
         self,
         gateway: ModelGateway,
         screenshot_dir: str = "data/screenshots",
+        network_policy: NetworkPolicy | None = None,
+        screenshot_max_bytes: int = 10_000_000,
     ) -> None:
         self.gateway = gateway
-        self.screenshot_dir = Path(screenshot_dir)
+        self.screenshot_dir = Path(screenshot_dir).expanduser().resolve()
+        self.network_policy = network_policy or NetworkPolicy()
+        self.screenshot_max_bytes = screenshot_max_bytes
+
+    def resolve_screenshot_path(self, screenshot_name: str) -> Path:
+        """Resolve a PNG output path strictly beneath the screenshot directory."""
+        if Path(screenshot_name).suffix.lower() != ".png":
+            raise ValueError("截图文件必须使用 .png 扩展名")
+        output_path = (self.screenshot_dir / screenshot_name).resolve()
+        if self.screenshot_dir not in output_path.parents:
+            raise ValueError("截图路径不能越过截图目录")
+        return output_path
 
     async def capture_screenshot(self, url: str, output_path: Path) -> Path:
         """通过 Playwright 截取页面截图。
@@ -64,16 +79,30 @@ class VisualVerifier:
         except ModuleNotFoundError as exc:
             raise RuntimeError("视觉验证不可用，请安装 praxis[visual]") from exc
 
-        self.screenshot_dir.mkdir(parents=True, exist_ok=True)
+        target = await self.network_policy.validate_url(url)
+        checked_output = self.resolve_screenshot_path(str(output_path))
+        await asyncio.to_thread(self.screenshot_dir.mkdir, parents=True, exist_ok=True)
 
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=True)
-            page = await browser.new_page()
-            await page.goto(url, wait_until="networkidle")
-            await page.screenshot(path=str(output_path), full_page=True)
-            await browser.close()
+            try:
+                page = await browser.new_page()
 
-        return output_path
+                async def validate_browser_request(route: Any, request: Any) -> None:
+                    try:
+                        await self.network_policy.validate_url(str(request.url))
+                    except ValueError:
+                        await route.abort("blockedbyclient")
+                        return
+                    await route.continue_()
+
+                await page.route("**/*", validate_browser_request)
+                await page.goto(target.original_url, wait_until="networkidle")
+                await page.screenshot(path=str(checked_output), full_page=True)
+            finally:
+                await browser.close()
+
+        return checked_output
 
     async def verify(
         self,
@@ -93,9 +122,10 @@ class VisualVerifier:
         """
         start = time.perf_counter()
         name = screenshot_name or f"visual_{int(time.time())}.png"
-        output_path = self.screenshot_dir / name
 
         try:
+            output_path = self.resolve_screenshot_path(name)
+            await self.network_policy.validate_url(url)
             screenshot_path = await self.capture_screenshot(url, output_path)
         except Exception as exc:
             elapsed = (time.perf_counter() - start) * 1000
@@ -148,7 +178,9 @@ class VisualVerifier:
         Returns:
             验证结果。
         """
-        image_bytes = screenshot_path.read_bytes()
+        image_bytes = await asyncio.to_thread(screenshot_path.read_bytes)
+        if len(image_bytes) > self.screenshot_max_bytes:
+            raise ValueError("截图超过视觉验证字节上限")
         image_b64 = base64.b64encode(image_bytes).decode("ascii")
 
         messages: list[dict[str, Any]] = [
@@ -214,6 +246,8 @@ async def run_visual(
     gateway: ModelGateway,
     url: str,
     expectations: str,
+    network_policy: NetworkPolicy | None = None,
+    screenshot_max_bytes: int = 10_000_000,
 ) -> VerificationResult:
     """便捷函数：执行视觉验证。
 
@@ -225,5 +259,9 @@ async def run_visual(
     Returns:
         验证结果。
     """
-    verifier = VisualVerifier(gateway)
+    verifier = VisualVerifier(
+        gateway,
+        network_policy=network_policy,
+        screenshot_max_bytes=screenshot_max_bytes,
+    )
     return await verifier.verify(url, expectations)

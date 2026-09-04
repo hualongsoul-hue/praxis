@@ -3,9 +3,11 @@
 创建或覆写文件，自动创建不存在的父目录。
 """
 
+from pathlib import Path
 from typing import Any
 
 from praxis.models.tools import ToolDefinition, ToolMetadata
+from praxis.tools.filesystem import atomic_write_text
 from praxis.tools.policy import ToolPolicy
 
 DEFINITION = ToolDefinition(
@@ -38,11 +40,10 @@ def create_handler(sandbox: ToolPolicy):
     """创建绑定沙箱的处理函数。"""
 
     async def handle(args: dict[str, Any]) -> str:
-        path = sandbox.check_path(args["file_path"])
+        path = Path(str(args["file_path"]))
         content = args["content"]
 
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
+        await atomic_write_text(path, content, sandbox)
         return f"已写入 {len(content)} 字符到 {path}"
 
     return handle

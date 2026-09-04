@@ -1,12 +1,14 @@
 """Production boundary regression tests for optional and failure-path adapters."""
 
 import json
+import socket
 from datetime import UTC, datetime, timedelta
 from fnmatch import fnmatchcase
 from pathlib import Path
-from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from praxis.config.schemas import GatewayConfig, ModelDeployment, TelemetryConfig, ToolsConfig
@@ -193,6 +195,26 @@ class TestRedisBackendEdges:
 
 
 class TestVisualVerifierEdges:
+    async def test_visual_blocks_private_url_and_screenshot_traversal(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        gateway = MagicMock()
+        gateway.config.default_model = "default"
+        verifier = VisualVerifier(gateway, screenshot_dir=str(tmp_path))
+        verifier.capture_screenshot = AsyncMock()
+
+        private = await verifier.verify("http://127.0.0.1/private", "ok")
+        traversal = await verifier.verify(
+            "https://example.com",
+            "ok",
+            screenshot_name="../escaped.png",
+        )
+
+        assert private.status is VerificationStatus.ERROR
+        assert traversal.status is VerificationStatus.ERROR
+        verifier.capture_screenshot.assert_not_awaited()
+
     async def test_evaluate_screenshot_parses_pass_and_invalid_payload(
         self,
         tmp_path: Path,
@@ -230,13 +252,13 @@ class TestVisualVerifierEdges:
         gateway.config.default_model = "default"
         verifier = VisualVerifier(gateway, screenshot_dir=str(tmp_path))
         verifier.capture_screenshot = AsyncMock(side_effect=RuntimeError("browser"))
-        capture_error = await verifier.verify("https://example.com", "ok")
+        capture_error = await verifier.verify("https://93.184.216.34", "ok")
         assert capture_error.status is VerificationStatus.ERROR
         assert "截图失败" in capture_error.feedback
 
         verifier.capture_screenshot = AsyncMock(return_value=tmp_path / "shot.png")
         verifier.evaluate_screenshot = AsyncMock(side_effect=RuntimeError("model"))
-        model_error = await verifier.verify("https://example.com", "ok")
+        model_error = await verifier.verify("https://93.184.216.34", "ok")
         assert model_error.status is VerificationStatus.ERROR
         assert model_error.metadata["screenshot"].endswith("shot.png")
 
@@ -247,7 +269,7 @@ class TestVisualVerifierEdges:
         )
         verifier.evaluate_screenshot = AsyncMock(return_value=passed)
         success = await verifier.verify(
-            "https://example.com",
+            "https://93.184.216.34",
             "ok",
             screenshot_name="named.png",
         )
@@ -267,41 +289,35 @@ class TestVisualVerifierEdges:
 
 
 class TestBuiltinToolEdges:
-    @staticmethod
-    def http_client(response: SimpleNamespace) -> MagicMock:
-        client = MagicMock()
-        client.get = AsyncMock(return_value=response)
-        context = MagicMock()
-        context.__aenter__ = AsyncMock(return_value=client)
-        context.__aexit__ = AsyncMock(return_value=None)
-        return context
-
-    async def test_web_search_success_failure_and_empty_results(self) -> None:
+    async def test_web_search_success_failure_and_empty_results(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         policy = ToolPolicy(ToolsConfig(network_allowed=True))
-        handler = search_handler(policy)
+
+        def resolve_host(host: str, port: int, **options: Any) -> list[tuple[Any, ...]]:
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+
+        def handler_for(status: int, text: str):
+            return search_handler(
+                policy,
+                lambda: httpx.MockTransport(
+                    lambda request: httpx.Response(status, content=text.encode("utf-8"))
+                ),
+            )
+
+        monkeypatch.setattr(socket, "getaddrinfo", resolve_host)
         html = (
             '<a class="result__a">missing href</a>'
             '<a href="https://example.com" class="result__a"><b>Result</b></a>'
         )
-        with patch(
-            "praxis.tools.builtins.network.web_search.httpx.AsyncClient",
-            return_value=self.http_client(SimpleNamespace(status_code=200, text=html)),
-        ):
-            result = await handler({"query": "praxis", "max_results": 3})
+        result = await handler_for(200, html)({"query": "praxis", "max_results": 3})
         assert "Result" in result
         assert "https://example.com" in result
 
-        with patch(
-            "praxis.tools.builtins.network.web_search.httpx.AsyncClient",
-            return_value=self.http_client(SimpleNamespace(status_code=503, text="")),
-        ):
-            assert "HTTP 503" in await handler({"query": "praxis"})
+        assert "HTTP 503" in await handler_for(503, "")({"query": "praxis"})
 
-        with patch(
-            "praxis.tools.builtins.network.web_search.httpx.AsyncClient",
-            return_value=self.http_client(SimpleNamespace(status_code=200, text="none")),
-        ):
-            assert "未找到" in await handler({"query": "praxis"})
+        assert "未找到" in await handler_for(200, "none")({"query": "praxis"})
 
     async def test_autonomy_handlers_and_sleep_validation(self) -> None:
         store = MagicMock()

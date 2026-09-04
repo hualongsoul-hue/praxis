@@ -6,7 +6,7 @@ from pathlib import Path
 
 from praxis.config.schemas import ToolsConfig
 from praxis.exceptions import ToolPolicyViolationError
-from praxis.network import ValidatedHttpTarget, validate_http_url
+from praxis.network import HttpFetchResult, NetworkPolicy, TransportFactory, ValidatedHttpTarget
 
 SAFE_ENVIRONMENT = frozenset({
     "COMSPEC",
@@ -32,8 +32,18 @@ class ToolPolicy:
         self.network_access_allowed = config.network_allowed
         self.allow_private_networks = config.allow_private_networks
         self.configured_network_max_response_bytes = config.network_max_response_bytes
+        self.configured_max_file_bytes = config.max_file_bytes
+        self.configured_search_max_files = config.search_max_files
+        self.configured_search_max_bytes = config.search_max_bytes
+        self.configured_search_max_matches = config.search_max_matches
+        self.configured_search_timeout = config.search_timeout
+        self.configured_search_max_pattern_length = config.search_max_pattern_length
         self.environment_allowlist = frozenset(config.shell_environment_allowlist)
         self.configured_max_concurrent_readonly = config.max_concurrent_readonly
+        self.network_policy = NetworkPolicy(
+            allow_private_networks=config.allow_private_networks,
+            max_response_bytes=config.network_max_response_bytes,
+        )
 
     @property
     def shell_timeout(self) -> float:
@@ -54,6 +64,30 @@ class ToolPolicy:
     @property
     def max_concurrent_readonly(self) -> int:
         return self.configured_max_concurrent_readonly
+
+    @property
+    def max_file_bytes(self) -> int:
+        return self.configured_max_file_bytes
+
+    @property
+    def search_max_files(self) -> int:
+        return self.configured_search_max_files
+
+    @property
+    def search_max_bytes(self) -> int:
+        return self.configured_search_max_bytes
+
+    @property
+    def search_max_matches(self) -> int:
+        return self.configured_search_max_matches
+
+    @property
+    def search_timeout(self) -> float:
+        return self.configured_search_timeout
+
+    @property
+    def search_max_pattern_length(self) -> int:
+        return self.configured_search_max_pattern_length
 
     @property
     def default_working_directory(self) -> Path:
@@ -101,6 +135,26 @@ class ToolPolicy:
     async def check_url(self, url: str) -> ValidatedHttpTarget:
         self.check_network()
         try:
-            return await validate_http_url(url, self.allow_private_networks)
+            return await self.network_policy.validate_url(url)
+        except ValueError as exc:
+            raise ToolPolicyViolationError(str(exc)) from None
+
+    async def fetch_url(
+        self,
+        url: str,
+        transport_factory: TransportFactory | None = None,
+        *,
+        max_bytes: int | None = None,
+        timeout: float = 30.0,
+    ) -> HttpFetchResult:
+        """Fetch one public URL through the shared DNS-pinned network policy."""
+        self.check_network()
+        try:
+            return await self.network_policy.fetch(
+                url,
+                transport_factory,
+                max_bytes=max_bytes,
+                timeout=timeout,
+            )
         except ValueError as exc:
             raise ToolPolicyViolationError(str(exc)) from None

@@ -5,10 +5,10 @@
 """
 
 from typing import Any
-
-import httpx
+from urllib.parse import urlencode
 
 from praxis.models.tools import ToolDefinition, ToolMetadata
+from praxis.network import TransportFactory
 from praxis.tools.policy import ToolPolicy
 
 DEFINITION = ToolDefinition(
@@ -37,26 +37,26 @@ DEFINITION = ToolDefinition(
 )
 
 
-def create_handler(sandbox: ToolPolicy):
+def create_handler(
+    sandbox: ToolPolicy,
+    transport_factory: TransportFactory | None = None,
+):
     """创建绑定沙箱的处理函数。"""
 
     async def handle(args: dict[str, Any]) -> str:
-        sandbox.check_network()
-
         query = args["query"]
-        max_results = args.get("max_results", 5)
+        max_results = min(max(int(args.get("max_results", 5)), 1), 20)
+        url = "https://html.duckduckgo.com/html/?" + urlencode({"q": str(query)})
+        response = await sandbox.fetch_url(
+            url,
+            transport_factory,
+            max_bytes=sandbox.network_max_response_bytes,
+            timeout=15.0,
+        )
+        if response.status_code != 200:
+            return f"搜索请求失败: HTTP {response.status_code}"
 
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
-            resp = await client.get(
-                "https://html.duckduckgo.com/html/",
-                params={"q": query},
-                headers={"User-Agent": "Praxis/0.1"},
-            )
-
-        if resp.status_code != 200:
-            return f"搜索请求失败: HTTP {resp.status_code}"
-
-        text = resp.text
+        text = response.body.decode("utf-8", errors="replace")
         results: list[str] = []
         start = 0
         remaining_results = max_results

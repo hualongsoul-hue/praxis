@@ -57,6 +57,7 @@ class VerifierRegistry:
         computational_enabled: bool = True,
         inferential_enabled: bool = True,
         visual_enabled: bool = True,
+        policy: ToolPolicy | None = None,
     ) -> None:
         self.entries: dict[str, VerifierEntry] = {}
         # 推理型（LLM judge）与视觉型验证需要 S4 网关；可选注入以启用。
@@ -64,6 +65,7 @@ class VerifierRegistry:
         self.computational_enabled = computational_enabled
         self.inferential_enabled = inferential_enabled
         self.visual_enabled = visual_enabled
+        self.policy = policy
 
     @classmethod
     def from_config(
@@ -79,6 +81,7 @@ class VerifierRegistry:
             computational_enabled=config.computational_enabled,
             inferential_enabled=config.inferential_enabled,
             visual_enabled=config.visual_enabled,
+            policy=policy,
         )
         if config.computational_enabled:
             registry.register(LintVerifier(runner=runner, policy=policy))
@@ -240,6 +243,10 @@ class VerifierRegistry:
             self.gateway,
             url=url,
             expectations=expectations,
+            network_policy=(self.policy.network_policy if self.policy is not None else None),
+            screenshot_max_bytes=(
+                self.policy.max_file_bytes if self.policy is not None else 10_000_000
+            ),
         )
 
     def get_phase_config(self, phase: QualityPhase) -> list[str]:

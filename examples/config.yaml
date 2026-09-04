@@ -77,6 +77,12 @@ tools:
   network_allowed: false
   allow_private_networks: false
   network_max_response_bytes: 1000000
+  max_file_bytes: 10000000
+  search_max_files: 10000
+  search_max_bytes: 50000000
+  search_max_matches: 100
+  search_timeout: 10.0
+  search_max_pattern_length: 512
   approval_timeout: 60.0
   fallback_mappings: {}
 
@@ -85,7 +91,7 @@ memory:
   embedding_model: null
   embedding_api_key_env: null
   embedding_timeout: 30.0
-  embedding_dimensions: 2560
+  embedding_dimensions: 256
   extraction_prompts: {}
   consolidation_similarity_threshold: 0.75
   background_enabled: true

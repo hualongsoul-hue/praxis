@@ -164,6 +164,12 @@ class ToolsConfig(StrictConfigModel):
     network_allowed: bool = False
     allow_private_networks: bool = False
     network_max_response_bytes: int = Field(default=1_000_000, ge=1, le=100_000_000)
+    max_file_bytes: int = Field(default=10_000_000, ge=1, le=1_000_000_000)
+    search_max_files: int = Field(default=10_000, ge=1, le=1_000_000)
+    search_max_bytes: int = Field(default=50_000_000, ge=1, le=1_000_000_000)
+    search_max_matches: int = Field(default=100, ge=1, le=100_000)
+    search_timeout: float = Field(default=10.0, gt=0, le=300.0)
+    search_max_pattern_length: int = Field(default=512, ge=1, le=4096)
     approval_timeout: float = Field(default=60.0, gt=0)
     fallback_mappings: dict[str, str] = Field(
         default_factory=dict,
