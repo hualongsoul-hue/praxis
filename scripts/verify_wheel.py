@@ -8,8 +8,28 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import TextIO
 
 ROOT = Path(__file__).parents[1]
+
+
+def write_console_output(
+    content: str,
+    *,
+    stream: TextIO | None = None,
+    flush: bool = False,
+) -> None:
+    """Write text without failing on legacy Windows console encodings."""
+    output = sys.stdout if stream is None else stream
+    encoding = output.encoding
+    rendered = (
+        content
+        if encoding is None
+        else content.encode(encoding, errors="backslashreplace").decode(encoding)
+    )
+    output.write(rendered)
+    if flush:
+        output.flush()
 
 
 def run(
@@ -19,7 +39,7 @@ def run(
     expected_return_code: int = 0,
     timeout: float = 300,
 ) -> subprocess.CompletedProcess[str]:
-    print(f"[wheel smoke] {' '.join(command)}", flush=True)
+    write_console_output(f"[wheel smoke] {' '.join(command)}\n", flush=True)
     try:
         result = subprocess.run(
             command,
@@ -36,9 +56,9 @@ def run(
             f"command {command!r} exceeded {timeout:.0f} seconds"
         ) from error
     if result.stdout:
-        print(result.stdout, end="")
+        write_console_output(result.stdout)
     if result.stderr:
-        print(result.stderr, end="", file=sys.stderr)
+        write_console_output(result.stderr, stream=sys.stderr)
     if result.returncode != expected_return_code:
         raise RuntimeError(
             f"command {command!r} returned {result.returncode}, "
