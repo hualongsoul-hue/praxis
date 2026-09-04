@@ -33,6 +33,11 @@ from praxis.recovery.fallback import FallbackRegistry
 from praxis.recovery.retry import RetryPolicy
 from praxis.telemetry.audit import NullAuditSink
 from praxis.telemetry.logger import get_logger
+from praxis.telemetry.redaction import (
+    DEFAULT_REDACTION_POLICY,
+    redact_observability_value,
+    summarize_observability_value,
+)
 from praxis.tools.executor import ToolExecutor
 from praxis.tools.registry import ToolRegistry
 
@@ -170,7 +175,8 @@ class ToolCoordinator:
             data={
                 "tool_name": name,
                 "tool_call_id": tool_call.id,
-                "arguments": arguments,
+                "argument_keys": tuple(sorted(str(key) for key in arguments)),
+                "arguments_summary": summarize_observability_value(arguments),
             },
         )
 
@@ -271,8 +277,8 @@ class ToolCoordinator:
                 "tool_name": name,
                 "tool_call_id": tool_call.id,
                 "success": result.success,
-                "content": result.content,
-                "error": result.error,
+                "content_summary": summarize_observability_value(result.content),
+                "error_type": result.error_type or "",
                 "execution_time_ms": result.execution_time_ms,
             },
         )
@@ -315,7 +321,9 @@ class ToolCoordinator:
             event_type="permission_decision",
             component="tools",
             action="tool_approval",
+            runtime_id=self.emitter.runtime_id,
             session_id=self.session_id,
+            run_id=self.emitter.run_id,
             details={
                 "tool_name": tool_name,
                 "approved": approved,
@@ -333,16 +341,41 @@ class ToolCoordinator:
     ) -> ToolResult:
         """尝试执行工具。"""
         try:
-            return await self.executor.execute(name, arguments, tool_call_id)
+            result = await self.executor.execute(name, arguments, tool_call_id)
+            return self.sanitize_tool_result(result)
         except Exception as exc:
-            log.error("工具执行异常", tool_name=name, error=str(exc))
+            error_type = f"{type(exc).__module__}.{type(exc).__qualname__}"
+            log.error("工具执行异常", tool_name=name, error_type=error_type)
             return ToolResult(
                 tool_call_id=tool_call_id,
                 success=False,
                 content="",
-                error=str(exc),
-                error_type=f"{type(exc).__module__}.{type(exc).__qualname__}",
+                error=f"工具执行失败: {type(exc).__name__}",
+                error_type=error_type,
             )
+
+    @staticmethod
+    def sanitize_tool_result(result: ToolResult) -> ToolResult:
+        """Create the bounded redacted projection used by model history and checkpoints."""
+        metadata = redact_observability_value(result.metadata)
+        return result.model_copy(
+            update={
+                "content": DEFAULT_REDACTION_POLICY.redact_text(
+                    result.content,
+                    max_length=65_536,
+                ),
+                "error": (
+                    DEFAULT_REDACTION_POLICY.redact_text(
+                        result.error,
+                        max_length=4096,
+                    )
+                    if result.error is not None
+                    else None
+                ),
+                "metadata": metadata if isinstance(metadata, dict) else {},
+            },
+            deep=True,
+        )
 
     async def execute_with_retry(
         self,
@@ -400,7 +433,7 @@ class ToolCoordinator:
                     "tool_call_id": tool_call_id,
                     "attempt": attempt + 1,
                     "delay_seconds": decision.wait_seconds,
-                    "error": result.error,
+                    "error_type": result.error_type or classification.category.value,
                 },
             )
             self.retry_policy.record_attempt(name)
@@ -434,7 +467,7 @@ class ToolCoordinator:
                 "tool_name": tool_call.function.name,
                 "tool_call_id": tool_call.id,
                 "skipped": True,
-                "reason": reason,
+                "reason": DEFAULT_REDACTION_POLICY.redact_text(reason, max_length=4096),
                 "tripwire": tripwire,
             },
         )

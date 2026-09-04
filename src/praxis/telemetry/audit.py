@@ -1,34 +1,17 @@
 """Runtime 实例级、同步持久化、只追加的审计服务。"""
 
 import asyncio
-import re
 from typing import Any, cast
 
 from praxis.exceptions import TelemetryError
 from praxis.models.telemetry import AuditEvent
 from praxis.persistence.store import PersistenceStore
+from praxis.telemetry.redaction import redact_observability_value
 
 AUDIT_NAMESPACE = "audit"
-SECRET_KEYS = frozenset({"api_key", "authorization", "credential", "password", "secret"})
-SECRET_VALUE = re.compile(r"(?i)\b(?:sk|key|token)-[a-z0-9_-]{8,}\b")
-
-
 def redact_audit_value(value: object) -> object:
-    """递归清除审计详情中的凭据；不会修改调用方对象。"""
-    if isinstance(value, dict):
-        return {
-            str(key): "[REDACTED]"
-            if str(key).casefold() in SECRET_KEYS
-            else redact_audit_value(item)
-            for key, item in cast(dict[object, object], value).items()
-        }
-    if isinstance(value, list):
-        return [redact_audit_value(item) for item in cast(list[object], value)]
-    if isinstance(value, tuple):
-        return [redact_audit_value(item) for item in cast(tuple[object, ...], value)]
-    if isinstance(value, str):
-        return SECRET_VALUE.sub("[REDACTED]", value)
-    return value
+    """Apply the shared immutable observability redaction policy."""
+    return redact_observability_value(value)
 
 
 class AuditService:

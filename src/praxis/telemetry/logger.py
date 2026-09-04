@@ -8,11 +8,13 @@
 import json
 import logging
 import sys
+from copy import copy
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from praxis.config.schemas import TelemetryConfig
+from praxis.telemetry.redaction import DEFAULT_REDACTION_POLICY, redact_observability_value
 
 STANDARD_ATTRS = frozenset({
     "args", "asctime", "created", "exc_info", "exc_text", "filename",
@@ -33,7 +35,7 @@ class JsonFormatter(logging.Formatter):
             ).isoformat(),
             "level": record.levelname,
             "component": getattr(record, "component", ""),
-            "message": record.getMessage(),
+            "message": DEFAULT_REDACTION_POLICY.redact_text(record.getMessage()),
         }
         for ctx_key in ("session_id", "turn"):
             val = getattr(record, ctx_key, None)
@@ -41,11 +43,9 @@ class JsonFormatter(logging.Formatter):
                 data[ctx_key] = val
         for key, val in record.__dict__.items():
             if key not in STANDARD_ATTRS and not key.startswith("_"):
-                data[key] = val
-        if record.exc_info and not record.exc_text:
-            record.exc_text = self.formatException(record.exc_info)
-        if record.exc_text:
-            data["exception"] = record.exc_text
+                data[key] = redact_observability_value(val)
+        if record.exc_info and record.exc_info[0] is not None:
+            data["exception_type"] = record.exc_info[0].__name__
         return json.dumps(data, ensure_ascii=False, default=str)
 
 
@@ -59,13 +59,20 @@ class TextFormatter(logging.Formatter):
         )
 
     def format(self, record: logging.LogRecord) -> str:
-        if not hasattr(record, "component"):
-            record.component = ""  # type: ignore[attr-defined]
-        base = super().format(record)
+        safe_record = copy(record)
+        safe_record.msg = DEFAULT_REDACTION_POLICY.redact_text(record.getMessage())
+        safe_record.args = ()
+        safe_record.exc_info = None
+        safe_record.exc_text = None
+        if not hasattr(safe_record, "component"):
+            safe_record.component = ""  # type: ignore[attr-defined]
+        base = super().format(safe_record)
         extra_parts: list[str] = []
         for key, val in record.__dict__.items():
             if key not in STANDARD_ATTRS and not key.startswith("_"):
-                extra_parts.append(f"{key}={val}")
+                extra_parts.append(f"{key}={redact_observability_value(val)}")
+        if record.exc_info and record.exc_info[0] is not None:
+            extra_parts.append(f"exception_type={record.exc_info[0].__name__}")
         if extra_parts:
             return f"{base}  {' '.join(extra_parts)}"
         return base
@@ -106,8 +113,17 @@ class StructuredLogger:
     def write_log(self, level: int, msg: str, **kwargs: Any) -> None:
         if not self.logger.isEnabledFor(level):
             return
-        extra = {**self.log_context, **kwargs}
-        self.logger.log(level, msg, extra=extra)
+        safe_context = redact_observability_value({**self.log_context, **kwargs})
+        extra = (
+            cast(dict[str, object], safe_context)
+            if isinstance(safe_context, dict)
+            else {"component": self.logger_name}
+        )
+        self.logger.log(
+            level,
+            DEFAULT_REDACTION_POLICY.redact_text(msg),
+            extra=extra,
+        )
 
 
 def configure_logging(config: TelemetryConfig) -> None:

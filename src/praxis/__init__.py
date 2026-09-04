@@ -13,12 +13,17 @@ from praxis.exceptions import (
 )
 from praxis.input_resolver import InputResolver
 from praxis.models import (
+    AgentEvent,
+    AgentEventPayload,
+    AgentResponse,
     AttachmentInput,
     AttachmentMetadata,
     AudioContent,
     AudioData,
     AudioInput,
     ContentPart,
+    EventPayload,
+    EventType,
     FileContent,
     FileData,
     FileInput,
@@ -45,6 +50,9 @@ __version__ = "1.0.0"
 
 __all__ = [
     "AgentSession",
+    "AgentEvent",
+    "AgentEventPayload",
+    "AgentResponse",
     "AttachmentInput",
     "AttachmentMetadata",
     "AudioContent",
@@ -54,6 +62,8 @@ __all__ = [
     "FileContent",
     "FileData",
     "FileInput",
+    "EventPayload",
+    "EventType",
     "HealthStatus",
     "ImageContent",
     "ImageInput",

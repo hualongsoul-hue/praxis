@@ -1,13 +1,15 @@
 """遥测相关数据模型——S2 审计日志事件。"""
 
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import ConfigDict, Field, field_validator
+
+from praxis.models.base import SafeBaseModel
 
 
-class AuditEvent(BaseModel):
+class AuditEvent(SafeBaseModel):
     """不可篡改的审计事件记录。
 
     事件类型：
@@ -18,6 +20,9 @@ class AuditEvent(BaseModel):
     - ``recovery_event``：错误恢复事件（熔断器状态转换、降级触发）
     """
 
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
     event_id: str = Field(default_factory=lambda: uuid4().hex)
     timestamp: datetime = Field(
         default_factory=lambda: datetime.now(UTC),
@@ -31,5 +36,15 @@ class AuditEvent(BaseModel):
     ]
     component: str
     action: str = ""
+    runtime_id: str | None = None
     session_id: str | None = None
+    run_id: str | None = None
     details: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("details", mode="before")
+    @classmethod
+    def redact_details(cls, value: object) -> dict[str, Any]:
+        from praxis.telemetry.redaction import redact_observability_value
+
+        redacted = redact_observability_value(value)
+        return cast(dict[str, Any], redacted) if isinstance(redacted, dict) else {}

@@ -82,6 +82,31 @@ class TestStructuredLogger:
         assert "tools" in captured.err
         assert "text output" in captured.err
 
+    @pytest.mark.parametrize("log_format", ["json", "text"])
+    def test_logging_redacts_nested_credentials_and_raw_exceptions(
+        self,
+        log_format: str,
+        capfd: pytest.CaptureFixture[str],
+    ) -> None:
+        secret = "sk-" + "L" * 32
+        configure_logging(TelemetryConfig(log_level="INFO", log_format=log_format))
+        logger = get_logger("security")
+        try:
+            raise ValueError(f"must not leak {secret}")
+        except ValueError:
+            logger.logger.exception(
+                f"Bearer {secret}",
+                extra={
+                    "component": "security",
+                    "nested": {"access_token": secret},
+                    "url": f"https://user:{secret}@example.test/x?api_key={secret}",
+                },
+            )
+        output = capfd.readouterr().err
+        assert secret not in output
+        assert "must not leak" not in output
+        assert "ValueError" in output
+
 
 class TestMetrics:
     """Task 3.2: 指标采集与导出验证。"""
@@ -239,6 +264,29 @@ class TestAudit:
             "api_key": "[REDACTED]",
             "message": "[REDACTED]",
         }
+
+    async def test_nested_urls_exceptions_and_large_values_are_safely_projected(
+        self,
+        audit_store: PersistenceStore,
+    ) -> None:
+        secret = "sk-" + "R" * 32
+        audit = AuditService(audit_store)
+        await audit.record(AuditEvent(
+            event_type="tool_call",
+            component="tools",
+            details={
+                "nested": {"refresh_token": secret},
+                "url": f"https://user:{secret}@example.test/a?token={secret}",
+                "error": RuntimeError(f"raw {secret}"),
+                "large": "x" * 20_000,
+            },
+        ))
+        [stored] = await audit.query()
+        serialized = stored.model_dump_json()
+        assert secret not in serialized
+        assert "user:" not in serialized
+        assert stored.details["error"] == {"error_type": "RuntimeError"}
+        assert len(stored.details["large"]) < 17_000
 
     async def test_record_waits_for_durable_write(self) -> None:
         """审计调用返回前必须完成持久化，避免关闭阶段遗留后台连接。"""

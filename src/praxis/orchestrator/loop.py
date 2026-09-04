@@ -129,7 +129,7 @@ class OrchestrationLoop:
     ) -> RunContext:
         """初始化一次 run 的状态和上下文。"""
         self.state = LoopState(phase=LoopPhase.ASSEMBLING)
-        self.emitter.clear()
+        self.emitter.begin_run()
         self.strategy.begin_request()
         turn_context = TurnContext(
             user_content=user_input.content,

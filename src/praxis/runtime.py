@@ -135,6 +135,7 @@ class PraxisRuntime:
         if storage_backend is not None:
             store = PersistenceStore(storage_backend, own_backend=own_storage_backend)
         self.config = config.model_copy(deep=True)
+        self.runtime_id = uuid4().hex
         self.gateway = gateway
         self.store = store
         self.audit_sink = audit_sink
@@ -305,6 +306,7 @@ class PraxisRuntime:
             embedding_provider=self.embedding_provider,
             vector_store=self.vector_store,
             resources=self.resources,
+            runtime_id=self.runtime_id,
         )
         session = await factory.create_session(
             guardrails=self.guardrails,
@@ -440,6 +442,7 @@ class PraxisRuntime:
             embedding_provider=self.embedding_provider,
             vector_store=self.vector_store,
             resources=self.resources,
+            runtime_id=self.runtime_id,
         )
         child = await factory.create_session(
             guardrails=self.guardrails,

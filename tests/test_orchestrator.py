@@ -1,6 +1,7 @@
 """S11 编排循环单元测试。"""
 
 import asyncio
+import json
 from collections.abc import AsyncGenerator
 from contextlib import aclosing
 from copy import deepcopy
@@ -12,6 +13,7 @@ import pytest
 from praxis.config.schemas import ContextConfig, OrchestratorConfig
 from praxis.context.assembler import PromptAssembler
 from praxis.context.compaction import ContextCompactor
+from praxis.exceptions import ModelValidationError
 from praxis.models.context import RunContext, TokenUsage
 from praxis.models.guardrails import GuardrailVerdict, VerdictType
 from praxis.models.messages import (
@@ -309,14 +311,25 @@ class TestEventEmitter:
     """事件发射系统测试。"""
 
     def test_emit_and_collect(self) -> None:
-        emitter = EventEmitter()
-        emitter.emit("turn_start", turn=1, data={"info": "test"})
+        emitter = EventEmitter(runtime_id="runtime-1", session_id="session-1")
+        run_id = emitter.begin_run("run-1")
+        emitter.emit("turn_start", turn=1)
         emitter.emit("llm_request", turn=1)
         events = emitter.get_events()
         assert len(events) == 2
         assert events[0].event_type == "turn_start"
         assert events[0].turn == 1
-        assert events[0].data["info"] == "test"
+        assert [event.sequence for event in events] == [1, 2]
+        assert {event.runtime_id for event in events} == {"runtime-1"}
+        assert {event.session_id for event in events} == {"session-1"}
+        assert {event.run_id for event in events} == {run_id}
+
+    def test_unknown_event_and_payload_fields_are_rejected(self) -> None:
+        emitter = EventEmitter()
+        with pytest.raises(ModelValidationError):
+            emitter.emit("unknown")
+        with pytest.raises(ModelValidationError):
+            emitter.emit("turn_start", data={"arbitrary": True})
 
     def test_listener(self) -> None:
         received: list[AgentEvent] = []
@@ -328,30 +341,30 @@ class TestEventEmitter:
         emitter = EventEmitter()
         collector = Collector()
         emitter.add_listener(collector)
-        emitter.emit("test_event")
+        emitter.emit("turn_start")
         assert len(received) == 1
         emitter.remove_listener(collector)
-        emitter.emit("test_event_2")
+        emitter.emit("turn_end")
         assert len(received) == 1
 
     def test_clear(self) -> None:
         emitter = EventEmitter()
-        emitter.emit("a")
-        emitter.emit("b")
+        emitter.emit("turn_start")
+        emitter.emit("turn_end")
         emitter.clear()
         assert emitter.get_events() == []
 
     async def test_stream_collector(self) -> None:
         collector = StreamCollector()
-        collector.on_event(AgentEvent(event_type="e1", turn=1))
-        collector.on_event(AgentEvent(event_type="e2", turn=2))
+        collector.on_event(AgentEvent(event_type="turn_start", turn=1))
+        collector.on_event(AgentEvent(event_type="turn_end", turn=2))
         collector.close()
 
         events: list[AgentEvent] = []
         async for e in collector.iter_events():
             events.append(e)
         assert len(events) == 2
-        assert events[0].event_type == "e1"
+        assert events[0].event_type == "turn_start"
 
 
 # ── Task 12.4: 工具调用协调 ─────────────────────────────────────────────────
@@ -528,6 +541,31 @@ class TestToolCoordination:
         types = [e.event_type for e in events]
         assert "tool_call_start" in types
         assert "tool_call_end" in types
+
+    async def test_tool_history_and_events_are_bounded_and_redacted(self) -> None:
+        secret = "sk-" + "Z" * 32
+        result = ToolResult(
+            tool_call_id="tc-secret",
+            success=True,
+            content=f"token={secret} " + "x" * 70_000,
+            metadata={"nested": {"authorization": f"Bearer {secret}"}},
+        )
+        coordinator, executor, emitter = self.make_coordinator(execute_result=result)
+        call = make_tool_call(
+            "read_file",
+            json.dumps({"api_key": secret, "path": "test.py"}),
+            tc_id="tc-secret",
+        )
+
+        [outcome] = await coordinator.execute_tool_calls([call], turn=1)
+
+        assert outcome.result is not None
+        assert secret not in outcome.result.model_dump_json()
+        assert len(outcome.result.content) < 66_000
+        serialized_events = "".join(event.model_dump_json() for event in emitter.events)
+        assert secret not in serialized_events
+        assert "arguments\"" not in serialized_events
+        assert len(emitter.events[0].data["arguments_summary"]) <= 4096
 
     async def test_multiple_tool_calls(self) -> None:
         coordinator, executor, emitter = self.make_coordinator()
@@ -1023,7 +1061,10 @@ class TestOrchestrationLoop:
             "turn_start",
         ]
         assert events[-1].event_type == "termination"
-        assert events[-1].data == {"reason": "natural", "content": "stream answer"}
+        assert events[-1].data.model_dump(mode="json") == {
+            "reason": "natural",
+            "content": "stream answer",
+        }
 
     @patch("praxis.orchestrator.loop.chat")
     async def test_stream_and_complete_share_terminal_state_and_usage(

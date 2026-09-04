@@ -31,7 +31,7 @@ from examples.interactive_console import (
 )
 from praxis import AgentSession, AudioInput, FileInput, ImageInput, UserInput, VideoInput
 from praxis.config.schemas import TelemetryConfig
-from praxis.exceptions import PraxisError
+from praxis.exceptions import ModelValidationError, PraxisError
 from praxis.models.mcp import MCPElicitationRequest
 from praxis.models.orchestrator import AgentEvent
 from praxis.models.runtime import ComponentHealth, HealthStatus, RuntimeHealth, RuntimeState
@@ -192,9 +192,13 @@ def test_render_event_covers_public_runtime_events(
     assert expected in capsys.readouterr().out
 
 
-def test_render_event_handles_empty_and_unknown_events(capsys) -> None:
-    assert render_event(AgentEvent(event_type="content_delta"), False) is False
-    assert render_event(AgentEvent(event_type="unknown"), False) is False
+def test_render_event_handles_empty_and_rejects_unknown_events(capsys) -> None:
+    assert render_event(
+        AgentEvent(event_type="content_delta", data={"text": ""}),
+        False,
+    ) is False
+    with pytest.raises(ModelValidationError):
+        AgentEvent(event_type="unknown")
     assert capsys.readouterr().out == ""
 
 

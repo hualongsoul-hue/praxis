@@ -5,31 +5,17 @@
 """
 
 import asyncio
-import time
 from collections.abc import AsyncIterator
 from typing import Any
+from uuid import uuid4
 
-from praxis.models.orchestrator import AgentEvent
+from praxis.models.orchestrator import AgentEvent, EventType
 from praxis.telemetry.logger import get_logger
 from praxis.telemetry.metrics import emit_metric
 
 log = get_logger("orchestrator.events")
 
-EVENT_TYPES = frozenset({
-    "plan_created",
-    "turn_start",
-    "llm_request",
-    "content_delta",
-    "reasoning_delta",
-    "llm_response",
-    "tool_call_start",
-    "tool_call_end",
-    "tool_retry",
-    "verification_result",
-    "gav_feedback",
-    "turn_end",
-    "termination",
-})
+EVENT_TYPES = frozenset(EventType)
 
 
 class EventEmitter:
@@ -38,9 +24,25 @@ class EventEmitter:
     收集编排循环事件，支持同步记录和异步流式推送。
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        runtime_id: str | None = None,
+        session_id: str | None = None,
+    ) -> None:
         self.events: list[AgentEvent] = []
         self.listeners: list[EventListener] = []
+        self.runtime_id = runtime_id or uuid4().hex
+        self.session_id = session_id or uuid4().hex[:16]
+        self.run_id = uuid4().hex
+        self.next_sequence = 1
+
+    def begin_run(self, run_id: str | None = None) -> str:
+        """Start a new correlated event sequence and discard prior run events."""
+        self.events.clear()
+        self.run_id = run_id or uuid4().hex
+        self.next_sequence = 1
+        return self.run_id
 
     def emit(
         self,
@@ -58,12 +60,16 @@ class EventEmitter:
         Returns:
             发射的事件。
         """
-        event = AgentEvent(
-            event_type=event_type,
-            turn=turn,
-            data=data or {},
-            timestamp=time.time(),
-        )
+        event = AgentEvent.model_validate({
+            "event_type": event_type,
+            "runtime_id": self.runtime_id,
+            "session_id": self.session_id,
+            "run_id": self.run_id,
+            "sequence": self.next_sequence,
+            "turn": turn,
+            "data": data or {},
+        })
+        self.next_sequence += 1
         self.events.append(event)
 
         # 仅以 event_type 作标签；turn 是无界值，不入指标标签（避免基数爆炸）
@@ -95,6 +101,7 @@ class EventEmitter:
     def clear(self) -> None:
         """清空事件列表。"""
         self.events.clear()
+        self.next_sequence = 1
 
 
 class EventListener:

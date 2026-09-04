@@ -313,6 +313,7 @@ class SessionFactory:
         embedding_provider: EmbeddingProvider | None = None,
         vector_store: VectorStore | None = None,
         resources: ResourceController | None = None,
+        runtime_id: str | None = None,
     ) -> None:
         self.store = store
         self.session_config = session_config
@@ -326,6 +327,7 @@ class SessionFactory:
         self.embedding_provider = embedding_provider
         self.vector_store = vector_store
         self.resources = resources
+        self.runtime_id = runtime_id
 
     async def create_session(
         self,
@@ -409,7 +411,10 @@ class SessionFactory:
             fallbacks.load_mappings(resolved_tools_config.fallback_mappings)
 
         # S11: 编排循环
-        emitter = EventEmitter()
+        emitter = EventEmitter(
+            runtime_id=self.runtime_id,
+            session_id=metadata.session_id,
+        )
         parser = OutputParser()
         termination = TerminationManager(self.orchestrator_config)
         strategy = LoopStrategy(mode=strategy_mode(self.orchestrator_config.default_strategy))

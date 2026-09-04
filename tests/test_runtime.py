@@ -108,7 +108,7 @@ class FakeRunner:
         user_message: InputValue,
         **kwargs: Any,
     ) -> AsyncGenerator[AgentEvent, None]:
-        yield AgentEvent(event_type="content", data={"content": user_message})
+        yield AgentEvent(event_type="content_delta", data={"text": str(user_message)})
 
     def abort(self) -> None:
         self.aborted = True
@@ -522,7 +522,7 @@ async def test_session_stream_abort_properties_and_idempotent_context(tmp_path: 
         await session.__aenter__()
         assert session.session_id == "fake-session"
         events = [event async for event in session.run_stream("stream")]
-        assert events[0].data["content"] == "stream"
+        assert events[0].data["text"] == "stream"
         session.abort()
         assert runner.aborted
         await session.close()
