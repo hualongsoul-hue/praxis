@@ -4,7 +4,7 @@ import asyncio
 import os
 import socket
 import sys
-import time
+import threading
 import traceback
 from pathlib import Path
 from typing import Any
@@ -779,7 +779,7 @@ class TestWebFetchSecurity:
 
 
 class TestBoundedFileAndSearchSecurity:
-    async def test_read_file_rejects_oversized_input_without_blocking_loop(
+    async def test_read_file_rejects_oversized_input_before_reading(
         self,
         tmp_path: Path,
         monkeypatch: pytest.MonkeyPatch,
@@ -790,18 +790,49 @@ class TestBoundedFileAndSearchSecurity:
             allowed_paths=[str(tmp_path)],
             max_file_bytes=4,
         ))
-        original_read_bytes = Path.read_bytes
+        read_attempted = False
 
-        def slow_read(path: Path) -> bytes:
-            time.sleep(0.05)
+        def forbidden_read(path: Path) -> bytes:
+            nonlocal read_attempted
+            read_attempted = True
+            raise AssertionError(f"不应读取已知超限文件: {path}")
+
+        monkeypatch.setattr(Path, "read_bytes", forbidden_read)
+        with pytest.raises(ToolPolicyViolationError, match="大小上限"):
+            await read_file_handler(policy)({"file_path": str(target)})
+        assert read_attempted is False
+
+    async def test_read_file_does_not_block_event_loop(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        target = tmp_path / "input.txt"
+        target.write_text("content", encoding="utf-8")
+        policy = ToolPolicy(ToolsConfig(
+            allowed_paths=[str(tmp_path)],
+            max_file_bytes=64,
+        ))
+        original_read_bytes = Path.read_bytes
+        loop = asyncio.get_running_loop()
+        read_started = asyncio.Event()
+        release_read = threading.Event()
+
+        def controlled_read(path: Path) -> bytes:
+            loop.call_soon_threadsafe(read_started.set)
+            if not release_read.wait(timeout=2):
+                raise AssertionError("测试未及时释放文件读取")
             return original_read_bytes(path)
 
-        monkeypatch.setattr(Path, "read_bytes", slow_read)
+        monkeypatch.setattr(Path, "read_bytes", controlled_read)
         task = asyncio.create_task(read_file_handler(policy)({"file_path": str(target)}))
-        await asyncio.sleep(0.01)
-        assert not task.done()
-        with pytest.raises(ToolPolicyViolationError, match="大小上限"):
-            await task
+        try:
+            await asyncio.wait_for(read_started.wait(), timeout=2)
+            assert task.done() is False
+        finally:
+            release_read.set()
+
+        assert "content" in await task
 
     async def test_search_rejects_nested_quantifier_regex(self, tmp_path: Path) -> None:
         target = tmp_path / "input.txt"

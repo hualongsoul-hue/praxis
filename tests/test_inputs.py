@@ -976,6 +976,7 @@ def test_validation_boundaries_never_expose_inputs() -> None:
     secret_marker = "validation-secret-marker"
     secret_text = f"data:text/plain;base64,{secret_marker}c2VjcmV0"
     secret_bytes = f"{secret_marker}c2VjcmV0".encode()
+    invalid_json = json.dumps({"text": "ok", "unexpected": secret_marker})
     markers = (secret_marker, "data:text/plain;base64", repr(secret_bytes))
     producers = (
         lambda: UserInput(text="ok", unexpected=secret_text),
@@ -1010,9 +1011,7 @@ def test_validation_boundaries_never_expose_inputs() -> None:
         lambda: PraxisConfig.model_validate(
             {"inputs": {"max_attachment_bytes": secret_text}}
         ),
-        lambda: UserInput.model_validate_json(
-            '{"text":"ok","unexpected":"validation-secret-marker"}'
-        ),
+        lambda: UserInput.model_validate_json(invalid_json),
         lambda: InputConfig.model_validate_strings(
             {"max_attachment_bytes": secret_marker}
         ),
