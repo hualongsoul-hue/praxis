@@ -4,7 +4,7 @@ resume_session 从 S3 加载检查点，
 恢复 S6 记忆状态、S7 上下文状态，重建无状态组件，验证完整性。
 """
 
-from typing import Any
+from typing import Any, cast
 
 from praxis.gateway.router import GatewayRouter
 from praxis.guardrails.engine import GuardrailEngine
@@ -15,6 +15,7 @@ from praxis.models.session import (
     SessionMetadata,
     SessionStatus,
 )
+from praxis.models.tools import ToolExecutionRecord, ToolExecutionState
 from praxis.session.checkpoint import CheckpointManager
 from praxis.session.core import Session, SessionFactory
 from praxis.skills.manager import SkillManager
@@ -94,6 +95,9 @@ class SessionResumer:
         self.restore_metadata(session, snapshot.metadata)
         self.restore_context_state(session, snapshot.context_state)
         self.restore_loop_state(session, snapshot.loop_state)
+        self.restore_strategy_state(session, snapshot.strategy_state)
+        self.restore_recovery_state(session, snapshot.recovery_state)
+        self.restore_tool_execution_ledger(session, snapshot.tool_execution_ledger)
         await self.restore_memory_state(session, snapshot.memory_state)
 
         session.metadata.continuation_phase = ContinuationPhase.WARMUP
@@ -130,6 +134,41 @@ class SessionResumer:
         """恢复 S11 循环状态。"""
         if state:
             session.loop.state = LoopState.model_validate(state)
+
+    @staticmethod
+    def restore_strategy_state(session: Session, state: dict[str, Any]) -> None:
+        """Restore request planning state."""
+        if state:
+            session.loop.strategy.import_state(state)
+
+    @staticmethod
+    def restore_recovery_state(session: Session, state: dict[str, Any]) -> None:
+        """Restore circuit-breaker and retry state."""
+        circuits = state.get("circuits")
+        if isinstance(circuits, dict):
+            session.loop.coordinator.circuits.import_state(
+                cast(dict[str, Any], circuits),
+            )
+        retry = state.get("retry")
+        if isinstance(retry, dict):
+            session.loop.coordinator.retry_policy.import_state(
+                cast(dict[str, object], retry),
+            )
+
+    @staticmethod
+    def restore_tool_execution_ledger(
+        session: Session,
+        ledger: dict[str, ToolExecutionRecord],
+    ) -> None:
+        """Restore the ledger and convert interrupted writes to UNCERTAIN."""
+        session.tool_execution_ledger.clear()
+        for call_id, value in ledger.items():
+            record = value
+            if record.state is ToolExecutionState.STARTED and not (
+                record.readonly or record.idempotent
+            ):
+                record = record.model_copy(update={"state": ToolExecutionState.UNCERTAIN})
+            session.tool_execution_ledger[call_id] = record
 
     @staticmethod
     async def restore_memory_state(session: Session, state: dict[str, Any]) -> None:

@@ -38,6 +38,11 @@ class CheckpointManager:
         context_state: dict[str, Any],
         memory_state: dict[str, Any],
         loop_state: dict[str, Any],
+        strategy_state: dict[str, Any] | None = None,
+        recovery_state: dict[str, Any] | None = None,
+        approval_state: dict[str, Any] | None = None,
+        skill_state: dict[str, Any] | None = None,
+        tool_execution_ledger: dict[str, Any] | None = None,
         file_refs: list[str] | None = None,
         description: str = "",
     ) -> str:
@@ -61,6 +66,11 @@ class CheckpointManager:
             context_state=context_state,
             memory_state=memory_state,
             loop_state=loop_state,
+            strategy_state=strategy_state or {},
+            recovery_state=recovery_state or {},
+            approval_state=approval_state or {},
+            skill_state=skill_state or {},
+            tool_execution_ledger=tool_execution_ledger or {},
             file_refs=file_refs or [],
         )
 

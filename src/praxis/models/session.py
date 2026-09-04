@@ -7,6 +7,8 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from praxis.models.tools import ToolExecutionRecord
+
 
 class SessionStatus(StrEnum):
     """会话状态。"""
@@ -56,4 +58,9 @@ class SessionSnapshot(BaseModel):
     context_state: dict[str, Any] = Field(default_factory=dict)
     memory_state: dict[str, Any] = Field(default_factory=dict)
     loop_state: dict[str, Any] = Field(default_factory=dict)
+    strategy_state: dict[str, Any] = Field(default_factory=dict)
+    recovery_state: dict[str, Any] = Field(default_factory=dict)
+    approval_state: dict[str, Any] = Field(default_factory=dict)
+    skill_state: dict[str, Any] = Field(default_factory=dict)
+    tool_execution_ledger: dict[str, ToolExecutionRecord] = Field(default_factory=dict)
     file_refs: list[str] = Field(default_factory=list)

@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from praxis.exceptions import CheckpointCorruptionError, CheckpointVersionError
 
-CHECKPOINT_SCHEMA_VERSION = 1
+CHECKPOINT_SCHEMA_VERSION = 2
 
 
 def checkpoint_checksum(session_id: str, state: dict[str, Any]) -> str:

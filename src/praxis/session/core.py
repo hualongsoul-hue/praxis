@@ -4,6 +4,7 @@ create_session 创建新会话时初始化所有组件实例，
 注入配置，加载项目级记忆/工具/权限，生成会话 ID 和初始检查点。
 """
 
+import asyncio
 from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, aclosing
 from typing import Any
@@ -32,6 +33,7 @@ from praxis.models.session import (
     SessionMetadata,
     SessionStatus,
 )
+from praxis.models.tools import ToolExecutionRecord
 from praxis.orchestrator.events import EventEmitter
 from praxis.orchestrator.loop import OrchestrationLoop
 from praxis.orchestrator.parser import OutputParser
@@ -108,6 +110,19 @@ class Session:
         self.mcp_elicitation_manager: Any = None
         self.mcp_auth_manager: Any = None
         self.mcp_stack: Any = None
+        self.tool_execution_ledger: dict[str, ToolExecutionRecord] = {}
+        self.checkpoint_lock = asyncio.Lock()
+        self.loop.coordinator.configure_execution_tracking(
+            self.tool_execution_ledger,
+            self.persist_tool_execution,
+        )
+
+    async def persist_tool_execution(self, record: ToolExecutionRecord) -> None:
+        """Persist a side-effect boundary before orchestration may continue."""
+        if self.config.auto_checkpoint:
+            await self.save_auto_checkpoint(
+                description=f"Tool {record.tool_call_id}: {record.state.value}",
+            )
 
     def attach_mcp_stack(self, stack: AsyncExitStack) -> None:
         """转移 MCP 连接退出栈的所有权，随 Session 统一关闭。"""
@@ -151,29 +166,40 @@ class Session:
 
         return response
 
-    async def save_auto_checkpoint(self) -> str | None:
+    async def save_auto_checkpoint(self, description: str | None = None) -> str | None:
         """自动保存检查点（S3 持久化 S6/S7/S11 状态）。"""
-        checkpoint_mgr = CheckpointManager(self.store)
-
-        context_state = {
-            "messages": self.assembler.conversation_history,
-            "file_refs": self.assembler.file_refs,
-            "compaction_count": self.assembler.compaction_count,
-            "tool_schemas": self.assembler.tool_schemas,
-        }
-        memory_state = self.memory.export_state() if self.memory is not None else {}
-        loop_state = self.loop.state.model_dump(mode="json")
-
-        checkpoint_id = await checkpoint_mgr.save_checkpoint(
-            metadata=self.metadata,
-            context_state=context_state,
-            memory_state=memory_state,
-            loop_state=loop_state,
-            file_refs=self.assembler.file_refs,
-            description=f"Auto checkpoint after turn {self.metadata.total_turns}",
-        )
-        await self.prune_checkpoints(checkpoint_mgr)
-        return checkpoint_id
+        async with self.checkpoint_lock:
+            checkpoint_mgr = CheckpointManager(self.store)
+            context_state = {
+                "messages": self.assembler.conversation_history,
+                "file_refs": self.assembler.file_refs,
+                "compaction_count": self.assembler.compaction_count,
+                "tool_schemas": self.assembler.tool_schemas,
+            }
+            memory_state = self.memory.export_state() if self.memory is not None else {}
+            loop_state = self.loop.state.model_dump(mode="json")
+            recovery_state = {
+                "circuits": self.loop.coordinator.circuits.export_state(),
+                "retry": self.loop.coordinator.retry_policy.export_state(),
+            }
+            checkpoint_id = await checkpoint_mgr.save_checkpoint(
+                metadata=self.metadata,
+                context_state=context_state,
+                memory_state=memory_state,
+                loop_state=loop_state,
+                strategy_state=self.loop.strategy.export_state(),
+                recovery_state=recovery_state,
+                tool_execution_ledger={
+                    key: value.model_dump(mode="json")
+                    for key, value in self.tool_execution_ledger.items()
+                },
+                file_refs=self.assembler.file_refs,
+                description=description or (
+                    f"Auto checkpoint after turn {self.metadata.total_turns}"
+                ),
+            )
+            await self.prune_checkpoints(checkpoint_mgr)
+            return checkpoint_id
 
     async def prune_checkpoints(self, checkpoint_mgr: CheckpointManager) -> None:
         """按 max_checkpoints_per_session 保留最新若干个，删除最旧的多余检查点。"""
@@ -200,20 +226,28 @@ class Session:
             self.model_capabilities,
         )
         turn_tokens = 0
-        stream = self.loop.run_stream(resolved, **kwargs)
-        async with aclosing(stream):
-            async for event in stream:
-                if event.event_type == "llm_request":
-                    turn_tokens += event.data.get("token_count", 0)
-                yield event
-
-        # 与 run_turn 对齐：续接推进、累加统计并触发自动检查点
-        if self.continuation is not None:
-            self.continuation.advance_phase(self)
-        self.metadata.total_turns += self.loop.state.current_turn
-        self.metadata.total_tokens += turn_tokens
-        if self.config.auto_checkpoint:
-            await self.save_auto_checkpoint()
+        completed = False
+        try:
+            stream = self.loop.run_stream(resolved, **kwargs)
+            async with aclosing(stream):
+                async for event in stream:
+                    if event.event_type == "llm_request":
+                        turn_tokens += event.data.get("token_count", 0)
+                    yield event
+            completed = True
+        finally:
+            if completed and self.continuation is not None:
+                self.continuation.advance_phase(self)
+            self.metadata.total_turns += self.loop.state.current_turn
+            self.metadata.total_tokens += turn_tokens
+            if self.config.auto_checkpoint:
+                await self.save_auto_checkpoint(
+                    description=(
+                        "Auto checkpoint after stream completion"
+                        if completed
+                        else "Auto checkpoint after stream interruption"
+                    ),
+                )
 
     def abort(self) -> None:
         """中断当前会话。"""

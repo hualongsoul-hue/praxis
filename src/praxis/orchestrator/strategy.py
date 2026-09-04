@@ -4,6 +4,7 @@ ReAct 模式（默认，交叉推理与行动）和
 Plan-and-Execute 模式（先规划后执行），运行时可切换。
 """
 
+from typing import Any, cast
 
 from praxis.models.orchestrator import StrategyMode
 from praxis.telemetry.logger import get_logger
@@ -112,3 +113,43 @@ class LoopStrategy:
         if step.tool_hint:
             instruction += f"\n建议使用工具: {step.tool_hint}"
         return instruction
+
+    def export_state(self) -> dict[str, Any]:
+        """Return a JSON-safe snapshot of the complete strategy state."""
+        return {
+            "mode": self.mode.value,
+            "current_step_index": self.current_step_index,
+            "plan": [
+                {
+                    "description": step.description,
+                    "tool_hint": step.tool_hint,
+                    "completed": step.completed,
+                    "result": step.result,
+                }
+                for step in self.plan
+            ],
+        }
+
+    def import_state(self, state: dict[str, Any]) -> None:
+        """Restore a snapshot produced by :meth:`export_state`."""
+        mode_value = state.get("mode", StrategyMode.REACT.value)
+        self.mode = StrategyMode(str(mode_value))
+        plan_value = state.get("plan", [])
+        plan_items = cast(list[object], plan_value) if isinstance(plan_value, list) else []
+        restored: list[PlanStep] = []
+        for item in plan_items:
+            if not isinstance(item, dict):
+                continue
+            values = cast(dict[str, object], item)
+            step = PlanStep(
+                description=str(values.get("description", "")),
+                tool_hint=str(values.get("tool_hint", "")),
+            )
+            step.completed = bool(values.get("completed", False))
+            step.result = str(values.get("result", ""))
+            restored.append(step)
+        self.plan = restored
+        index_value = state.get("current_step_index", 0)
+        self.current_step_index = (
+            min(index_value, len(restored)) if isinstance(index_value, int) and index_value >= 0 else 0
+        )

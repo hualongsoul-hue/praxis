@@ -6,7 +6,9 @@ S9.record_outcome → 失败时 S9.classify_error 决策。
 """
 
 import asyncio
-from collections.abc import Callable
+import hashlib
+import json
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from json_repair import repair_json
@@ -16,7 +18,13 @@ from praxis.models.guardrails import VerdictType
 from praxis.models.recovery import CircuitState, ErrorCategory, ErrorClassification
 from praxis.models.session import SessionStatus
 from praxis.models.telemetry import AuditEvent
-from praxis.models.tools import ApprovalRequest, ToolCall, ToolResult
+from praxis.models.tools import (
+    ApprovalRequest,
+    ToolCall,
+    ToolExecutionRecord,
+    ToolExecutionState,
+    ToolResult,
+)
 from praxis.orchestrator.events import EventEmitter
 from praxis.protocols import ApprovalHandler, AuditSink
 from praxis.recovery.circuit_breaker import CircuitBreakerRegistry
@@ -29,6 +37,8 @@ from praxis.tools.executor import ToolExecutor
 from praxis.tools.registry import ToolRegistry
 
 log = get_logger("orchestrator.tool_coordination")
+
+ToolExecutionObserver = Callable[[ToolExecutionRecord], Awaitable[None]]
 
 
 class ToolCallOutcome:
@@ -90,6 +100,35 @@ class ToolCoordinator:
         self.audit_sink = audit_sink or NullAuditSink()
         self.session_id = session_id
         self.status_callback = status_callback
+        self.execution_ledger: dict[str, ToolExecutionRecord] = {}
+        self.execution_observer: ToolExecutionObserver | None = None
+
+    def configure_execution_tracking(
+        self,
+        ledger: dict[str, ToolExecutionRecord],
+        observer: ToolExecutionObserver | None,
+    ) -> None:
+        """Attach Session-owned durable tool execution state."""
+        self.execution_ledger = ledger
+        self.execution_observer = observer
+
+    @staticmethod
+    def argument_digest(arguments: dict[str, Any]) -> str:
+        """Return a stable digest used to bind a call ID to its arguments."""
+        encoded = json.dumps(
+            arguments,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    async def record_execution(self, record: ToolExecutionRecord) -> None:
+        """Update the in-memory ledger and durably observe the transition."""
+        self.execution_ledger[record.tool_call_id] = record
+        if self.execution_observer is not None:
+            await self.execution_observer(record)
 
     async def execute_tool_calls(
         self,
@@ -186,7 +225,44 @@ class ToolCoordinator:
                 return self.make_skipped(tool_call, turn, f"熔断器断开: {name}")
 
         # Step 3~5: S5 执行 + S9 记录结果 + 瞬态错误按退避策略真正重试
-        result = await self.execute_with_retry(name, arguments, tool_call.id, turn)
+        metadata = self.registry.get_metadata(name)
+        digest = self.argument_digest(arguments)
+        existing = self.execution_ledger.get(tool_call.id)
+        if existing is not None:
+            if existing.tool_name != name or existing.argument_digest != digest:
+                return self.make_skipped(tool_call, turn, "工具调用 ID 与既有执行记录冲突")
+            if existing.state is ToolExecutionState.SUCCEEDED and existing.result is not None:
+                return ToolCallOutcome(tool_call=tool_call, result=existing.result.model_copy(deep=True))
+            if (
+                existing.state in {ToolExecutionState.STARTED, ToolExecutionState.UNCERTAIN}
+                and not (existing.readonly or existing.idempotent)
+            ):
+                return self.make_skipped(tool_call, turn, "非幂等工具执行状态不确定，拒绝自动重复")
+
+        record = ToolExecutionRecord(
+            tool_call_id=tool_call.id,
+            tool_name=name,
+            argument_digest=digest,
+            state=ToolExecutionState.PREPARED,
+            readonly=metadata.readonly,
+            idempotent=metadata.idempotent,
+        )
+        await self.record_execution(record)
+        record = record.model_copy(update={"state": ToolExecutionState.STARTED})
+        await self.record_execution(record)
+        try:
+            result = await self.execute_with_retry(name, arguments, tool_call.id, turn)
+        except asyncio.CancelledError:
+            uncertain = record.model_copy(update={"state": ToolExecutionState.UNCERTAIN})
+            await asyncio.shield(self.record_execution(uncertain))
+            raise
+        terminal_state = (
+            ToolExecutionState.SUCCEEDED if result.success else ToolExecutionState.FAILED
+        )
+        await self.record_execution(record.model_copy(update={
+            "state": terminal_state,
+            "result": result.model_copy(deep=True),
+        }))
 
         self.emitter.emit(
             "tool_call_end",

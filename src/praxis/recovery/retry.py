@@ -68,3 +68,15 @@ class RetryPolicy:
     def reset_all(self) -> None:
         """重置所有重试计数。"""
         self.attempt_counts.clear()
+
+    def export_state(self) -> dict[str, int]:
+        """Return current retry counters for checkpointing."""
+        return dict(self.attempt_counts)
+
+    def import_state(self, state: dict[str, object]) -> None:
+        """Restore validated non-negative retry counters."""
+        self.attempt_counts = {
+            name: value
+            for name, value in state.items()
+            if isinstance(value, int) and value >= 0
+        }

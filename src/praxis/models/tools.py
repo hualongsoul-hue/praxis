@@ -1,6 +1,7 @@
 """工具相关类型定义——跨 S5、S8、S11 共享。"""
 
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any, Literal
 from uuid import uuid4
 
@@ -32,6 +33,29 @@ class ToolResult(BaseModel):
     error_type: str | None = None
     execution_time_ms: float | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolExecutionState(StrEnum):
+    """Durable state of one tool call at its side-effect boundary."""
+
+    PREPARED = "prepared"
+    STARTED = "started"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    UNCERTAIN = "uncertain"
+
+
+class ToolExecutionRecord(BaseModel):
+    """Checkpointed tool-call ledger entry used to prevent duplicate writes."""
+
+    tool_call_id: str
+    tool_name: str
+    argument_digest: str
+    state: ToolExecutionState
+    readonly: bool
+    idempotent: bool
+    result: ToolResult | None = None
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
 class ToolMetadata(BaseModel):

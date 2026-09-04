@@ -23,13 +23,15 @@ from praxis.guardrails.permissions import PermissionManager
 from praxis.guardrails.rules import RuleEngine
 from praxis.models.inputs import ImageInput, UserInput
 from praxis.models.messages import ResolvedUserInput
-from praxis.models.orchestrator import AgentEvent
+from praxis.models.orchestrator import AgentEvent, StrategyMode
 from praxis.models.responses import ModelResponse, Usage
 from praxis.models.session import (
     ContinuationPhase,
     SessionMetadata,
     SessionStatus,
 )
+from praxis.models.tools import ToolExecutionRecord, ToolExecutionState
+from praxis.orchestrator.strategy import PlanStep
 from praxis.persistence.store import PersistenceStore, create_store
 from praxis.session.checkpoint import CheckpointManager
 from praxis.session.continuation import ContinuationManager
@@ -307,6 +309,39 @@ class TestSessionFactory:
                 await delegated.aclose()
             await session.terminate()
 
+    async def test_stream_close_finalizes_auto_checkpoint(
+        self,
+        store: PersistenceStore,
+        guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
+    ) -> None:
+        factory = SessionFactory(
+            store=store,
+            session_config=SessionConfig(auto_checkpoint=True),
+            orchestrator_config=OrchestratorConfig(),
+            context_config=ContextConfig(),
+        )
+        session = await factory.create_session(guardrails=guardrails, gateway=mock_gateway)
+
+        async def one_event(
+            resolved_input: ResolvedUserInput,
+            **kwargs: Any,
+        ) -> AsyncGenerator[AgentEvent, None]:
+            yield session.loop.emitter.emit("stream_test", turn=1)
+
+        stream = session.run_turn_stream("stop early")
+        try:
+            with (
+                patch.object(session.loop, "run_stream", one_event),
+                patch.object(session, "save_auto_checkpoint", AsyncMock(return_value="cp")) as save,
+            ):
+                await anext(stream)
+                await stream.aclose()
+                save.assert_awaited_once()
+        finally:
+            await stream.aclose()
+            await session.terminate()
+
     async def test_session_has_unique_id(
         self,
         factory: SessionFactory,
@@ -471,6 +506,42 @@ class TestCheckpointManager:
         snapshot = await mgr.extract_snapshot(cp)
         assert snapshot.metadata.total_turns == 5
         assert snapshot.context_state == context_state
+
+    async def test_auto_checkpoint_restores_plan_and_execution_ledger(
+        self,
+        factory: SessionFactory,
+        store: PersistenceStore,
+        guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
+    ) -> None:
+        session = await factory.create_session(guardrails=guardrails, gateway=mock_gateway)
+        session.loop.strategy.switch_mode(StrategyMode.PLAN_AND_EXECUTE)
+        session.loop.strategy.set_plan([PlanStep("write durable state", "write_file")])
+        session.tool_execution_ledger["call-1"] = ToolExecutionRecord(
+            tool_call_id="call-1",
+            tool_name="write_file",
+            argument_digest="digest",
+            state=ToolExecutionState.STARTED,
+            readonly=False,
+            idempotent=False,
+        )
+        try:
+            await session.save_auto_checkpoint()
+            restored = await SessionResumer(
+                factory,
+                CheckpointManager(store),
+            ).resume_session(session.session_id, guardrails, gateway=mock_gateway)
+
+            assert restored is not None
+            assert restored.loop.strategy.get_current_step() is not None
+            assert restored.loop.strategy.get_current_step().description == "write durable state"
+            assert (
+                restored.tool_execution_ledger["call-1"].state
+                is ToolExecutionState.UNCERTAIN
+            )
+            await restored.terminate()
+        finally:
+            await session.terminate()
 
     async def test_load_nonexistent(self, store: PersistenceStore) -> None:
         mgr = CheckpointManager(store)

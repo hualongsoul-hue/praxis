@@ -5,6 +5,7 @@
 """
 
 import time
+from typing import Any, cast
 
 from praxis.models.recovery import CircuitState
 from praxis.telemetry.metrics import emit_metric
@@ -117,3 +118,29 @@ class CircuitBreakerRegistry:
             breaker.record_success()
         else:
             breaker.record_failure()
+
+    def export_state(self) -> dict[str, dict[str, Any]]:
+        """Return durable circuit state without persisting monotonic timestamps."""
+        return {
+            name: {
+                "state": breaker.state.value,
+                "failure_count": breaker.failure_count,
+            }
+            for name, breaker in self.breakers.items()
+        }
+
+    def import_state(self, state: dict[str, Any]) -> None:
+        """Restore breaker states while resetting process-local timestamps."""
+        self.breakers.clear()
+        for name, raw in state.items():
+            if not isinstance(raw, dict):
+                continue
+            values = cast(dict[str, object], raw)
+            breaker = self.get(name)
+            try:
+                breaker.state = CircuitState(str(values.get("state", CircuitState.CLOSED.value)))
+            except ValueError:
+                breaker.state = CircuitState.CLOSED
+            count = values.get("failure_count", 0)
+            breaker.failure_count = count if isinstance(count, int) and count >= 0 else 0
+            breaker.last_failure_time = time.monotonic()

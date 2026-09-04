@@ -28,7 +28,14 @@ from praxis.models.orchestrator import (
     TerminationReason,
 )
 from praxis.models.responses import ModelResponse, ModelResponseChunk, Usage
-from praxis.models.tools import ApprovalDecision, FunctionCall, ToolCall, ToolResult
+from praxis.models.tools import (
+    ApprovalDecision,
+    FunctionCall,
+    ToolCall,
+    ToolExecutionRecord,
+    ToolExecutionState,
+    ToolResult,
+)
 from praxis.orchestrator.events import EventEmitter, EventListener, StreamCollector
 from praxis.orchestrator.loop import OrchestrationLoop
 from praxis.orchestrator.parser import OutputParser, ParsedOutput
@@ -395,6 +402,44 @@ class TestToolCoordination:
         assert outcomes[0].result is not None
         assert outcomes[0].result.success is True
         assert not outcomes[0].skipped
+
+    async def test_non_idempotent_execution_persists_each_boundary(self) -> None:
+        coordinator, executor, emitter = self.make_coordinator()
+        records: list[ToolExecutionRecord] = []
+
+        async def observe(record: ToolExecutionRecord) -> None:
+            records.append(record.model_copy(deep=True))
+
+        coordinator.configure_execution_tracking({}, observe)
+        await coordinator.execute_tool_calls([make_tool_call()], turn=1)
+
+        assert [record.state for record in records] == [
+            ToolExecutionState.PREPARED,
+            ToolExecutionState.STARTED,
+            ToolExecutionState.SUCCEEDED,
+        ]
+
+    async def test_uncertain_non_idempotent_execution_is_not_repeated(self) -> None:
+        coordinator, executor, emitter = self.make_coordinator()
+        tool_call = make_tool_call()
+        digest = coordinator.argument_digest({"path": "test.py"})
+        ledger = {
+            tool_call.id: ToolExecutionRecord(
+                tool_call_id=tool_call.id,
+                tool_name=tool_call.function.name,
+                argument_digest=digest,
+                state=ToolExecutionState.UNCERTAIN,
+                idempotent=False,
+                readonly=False,
+            ),
+        }
+        coordinator.configure_execution_tracking(ledger, None)
+
+        outcome = await coordinator.execute_single(tool_call, turn=1)
+
+        assert outcome.skipped is True
+        assert "不确定" in outcome.skip_reason
+        executor.execute.assert_not_awaited()
 
     async def test_guardrail_deny(self) -> None:
         verdict = GuardrailVerdict(verdict=VerdictType.DENY, reason="危险操作")
@@ -939,8 +984,8 @@ class TestOrchestrationLoop:
         assert "语法错误" in injected
         assert any(e.event_type == "gav_feedback" for e in loop.emitter.events)
 
-    async def test_gav_no_feedback_on_skip_or_error(self) -> None:
-        """验证结果仅为 SKIP/ERROR（非 FAIL）时不应注入自我修正反馈。"""
+    async def test_gav_error_fails_closed_and_skip_does_not_hide_it(self) -> None:
+        """验证基础设施 ERROR 必须失败关闭，不能被同时出现的 SKIP 隐藏。"""
         from praxis.models.verification import (
             VerificationResult,
             VerificationStatus,
@@ -966,12 +1011,11 @@ class TestOrchestrationLoop:
         )
         before = loop.assembler.update_with_result.call_count
         await loop.process_tool_outcomes(parsed)
-        # 只应有工具结果一次注入，无 verification_feedback
-        assert not any(
+        assert any(
             "verification_feedback" in str(c.args)
             for c in loop.assembler.update_with_result.call_args_list[before:]
         )
-        assert not any(e.event_type == "gav_feedback" for e in loop.emitter.events)
+        assert any(e.event_type == "gav_feedback" for e in loop.emitter.events)
 
     @patch("praxis.orchestrator.loop.chat")
     async def test_session_model_reaches_llm_call(self, mock_chat: Any) -> None:
