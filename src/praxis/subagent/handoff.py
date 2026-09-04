@@ -13,8 +13,8 @@ from praxis.models.subagent import (
     SubagentSpec,
     SubagentStatus,
 )
+from praxis.resources import ResourceController
 from praxis.subagent.isolation import IsolatedContext
-from praxis.subagent.resource_control import ResourceController
 from praxis.telemetry.logger import get_logger
 from praxis.tools.registry import ToolRegistry
 
@@ -42,12 +42,14 @@ class HandoffManager:
         guardrails: GuardrailEngine,
         parent_registry: ToolRegistry,
         model: str = "default",
+        owner_id: str = "",
     ) -> None:
         self.isolation = isolation
         self.resource_ctrl = resource_ctrl
         self.guardrails = guardrails
         self.parent_registry = parent_registry
         self.model = model
+        self.owner_id = owner_id
 
     async def handoff(
         self,
@@ -92,6 +94,7 @@ class HandoffManager:
             task = self.resource_ctrl.create_task(
                 spec.subagent_id,
                 self.run_handoff(spec),
+                owner_id=self.owner_id,
             )
             result = await task
         except asyncio.CancelledError:

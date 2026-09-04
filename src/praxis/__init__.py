@@ -38,6 +38,7 @@ from praxis.models import (
     validate_content_part,
     validate_content_part_json,
 )
+from praxis.resources import ResourceController
 from praxis.runtime import AgentSession, HealthStatus, PraxisRuntime, RuntimeHealth
 
 __version__ = "1.0.0"
@@ -74,6 +75,7 @@ __all__ = [
     "PraxisConfig",
     "PraxisRuntime",
     "ResolvedUserInput",
+    "ResourceController",
     "RuntimeHealth",
     "TextContent",
     "UnsupportedInputModalityError",

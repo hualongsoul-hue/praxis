@@ -16,6 +16,7 @@ import jsonschema
 
 from praxis.exceptions import ToolExecutionError, ToolTimeoutError
 from praxis.models.tools import ToolResult
+from praxis.resources import ResourceController
 from praxis.tools.policy import ToolPolicy
 from praxis.tools.registry import ToolRegistry
 
@@ -23,9 +24,15 @@ from praxis.tools.registry import ToolRegistry
 class ToolExecutor:
     """工具执行管线。"""
 
-    def __init__(self, registry: ToolRegistry, sandbox: ToolPolicy) -> None:
+    def __init__(
+        self,
+        registry: ToolRegistry,
+        sandbox: ToolPolicy,
+        resources: ResourceController | None = None,
+    ) -> None:
         self.registry = registry
         self.sandbox = sandbox
+        self.resources = resources
         self.write_lock = asyncio.Lock()
         self.read_semaphore = asyncio.Semaphore(sandbox.max_concurrent_readonly)
 
@@ -68,13 +75,25 @@ class ToolExecutor:
 
         try:
             if meta.readonly:
-                async with self.read_semaphore:
+                read_limit = (
+                    self.resources.read_lease()
+                    if self.resources is not None
+                    else self.read_semaphore
+                )
+                async with read_limit:
                     content = await asyncio.wait_for(
                         entry.handler(arguments),
                         timeout=timeout,
                     )
             else:
-                async with self.write_lock:
+                write_limit = (
+                    self.resources.write_lease(
+                        self.resources.write_resource_key(name, arguments)
+                    )
+                    if self.resources is not None
+                    else self.write_lock
+                )
+                async with write_limit:
                     content = await asyncio.wait_for(
                         entry.handler(arguments),
                         timeout=timeout,

@@ -12,7 +12,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 
-from praxis.config.schemas import ToolsConfig
+from praxis.config.schemas import SubagentConfig, ToolsConfig
 from praxis.exceptions import (
     ToolError,
     ToolNotFoundError,
@@ -20,6 +20,7 @@ from praxis.exceptions import (
     ToolTimeoutError,
 )
 from praxis.models.tools import ToolDefinition, ToolMetadata
+from praxis.subagent.resource_control import ResourceController
 from praxis.tools.builtins.network import web_fetch
 from praxis.tools.builtins.registration import register_builtins
 from praxis.tools.executor import ToolExecutor, validate_arguments
@@ -415,6 +416,106 @@ class TestExecutor:
         second = asyncio.create_task(executor.execute("bounded_read", {}))
         await first_started.wait()
         await asyncio.sleep(0)
+        assert maximum_active == 1
+        release.set()
+        results = await asyncio.gather(first, second)
+        assert all(result.success for result in results)
+        assert maximum_active == 1
+
+    async def test_read_limit_is_shared_across_executor_instances(self, tmp_path: Path) -> None:
+        policy = ToolPolicy(ToolsConfig(
+            allowed_paths=[str(tmp_path)],
+            max_concurrent_readonly=1,
+        ))
+        resources = ResourceController(
+            SubagentConfig(),
+            max_concurrent_readonly=1,
+        )
+        registry = ToolRegistry()
+        started = asyncio.Event()
+        release = asyncio.Event()
+        active = 0
+        maximum_active = 0
+
+        async def handler(arguments: dict[str, Any]) -> str:
+            nonlocal active, maximum_active
+            active += 1
+            maximum_active = max(maximum_active, active)
+            started.set()
+            await release.wait()
+            active -= 1
+            return "ok"
+
+        registry.register(
+            ToolDefinition(
+                name="shared_read",
+                description="shared read",
+                parameters={"type": "object", "properties": {}},
+                metadata=ToolMetadata(readonly=True),
+            ),
+            handler,
+        )
+        first_executor = ToolExecutor(registry, policy, resources=resources)
+        second_executor = ToolExecutor(registry, policy, resources=resources)
+        first = asyncio.create_task(first_executor.execute("shared_read", {}))
+        second = asyncio.create_task(second_executor.execute("shared_read", {}))
+        await started.wait()
+        await asyncio.sleep(0)
+
+        assert maximum_active == 1
+        release.set()
+        await asyncio.gather(first, second)
+        assert maximum_active == 1
+
+    async def test_writes_to_same_resource_serialize_across_executors(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        policy = ToolPolicy(ToolsConfig(allowed_paths=[str(tmp_path)]))
+        resources = ResourceController(SubagentConfig())
+        registry = ToolRegistry()
+        started = asyncio.Event()
+        release = asyncio.Event()
+        active = 0
+        maximum_active = 0
+
+        async def handler(arguments: dict[str, Any]) -> str:
+            nonlocal active, maximum_active
+            active += 1
+            maximum_active = max(maximum_active, active)
+            started.set()
+            await release.wait()
+            active -= 1
+            return str(arguments["content"])
+
+        registry.register(
+            ToolDefinition(
+                name="shared_write",
+                description="shared write",
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "file_path": {"type": "string"},
+                        "content": {"type": "string"},
+                    },
+                    "required": ["file_path", "content"],
+                },
+                metadata=ToolMetadata(readonly=False),
+            ),
+            handler,
+        )
+        first_executor = ToolExecutor(registry, policy, resources=resources)
+        second_executor = ToolExecutor(registry, policy, resources=resources)
+        target = str(tmp_path / "shared.txt")
+        first = asyncio.create_task(first_executor.execute(
+            "shared_write", {"file_path": target, "content": "first"}
+        ))
+        second = asyncio.create_task(second_executor.execute(
+            "shared_write", {"file_path": target, "content": "second"}
+        ))
+        await started.wait()
+        await asyncio.sleep(0)
+
         assert maximum_active == 1
         release.set()
         results = await asyncio.gather(first, second)

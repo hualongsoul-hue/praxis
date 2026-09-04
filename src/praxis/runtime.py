@@ -27,6 +27,7 @@ from praxis.models.session import SessionStatus
 from praxis.models.subagent import SubagentSpec
 from praxis.persistence.store import PersistenceStore, StorageBackend, create_store
 from praxis.protocols import ApprovalHandler, AuditSink, EmbeddingProvider, ModelGateway
+from praxis.resources import ResourceController
 from praxis.session.core import Session, SessionFactory
 from praxis.skills.manager import build_skill_manager
 from praxis.telemetry.audit import AuditService
@@ -104,6 +105,11 @@ class PraxisRuntime:
         self.vector_store = vector_store
         self.metrics = MetricsCollector(enabled=self.config.telemetry.metrics_enabled)
         self.supervisor = TaskSupervisor()
+        self.resources = ResourceController(
+            self.config.subagent,
+            supervisor=self.supervisor,
+            max_concurrent_readonly=self.config.tools.max_concurrent_readonly,
+        )
         self.session_builder = session_builder
         self.mcp_elicitation_handler = mcp_elicitation_handler
         self.mcp_sampling_review_handler = mcp_sampling_review_handler
@@ -260,6 +266,7 @@ class PraxisRuntime:
             audit_sink=self.audit_sink,
             embedding_provider=self.embedding_provider,
             vector_store=self.vector_store,
+            resources=self.resources,
         )
         session = await factory.create_session(
             guardrails=self.guardrails,
@@ -281,7 +288,7 @@ class PraxisRuntime:
             subagent_config=self.config.subagent,
             model=self.config.gateway.default_model,
             runtime=self,
-            supervisor=self.supervisor,
+            resource_controller=self.resources,
         )
         return session
 
@@ -393,6 +400,7 @@ class PraxisRuntime:
             audit_sink=self.audit_sink,
             embedding_provider=self.embedding_provider,
             vector_store=self.vector_store,
+            resources=self.resources,
         )
         child = await factory.create_session(
             guardrails=self.guardrails,
@@ -591,6 +599,10 @@ class PraxisRuntime:
                     session.abort()
                 except BaseException as exc:
                     failures.append(exc)
+            try:
+                await self.resources.close()
+            except BaseException as exc:
+                failures.append(exc)
             try:
                 await self.supervisor.close()
             except BaseException as exc:

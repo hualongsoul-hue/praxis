@@ -219,6 +219,18 @@ async def test_runtime_accepts_and_owns_public_storage_backend(tmp_path: Path) -
     assert backend.closed is True
 
 
+async def test_runtime_sessions_share_one_resource_controller(tmp_path: Path) -> None:
+    config = runtime_config(tmp_path).model_copy(update={
+        "memory": MemoryConfig(background_enabled=False, dream_enabled=False),
+    })
+    async with PraxisRuntime(config, gateway=FakeGateway()) as runtime:
+        async with runtime.session() as first, runtime.session() as second:
+            assert isinstance(first.runner, Session)
+            assert isinstance(second.runner, Session)
+            assert first.runner.loop.coordinator.executor.resources is runtime.resources
+            assert second.runner.loop.coordinator.executor.resources is runtime.resources
+
+
 async def test_start_and_close_are_idempotent(tmp_path: Path) -> None:
     runtime = PraxisRuntime(
         runtime_config(tmp_path),

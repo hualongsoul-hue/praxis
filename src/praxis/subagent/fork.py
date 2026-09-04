@@ -14,9 +14,9 @@ from praxis.models.subagent import (
     SubagentSpec,
     SubagentStatus,
 )
+from praxis.resources import ResourceController
 from praxis.subagent.aggregation import ResultAggregator
 from praxis.subagent.isolation import IsolatedContext
-from praxis.subagent.resource_control import ResourceController
 from praxis.telemetry.logger import get_logger
 from praxis.tools.registry import ToolRegistry
 
@@ -37,6 +37,7 @@ class ForkManager:
         guardrails: GuardrailEngine,
         parent_registry: ToolRegistry,
         model: str = "default",
+        owner_id: str = "",
     ) -> None:
         self.isolation = isolation
         self.resource_ctrl = resource_ctrl
@@ -44,6 +45,7 @@ class ForkManager:
         self.guardrails = guardrails
         self.parent_registry = parent_registry
         self.model = model
+        self.owner_id = owner_id
 
     async def fork(
         self,
@@ -76,7 +78,11 @@ class ForkManager:
         log.info("Fork 启动", fork_count=len(specs))
 
         execution_tasks = [
-            self.resource_ctrl.create_task(spec.subagent_id, self.run_single_fork(spec))
+            self.resource_ctrl.create_task(
+                spec.subagent_id,
+                self.run_single_fork(spec),
+                owner_id=self.owner_id,
+            )
             for spec in specs
         ]
         results = await asyncio.gather(*execution_tasks, return_exceptions=False)

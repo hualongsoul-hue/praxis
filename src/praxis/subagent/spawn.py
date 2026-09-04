@@ -14,8 +14,8 @@ from praxis.models.subagent import (
     SubagentSpec,
     SubagentStatus,
 )
+from praxis.resources import ResourceController
 from praxis.subagent.isolation import IsolatedContext
-from praxis.subagent.resource_control import ResourceController
 from praxis.telemetry.logger import get_logger
 from praxis.tools.registry import ToolRegistry
 
@@ -41,12 +41,14 @@ class SubagentSpawner:
         guardrails: GuardrailEngine,
         parent_registry: ToolRegistry,
         model: str = "default",
+        owner_id: str = "",
     ) -> None:
         self.isolation = isolation
         self.resource_ctrl = resource_ctrl
         self.guardrails = guardrails
         self.parent_registry = parent_registry
         self.model = model
+        self.owner_id = owner_id
 
     async def spawn_agent_as_tool(
         self,
@@ -85,6 +87,7 @@ class SubagentSpawner:
             execution_task = self.resource_ctrl.create_task(
                 spec.subagent_id,
                 self.run_subagent(spec),
+                owner_id=self.owner_id,
             )
             result = await execution_task
         except asyncio.CancelledError:

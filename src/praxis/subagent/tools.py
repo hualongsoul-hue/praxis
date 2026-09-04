@@ -18,12 +18,12 @@ from praxis.lifecycle import TaskSupervisor
 from praxis.models.tools import ToolDefinition, ToolMetadata
 from praxis.persistence.store import PersistenceStore
 from praxis.protocols import ModelGateway
+from praxis.resources import ResourceController
 from praxis.session.core import Session
 from praxis.subagent.aggregation import ResultAggregator
 from praxis.subagent.fork import ForkManager
 from praxis.subagent.handoff import HandoffManager
 from praxis.subagent.isolation import IsolatedContext, RuntimeSubagentFactory
-from praxis.subagent.resource_control import ResourceController
 from praxis.subagent.spawn import SubagentSpawner
 from praxis.telemetry.logger import get_logger
 from praxis.tools.registry import ToolHandler, ToolRegistry
@@ -215,6 +215,7 @@ def wire_subagent(
     model: str = "default",
     runtime: RuntimeSubagentFactory | None = None,
     supervisor: TaskSupervisor | None = None,
+    resource_controller: ResourceController | None = None,
 ) -> None:
     """将 S13 子代理三种执行模型注册到会话的工具注册表中。
 
@@ -239,7 +240,10 @@ def wire_subagent(
         input_config=input_config,
         runtime=runtime,
     )
-    resource_ctrl = ResourceController(subagent_config, supervisor=supervisor)
+    resource_ctrl = resource_controller or ResourceController(
+        subagent_config,
+        supervisor=supervisor,
+    )
     aggregator = ResultAggregator()
 
     spawner = SubagentSpawner(
@@ -248,6 +252,7 @@ def wire_subagent(
         guardrails=guardrails,
         parent_registry=session.registry,
         model=model,
+        owner_id=session.session_id,
     )
     fork_manager = ForkManager(
         isolation=isolation,
@@ -256,6 +261,7 @@ def wire_subagent(
         guardrails=guardrails,
         parent_registry=session.registry,
         model=model,
+        owner_id=session.session_id,
     )
     handoff_manager = HandoffManager(
         isolation=isolation,
@@ -263,6 +269,7 @@ def wire_subagent(
         guardrails=guardrails,
         parent_registry=session.registry,
         model=model,
+        owner_id=session.session_id,
     )
 
     register_subagent_tools(

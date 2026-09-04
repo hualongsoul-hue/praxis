@@ -147,6 +147,26 @@ class TestResourceController:
         await asyncio.sleep(0)
         assert ctrl.active_count == 0
 
+    async def test_cancel_group_only_cancels_its_session_children(self) -> None:
+        ctrl = ResourceController(SubagentConfig(max_concurrent=2))
+        first_started = asyncio.Event()
+        second_started = asyncio.Event()
+
+        async def block(started: asyncio.Event) -> None:
+            started.set()
+            await asyncio.Event().wait()
+
+        first = ctrl.create_task("first", block(first_started), owner_id="session-a")
+        second = ctrl.create_task("second", block(second_started), owner_id="session-b")
+        await asyncio.gather(first_started.wait(), second_started.wait())
+
+        await ctrl.cancel_group("session-a")
+
+        assert first.cancelled()
+        assert not second.done()
+        await ctrl.cancel_group("session-b")
+        assert second.cancelled()
+
     async def test_task_supervisor_records_failures_and_rejects_new_work(self) -> None:
         supervisor = TaskSupervisor()
 

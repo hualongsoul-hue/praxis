@@ -46,6 +46,7 @@ from praxis.protocols import ApprovalHandler, AuditSink, EmbeddingProvider, Mode
 from praxis.recovery.circuit_breaker import CircuitBreakerRegistry
 from praxis.recovery.fallback import FallbackRegistry
 from praxis.recovery.retry import RetryPolicy
+from praxis.resources import ResourceController
 from praxis.session.checkpoint import CheckpointManager
 from praxis.skills.manager import SkillManager
 from praxis.telemetry.logger import get_logger
@@ -89,6 +90,7 @@ class Session:
         memory: CognitiveMemory | None = None,
         skill_manager: SkillManager | None = None,
         verifier_registry: VerifierRegistry | None = None,
+        resources: ResourceController | None = None,
         continuation: Any = None,
     ) -> None:
         self.metadata = metadata
@@ -103,6 +105,7 @@ class Session:
         self.memory = memory
         self.skill_manager = skill_manager
         self.verifier_registry = verifier_registry
+        self.resources = resources
         # S12 跨窗口续接管理器（可选）；存在时按续接阶段注入热身/初始化序列。
         self.continuation = continuation
         # MCP 连接（可选）：管理器 + 持有传输生命周期的退出栈，terminate 时关闭。
@@ -259,6 +262,11 @@ class Session:
         if self.metadata.status is SessionStatus.TERMINATED:
             return
         failures: list[BaseException] = []
+        if self.resources is not None:
+            try:
+                await self.resources.cancel_group(self.session_id)
+            except BaseException as exc:
+                failures.append(exc)
         if self.memory is not None:
             try:
                 await self.memory.stop()
@@ -305,6 +313,7 @@ class SessionFactory:
         audit_sink: AuditSink | None = None,
         embedding_provider: EmbeddingProvider | None = None,
         vector_store: VectorStore | None = None,
+        resources: ResourceController | None = None,
     ) -> None:
         self.store = store
         self.session_config = session_config
@@ -317,6 +326,7 @@ class SessionFactory:
         self.audit_sink = audit_sink
         self.embedding_provider = embedding_provider
         self.vector_store = vector_store
+        self.resources = resources
 
     async def create_session(
         self,
@@ -377,7 +387,7 @@ class SessionFactory:
             # S7: JIT 懒加载工具（仅在 JITRetriever 配置了 ContentLoader 时）
             if jit_retriever is not None:
                 register_jit_tools(registry, jit_retriever)
-        executor = ToolExecutor(registry, sandbox)
+        executor = ToolExecutor(registry, sandbox, resources=self.resources)
         injector = ToolInjector(registry)
 
         # S7: 上下文引擎
@@ -472,4 +482,5 @@ class SessionFactory:
             memory=memory,
             skill_manager=skill_manager,
             verifier_registry=verifier_registry,
+            resources=self.resources,
         )
