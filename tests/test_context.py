@@ -3,6 +3,8 @@
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from praxis.config.schemas import ContextConfig
 from praxis.context.assembler import PromptAssembler
 from praxis.context.compaction import ContextCompactor
@@ -260,6 +262,47 @@ class TestToolInjector:
 class TestContextCompactor:
     """上下文压缩测试。"""
 
+    @pytest.mark.parametrize("important", ["call", "first_result", "second_result"])
+    async def test_compaction_preserves_complete_tool_exchange(self, important: str) -> None:
+        from tests.test_runtime import FakeGateway
+
+        messages = [
+            {"role": "user", "content": "hello"},
+            {
+                "role": "assistant",
+                "content": "architecture" if important == "call" else "",
+                "tool_calls": [
+                    {"id": "a", "type": "function", "function": {"name": "first", "arguments": "{}"}},
+                    {"id": "b", "type": "function", "function": {"name": "second", "arguments": "{}"}},
+                ],
+            },
+            {"role": "tool", "tool_call_id": "a", "content": "bug" if important == "first_result" else "ok"},
+            {"role": "tool", "tool_call_id": "b", "content": "error" if important == "second_result" else "ok"},
+        ]
+        expected_exchange = messages[1:]
+        await ContextCompactor(ContextConfig(), FakeGateway()).compact(messages, [])
+        assert messages[1:] == expected_exchange
+
+    async def test_zero_file_reference_retention_really_discards_references(self) -> None:
+        from tests.test_runtime import FakeGateway
+
+        result = await ContextCompactor(
+            ContextConfig(recent_file_refs_keep=0), FakeGateway(),
+        ).compact([{"role": "user", "content": "hello"}], ["a.py", "b.py"])
+        assert result.retained_file_refs == []
+
+    async def test_empty_summary_does_not_destroy_history(self) -> None:
+        from tests.test_runtime import FakeGateway
+
+        class EmptySummaryGateway(FakeGateway):
+            async def complete(self, *args: Any, **kwargs: Any):
+                response = await super().complete(*args, **kwargs)
+                return response.model_copy(update={"content": ""})
+
+        messages = [{"role": "user", "content": "unfinished request"}]
+        await ContextCompactor(ContextConfig(), EmptySummaryGateway()).compact(messages, [])
+        assert messages == [{"role": "user", "content": "unfinished request"}]
+
     @patch(f"{COMPACTION_MOD}.get_token_count", side_effect=mock_get_token_count)
     async def test_compact(self, mock_tc: Any) -> None:
         config = ContextConfig()
@@ -281,21 +324,6 @@ class TestContextCompactor:
         assert result.original_tokens > 0
         assert result.compacted_tokens < result.original_tokens
         assert len(result.retained_file_refs) <= config.recent_file_refs_keep
-
-    @patch(f"{COMPACTION_MOD}.get_token_count", side_effect=mock_get_token_count)
-    def test_strip_tool_outputs(self, mock_tc: Any) -> None:
-        config = ContextConfig()
-        gateway = AsyncMock()
-        compactor = ContextCompactor(config, gateway)
-        messages = [
-            {"role": "tool", "tool_call_id": "1", "content": "旧输出1"},
-            {"role": "tool", "tool_call_id": "2", "content": "旧输出2"},
-            {"role": "tool", "tool_call_id": "3", "content": "新输出3"},
-        ]
-        count = compactor.strip_tool_outputs(messages, keep_recent=1)
-        assert count == 2
-        assert messages[0]["content"] == "[输出已省略]"
-        assert messages[2]["content"] == "新输出3"
 
     def test_is_critical(self) -> None:
         assert ContextCompactor.is_critical({"content": "架构决策记录"}) is True

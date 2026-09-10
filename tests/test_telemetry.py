@@ -157,6 +157,36 @@ class TestMetrics:
 class TestTracing:
     """Task 3.3: 分布式追踪验证。"""
 
+    async def test_stream_adapter_creation_failure_ends_metadata_only_span(self) -> None:
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+        from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
+            InMemorySpanExporter,
+        )
+        from opentelemetry.trace import StatusCode
+
+        from praxis.gateway.calls import stream
+        from praxis.protocols import ModelGateway
+        from praxis.telemetry.tracing import use_tracer
+
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        gateway = MagicMock(spec=ModelGateway)
+        gateway.stream.side_effect = ValueError("sensitive adapter payload")
+        try:
+            with use_tracer(provider.get_tracer("failure-test")):
+                with pytest.raises(ValueError):
+                    await anext(stream(gateway, [{"role": "user", "content": "private"}]))
+            spans = exporter.get_finished_spans()
+            assert len(spans) == 1
+            assert spans[0].status.status_code is StatusCode.ERROR
+            assert dict(spans[0].attributes or {}) == {"error.type": "ValueError"}
+            assert not spans[0].events
+            assert spans[0].status.description is None
+        finally:
+            provider.shutdown()
+
     async def test_start_span_basic(self) -> None:
         config = TelemetryConfig(tracing_enabled=True, tracing_export="console")
         lifecycle = configure_tracing(config)

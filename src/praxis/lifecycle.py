@@ -3,10 +3,50 @@
 import asyncio
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
+from inspect import isawaitable
 from typing import Any, TypeVar
 
 T = TypeVar("T")
 AsyncCloser = Callable[[], Awaitable[None]]
+
+
+async def close_async_stream(stream: object) -> None:
+    """Await a provider's optional close contract in the stream's owning task."""
+    close = getattr(stream, "aclose", None)
+    if not callable(close):
+        close = getattr(stream, "close", None)
+    if callable(close):
+        result = close()
+        if isawaitable(result):
+            await result
+
+
+async def close_provider_stream(stream: object) -> None:
+    """Finish a transport close before propagating cancellation, preserving context.
+
+    Only for low-level providers, not task-affine source generators. Python 3.12's
+    explicit task context lets provider correlation tokens reset in their original
+    Context while the caller is suspended waiting for cancellation-safe cleanup.
+    """
+    caller = asyncio.current_task()
+    task = asyncio.create_task(
+        close_async_stream(stream),
+        name="praxis-provider-close",
+        context=caller.get_context() if caller is not None else None,
+    )
+    cancellation: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as error:
+            cancellation = error
+        except BaseException:
+            break
+    if cancellation is not None:
+        if not task.cancelled() and (error := task.exception()) is not None:
+            cancellation.add_note(f"Provider 关闭失败: {type(error).__name__}")
+        raise cancellation
+    task.result()
 
 
 @dataclass(frozen=True, slots=True)

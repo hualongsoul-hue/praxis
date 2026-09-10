@@ -21,6 +21,7 @@ from praxis.config.schemas import (
 )
 from praxis.context.assembler import PromptAssembler
 from praxis.context.compaction import ContextCompactor
+from praxis.context.jit_retrieval import JITRetriever
 from praxis.context.masking import ObservationMasker
 from praxis.context.tool_injection import ToolInjector
 from praxis.exceptions import SessionError
@@ -340,14 +341,14 @@ class SessionFactory:
         verifier_registry: VerifierRegistry | None = None,
         tools_config: ToolsConfig | None = None,
         include_builtins: bool = True,
-        jit_retriever: Any = None,
+        jit_retriever: JITRetriever | None = None,
     ) -> Session:
         """创建新会话。
 
         初始化所有组件实例并注入配置。
 
         Args:
-            guardrails: 护栏引擎（外部传入，因权限配置项目级别）。
+            guardrails: 护栏策略模板；为本会话复制规则，临时授权不继承。
             gateway: S4 LLM 网关路由器（LiteLLM Router 封装）。
             registry: 工具注册表（可选，None 时创建新实例）。
             model: LLM 模型名。
@@ -360,6 +361,7 @@ class SessionFactory:
         Returns:
             初始化完毕的 Session。
         """
+        guardrails = guardrails.for_session()
         metadata = SessionMetadata(status=SessionStatus.INITIALIZING)
         model_capabilities = gateway.capabilities(model)
         input_resolver = InputResolver(self.input_config)
@@ -374,8 +376,6 @@ class SessionFactory:
                 embedding_provider=self.embedding_provider,
                 vector_store=self.vector_store,
             )
-        await memory.start()
-
         # S5: 工具系统
         resolved_tools_config = tools_config or ToolsConfig()
         created_new_registry = registry is None
@@ -473,7 +473,7 @@ class SessionFactory:
         emit_metric("session_created", 1.0, {}, "counter")
         log.info("会话已创建", session_id=metadata.session_id)
 
-        return Session(
+        session = Session(
             metadata=metadata,
             loop=loop,
             assembler=assembler,
@@ -488,3 +488,12 @@ class SessionFactory:
             verifier_registry=verifier_registry,
             resources=self.resources,
         )
+        try:
+            await memory.start()
+        except BaseException as error:
+            try:
+                await session.terminate()
+            except BaseException as cleanup_error:
+                error.add_note(f"记忆启动回滚失败: {type(cleanup_error).__name__}")
+            raise
+        return session

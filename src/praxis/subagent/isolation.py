@@ -69,7 +69,7 @@ class IsolatedContext:
 
         Args:
             spec: 子代理规格。
-            guardrails: 护栏引擎（共享只读实例）。
+            guardrails: 护栏策略模板；工厂为子会话隔离规则和临时授权。
             parent_registry: 父代理工具注册表（用于过滤工具子集）。
             model: LLM 模型名。
 

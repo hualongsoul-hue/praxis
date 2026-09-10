@@ -2,6 +2,8 @@
 
 from typing import Any
 
+import pytest
+
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.guardrails.permissions import PermissionManager, PermissionPolicy, PermissionRule
 from praxis.guardrails.rules import (
@@ -93,6 +95,47 @@ class TestGuardrailEngine:
 
 class TestPermissions:
     """Task 6.2: 权限分层系统验证。"""
+
+    @pytest.mark.parametrize("config", [
+        {"rulez": [{"tool_name": "danger", "permission": "deny"}]},
+        {"rules": [{"tool_nam": "danger", "permission": "deny"}]},
+        {"rules": [{"permission": "deny"}]},
+        {"default_permission": "pass"},
+        {"rules": [{"category": "shell", "permission": "pass"}]},
+        {"rules": [{"category": "", "tool_name": "write_file"}]},
+        {"rules": [{"category": " shell "}]},
+        {"rules": [{"tool_name": "write_file", "category": "file_ops"}]},
+    ])
+    def test_malformed_permission_policy_fails_closed(self, config) -> None:
+        with pytest.raises(ValueError):
+            PermissionManager.from_config_dict(config)
+
+    @pytest.mark.parametrize("permission", [VerdictType.PASS, VerdictType.BLOCK])
+    def test_temporary_grant_rejects_non_permission_verdicts(self, permission) -> None:
+        manager = PermissionManager()
+        with pytest.raises(ValueError):
+            manager.grant_temporary("write_file", permission)
+        assert manager.temporary_grants == {}
+
+    def test_specific_tool_denial_overrides_earlier_category_allow(self) -> None:
+        manager = PermissionManager.from_config_dict({"rules": [
+            {"category": "file_ops", "permission": "auto_approve"},
+            {"tool_name": "write_file", "permission": "deny"},
+        ]})
+        assert manager.check_permission(
+            "write_file", ToolMetadata(category="file_ops"),
+        ).verdict is VerdictType.DENY
+
+    @pytest.mark.parametrize("content", ["- not-a-policy\n", "false\n", "42\n"])
+    def test_permission_file_requires_mapping(self, tmp_path, content: str) -> None:
+        from praxis.config.schemas import GuardrailsConfig
+        from praxis.exceptions import ConfigError
+        from praxis.guardrails.engine import build_guardrail_engine
+
+        path = tmp_path / "permissions.yaml"
+        path.write_text(content, encoding="utf-8")
+        with pytest.raises(ConfigError):
+            build_guardrail_engine(GuardrailsConfig(permissions_file=str(path)))
 
     def test_default_policy_is_confirm(self) -> None:
         manager = PermissionManager()

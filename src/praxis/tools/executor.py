@@ -18,6 +18,7 @@ import jsonschema
 from praxis.exceptions import ToolExecutionError, ToolTimeoutError
 from praxis.models.tools import ToolResult
 from praxis.resources import ResourceController
+from praxis.telemetry.tracing import operation_span
 from praxis.tools.policy import ToolPolicy
 from praxis.tools.registry import ToolRegistry
 
@@ -82,10 +83,9 @@ class ToolExecutor:
                     else self.read_semaphore
                 )
                 async with read_limit:
-                    content = await asyncio.wait_for(
-                        entry.handler(arguments),
-                        timeout=timeout,
-                    )
+                    with operation_span("praxis.tool.execute") as span:
+                        span.set_attribute("praxis.tool", name)
+                        content = await asyncio.wait_for(entry.handler(arguments), timeout=timeout)
             else:
                 write_limit = (
                     self.resources.write_lease(
@@ -95,10 +95,9 @@ class ToolExecutor:
                     else self.write_lock
                 )
                 async with write_limit:
-                    content = await asyncio.wait_for(
-                        entry.handler(arguments),
-                        timeout=timeout,
-                    )
+                    with operation_span("praxis.tool.execute") as span:
+                        span.set_attribute("praxis.tool", name)
+                        content = await asyncio.wait_for(entry.handler(arguments), timeout=timeout)
         except TimeoutError:
             raise ToolTimeoutError(
                 f"工具 '{name}' 执行超时（{timeout}s）",

@@ -225,7 +225,7 @@ def wire_subagent(
     Args:
         session: 目标会话。
         store: S3 持久化存储（子代理共享）。
-        guardrails: S8 护栏引擎（子代理共享只读实例）。
+        guardrails: S8 护栏策略模板（子代理隔离规则和临时授权）。
         gateway: S4 LLM 网关路由器（子代理共享）。
         orchestrator_config: S11 编排配置（子代理继承策略类型）。
         context_config: S7 上下文配置（子代理继承）。

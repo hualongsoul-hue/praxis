@@ -1,5 +1,7 @@
 """复用宿主 Provider 的上下文级 OpenTelemetry 适配。"""
 
+from collections.abc import Generator
+from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from typing import Any
 
@@ -10,7 +12,7 @@ from opentelemetry.sdk.trace.export import (
     ConsoleSpanExporter,
     SimpleSpanProcessor,
 )
-from opentelemetry.trace import Span, Tracer
+from opentelemetry.trace import NoOpTracer, Span, StatusCode, Tracer
 
 from praxis.config.schemas import TelemetryConfig
 from praxis.telemetry.logger import get_logger
@@ -50,7 +52,7 @@ class TracingLifecycle:
 def configure_tracing_lifecycle(config: TelemetryConfig) -> TracingLifecycle:
     """Configure context-local tracing and return its explicit lifecycle."""
     if not config.tracing_enabled or config.tracing_export == "none":
-        tracer = trace.get_tracer("praxis")
+        tracer = NoOpTracer() if not config.tracing_enabled else trace.get_tracer("praxis")
         context_token = current_tracer.set(tracer)
         return TracingLifecycle(tracer, None, False, context_token)
 
@@ -80,6 +82,30 @@ def configure_tracing(config: TelemetryConfig) -> TracingLifecycle:
 
 def get_tracer() -> Tracer:
     return current_tracer.get() or trace.get_tracer("praxis")
+
+
+@contextmanager
+def use_tracer(tracer: Tracer) -> Generator[None]:
+    """Select an instance tracer without changing the host's global provider."""
+    token = current_tracer.set(tracer)
+    try:
+        yield
+    finally:
+        current_tracer.reset(token)
+
+
+@contextmanager
+def operation_span(name: str) -> Generator[Span]:
+    """Trace an operation using metadata only; exception payloads stay private."""
+    with get_tracer().start_as_current_span(
+        name, record_exception=False, set_status_on_exception=False,
+    ) as span:
+        try:
+            yield span
+        except BaseException as error:
+            span.set_attribute("error.type", type(error).__name__)
+            span.set_status(StatusCode.ERROR)
+            raise
 
 
 def start_span(

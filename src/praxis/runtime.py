@@ -11,7 +11,10 @@ from time import perf_counter
 from typing import Any, Protocol
 from uuid import uuid4
 
+from opentelemetry.trace import NoOpTracer
+
 from praxis.config.settings import PraxisConfig
+from praxis.context.jit_retrieval import JITRetriever
 from praxis.exceptions import (
     ConcurrentSessionRunError,
     RuntimeCloseError,
@@ -37,6 +40,7 @@ from praxis.session.core import Session, SessionFactory
 from praxis.skills.manager import build_skill_manager
 from praxis.telemetry.audit import AuditService
 from praxis.telemetry.metrics import MetricsCollector, use_metrics
+from praxis.telemetry.tracing import get_tracer, use_tracer
 from praxis.tools.registry import ToolRegistry
 from praxis.verification.registry import VerifierRegistry
 
@@ -129,6 +133,7 @@ class PraxisRuntime:
         own_vector_store: bool = False,
         storage_backend: StorageBackend | None = None,
         own_storage_backend: bool = False,
+        jit_retriever: JITRetriever | None = None,
     ) -> None:
         if store is not None and storage_backend is not None:
             raise ValueError("store 与 storage_backend 不能同时提供")
@@ -143,6 +148,8 @@ class PraxisRuntime:
         self.embedding_provider = embedding_provider
         self.vector_store = vector_store
         self.metrics = MetricsCollector(enabled=self.config.telemetry.metrics_enabled)
+        self.tracer = get_tracer() if self.config.telemetry.tracing_enabled else NoOpTracer()
+        self.jit_retriever = jit_retriever.snapshot() if jit_retriever is not None else None
         self.supervisor = TaskSupervisor()
         self.resources = ResourceController(
             self.config.subagent,
@@ -313,23 +320,31 @@ class PraxisRuntime:
             gateway=self.gateway,
             model=self.config.gateway.default_model,
             tools_config=self.config.tools,
+            jit_retriever=self.jit_retriever.snapshot() if self.jit_retriever is not None else None,
         )
-        await self.configure_session_extensions(session)
-        from praxis.subagent.tools import wire_subagent
+        try:
+            await self.configure_session_extensions(session)
+            from praxis.subagent.tools import wire_subagent
 
-        wire_subagent(
-            session=session,
-            store=self.store,
-            guardrails=self.guardrails,
-            gateway=self.gateway,
-            orchestrator_config=self.config.orchestrator,
-            context_config=self.config.context,
-            input_config=self.config.inputs,
-            subagent_config=self.config.subagent,
-            model=self.config.gateway.default_model,
-            runtime=self,
-            resource_controller=self.resources,
-        )
+            wire_subagent(
+                session=session,
+                store=self.store,
+                guardrails=self.guardrails,
+                gateway=self.gateway,
+                orchestrator_config=self.config.orchestrator,
+                context_config=self.config.context,
+                input_config=self.config.inputs,
+                subagent_config=self.config.subagent,
+                model=self.config.gateway.default_model,
+                runtime=self,
+                resource_controller=self.resources,
+            )
+        except BaseException as error:
+            try:
+                await session.terminate()
+            except BaseException as cleanup_error:
+                error.add_note(f"会话装配回滚失败: {type(cleanup_error).__name__}")
+            raise
         return session
 
     async def configure_session_extensions(self, session: Session) -> None:
@@ -415,45 +430,46 @@ class PraxisRuntime:
         parent_registry: ToolRegistry,
     ) -> Session:
         """Create an isolated child session with only explicitly delegated tools."""
-        if not self.started:
-            raise RuntimeStateError("Runtime 尚未启动")
-        if self.store is None or self.gateway is None or self.guardrails is None:
-            raise RuntimeStateError("Runtime 组件尚未就绪")
+        async with self.lifecycle_lock:
+            if not self.started:
+                raise RuntimeStateError("Runtime 尚未启动")
+            if self.store is None or self.gateway is None or self.guardrails is None:
+                raise RuntimeStateError("Runtime 组件尚未就绪")
 
-        child_registry = ToolRegistry()
-        for tool_name in dict.fromkeys(spec.tool_names):
-            entry = parent_registry.get_entry(tool_name)
-            if entry.definition.metadata.category == "subagent":
-                raise RuntimeStateError("子代理不能继续委派子代理工具")
-            child_registry.register(entry.definition, entry.handler)
+            child_registry = ToolRegistry()
+            for tool_name in dict.fromkeys(spec.tool_names):
+                entry = parent_registry.get_entry(tool_name)
+                if entry.definition.metadata.category == "subagent":
+                    raise RuntimeStateError("子代理不能继续委派子代理工具")
+                child_registry.register(entry.definition, entry.handler)
 
-        factory = SessionFactory(
-            store=self.store,
-            session_config=self.config.session.model_copy(update={"auto_checkpoint": False}),
-            orchestrator_config=self.config.orchestrator.model_copy(
-                update={"max_turns": spec.max_turns}
-            ),
-            context_config=self.config.context,
-            input_config=self.config.inputs,
-            memory_config=self.config.memory,
-            recovery_config=self.config.recovery,
-            approval_handler=self.approval_handler,
-            audit_sink=self.audit_sink,
-            embedding_provider=self.embedding_provider,
-            vector_store=self.vector_store,
-            resources=self.resources,
-            runtime_id=self.runtime_id,
-        )
-        child = await factory.create_session(
-            guardrails=self.guardrails,
-            gateway=self.gateway,
-            registry=child_registry,
-            model=self.config.gateway.default_model,
-            tools_config=self.config.tools,
-            include_builtins=False,
-        )
-        self.subagent_sessions.add(child)
-        return child
+            factory = SessionFactory(
+                store=self.store,
+                session_config=self.config.session.model_copy(update={"auto_checkpoint": False}),
+                orchestrator_config=self.config.orchestrator.model_copy(
+                    update={"max_turns": spec.max_turns}
+                ),
+                context_config=self.config.context,
+                input_config=self.config.inputs,
+                memory_config=self.config.memory,
+                recovery_config=self.config.recovery,
+                approval_handler=self.approval_handler,
+                audit_sink=self.audit_sink,
+                embedding_provider=self.embedding_provider,
+                vector_store=self.vector_store,
+                resources=self.resources,
+                runtime_id=self.runtime_id,
+            )
+            child = await factory.create_session(
+                guardrails=self.guardrails,
+                gateway=self.gateway,
+                registry=child_registry,
+                model=self.config.gateway.default_model,
+                tools_config=self.config.tools,
+                include_builtins=False,
+            )
+            self.subagent_sessions.add(child)
+            return child
 
     async def release_subagent_session(self, session: Session) -> None:
         """Terminate and forget a child session; safe to call more than once."""
@@ -745,6 +761,7 @@ class AgentSession:
         self.closed = False
         self.closing = False
         self.active_task: asyncio.Task[Any] | None = None
+        self.streaming = False
 
     @property
     def session_id(self) -> str | None:
@@ -757,10 +774,16 @@ class AgentSession:
         return self.runner.status
 
     async def __aenter__(self) -> "AgentSession":
-        if self.runner is None:
-            with use_metrics(self.runtime.metrics):
-                self.runner = await self.runtime.build_session()
-            self.runtime.register_session(self)
+        # Match Runtime.close's lock order so creation cannot outlive its owner.
+        async with self.runtime.lifecycle_lock, self.close_lock:
+            if not self.runtime.started:
+                raise RuntimeStateError("Runtime 尚未启动或已关闭")
+            if self.closed or self.closing:
+                raise SessionError("AgentSession 已终止")
+            if self.runner is None:
+                with use_metrics(self.runtime.metrics), use_tracer(self.runtime.tracer):
+                    self.runner = await self.runtime.build_session()
+                self.runtime.register_session(self)
         return self
 
     async def __aexit__(
@@ -783,7 +806,7 @@ class AgentSession:
         if self.run_lock.locked():
             raise ConcurrentSessionRunError("同一 AgentSession 不能并发执行两个轮次")
         async with self.run_lock:
-            with use_metrics(self.runtime.metrics):
+            with use_metrics(self.runtime.metrics), use_tracer(self.runtime.tracer):
                 task = asyncio.create_task(
                     runner.run_turn(user_input, **kwargs),
                     name=f"praxis-session-{runner.session_id}",
@@ -803,22 +826,80 @@ class AgentSession:
         if self.run_lock.locked():
             raise ConcurrentSessionRunError("同一 AgentSession 不能并发执行两个轮次")
         async with self.run_lock:
-            with use_metrics(self.runtime.metrics):
-                self.active_task = asyncio.current_task()
+            events: asyncio.Queue[AgentEvent] = asyncio.Queue(maxsize=1)
+            demand = asyncio.Semaphore(0)
+
+            async def produce() -> None:
+                # One task owns source anext/aclose, preserving adapter contexts.
+                async with aclosing(runner.run_turn_stream(user_input, **kwargs)) as stream:
+                    while True:
+                        await demand.acquire()
+                        try:
+                            event = await anext(stream)
+                        except StopAsyncIteration:
+                            return
+                        await events.put(event)
+
+            with use_metrics(self.runtime.metrics), use_tracer(self.runtime.tracer):
+                producer = asyncio.create_task(
+                    produce(), name=f"praxis-session-stream-{runner.session_id}",
+                )
+            self.active_task = producer
+            self.streaming = True
+            try:
+                while not self.closed:
+                    demand.release()
+                    receive = asyncio.create_task(events.get())
+                    try:
+                        done = (await asyncio.wait(
+                            (receive, producer), return_when=asyncio.FIRST_COMPLETED,
+                        ))[0]
+                        if receive not in done:
+                            await producer
+                            break
+                        event = receive.result()
+                    finally:
+                        if not receive.done():
+                            receive.cancel()
+                        await asyncio.gather(receive, return_exceptions=True)
+                    yield event
+            finally:
                 try:
-                    stream = runner.run_turn_stream(user_input, **kwargs)
-                    async with aclosing(stream):
-                        async for event in stream:
-                            yield event
+                    await self.finish_task(producer)
                 finally:
+                    self.streaming = False
                     self.active_task = None
+
+    async def finish_task(self, task: asyncio.Task[Any]) -> None:
+        """Cancel once and join owned work without interrupting shared cleanup."""
+        if not task.done() and not task.cancelling():
+            task.cancel()
+        caller = asyncio.current_task()
+        cancel_count = caller.cancelling() if caller is not None else 0
+        cancellation: asyncio.CancelledError | None = None
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError as error:
+                if caller is not None and caller.cancelling() > cancel_count:
+                    cancellation = error
+                    cancel_count = caller.cancelling()
+            except BaseException:
+                break
+        if cancellation is not None:
+            raise cancellation
+        if not task.cancelled():
+            task.result()
 
     def abort(self) -> None:
         if self.runner is None:
             raise SessionError("AgentSession 尚未启动，请使用 async with")
         self.runner.abort()
         task = self.active_task
-        if task is not None and task is not asyncio.current_task() and not task.done():
+        if (
+            task is not None and task is not asyncio.current_task()
+            and not task.done() and not task.cancelling()
+        ):
             task.cancel()
 
     async def close(self) -> None:
@@ -826,19 +907,44 @@ class AgentSession:
             if self.closed:
                 return
             self.closing = True
+            failures: list[BaseException] = []
+            terminated = self.runner is None
             try:
                 if self.runner is not None:
-                    self.runner.abort()
+                    try:
+                        self.runner.abort()
+                    except BaseException as error:
+                        failures.append(error)
+                    streaming = self.streaming
                     task = self.active_task
-                    if task is not None and task is not asyncio.current_task() and not task.done():
-                        task.cancel()
-                        await asyncio.gather(task, return_exceptions=True)
-                    async with self.run_lock:
-                        await self.runner.terminate()
-                self.closed = True
-                self.runtime.unregister_session(self)
+                    if task is not None and task is not asyncio.current_task():
+                        try:
+                            await self.finish_task(task)
+                        except BaseException as error:
+                            failures.append(error)
+                    try:
+                        if streaming:
+                            # A suspended consumer still owns run_lock, not resources.
+                            await self.runner.terminate()
+                        else:
+                            async with self.run_lock:
+                                await self.runner.terminate()
+                        terminated = True
+                    except BaseException as error:
+                        failures.append(error)
             finally:
+                if terminated:
+                    self.closed = True
+                    self.runtime.unregister_session(self)
                 self.closing = False
+            if failures:
+                for error in failures:
+                    if isinstance(error, asyncio.CancelledError):
+                        raise error
+                raise SessionError(
+                    "会话关闭期间发生错误",
+                    details={"failure_types": [type(error).__name__ for error in failures]},
+                ) from failures[0]
 
 
 __all__ = [

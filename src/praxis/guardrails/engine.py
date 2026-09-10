@@ -8,7 +8,7 @@ from typing import Any
 
 from praxis.config.schemas import GuardrailsConfig
 from praxis.guardrails.permissions import PermissionManager
-from praxis.guardrails.rules import RuleEngine, RuleTarget
+from praxis.guardrails.rules import GuardrailRule, RuleEngine, RuleTarget
 from praxis.models.guardrails import GuardrailVerdict, VerdictType
 from praxis.models.telemetry import AuditEvent
 from praxis.models.tools import ToolMetadata
@@ -35,6 +35,18 @@ class GuardrailEngine:
         self.input_enabled = input_enabled
         self.output_enabled = output_enabled
         self.audit_sink = audit_sink or NullAuditSink()
+
+    def for_session(self) -> "GuardrailEngine":
+        """Copy immutable rules and policy, never inheriting temporary grants."""
+        rule_engine = RuleEngine()
+        rule_engine.rules = list(self.rule_engine.rules)
+        return GuardrailEngine(
+            rule_engine=rule_engine,
+            permission_manager=PermissionManager(self.permission_manager.policy),
+            input_enabled=self.input_enabled,
+            output_enabled=self.output_enabled,
+            audit_sink=self.audit_sink,
+        )
 
     async def check_input(self, user_message: str) -> GuardrailVerdict:
         """输入护栏：检测提示注入、恶意指令。
@@ -112,7 +124,7 @@ class GuardrailEngine:
         await self.audit_verdict("check_output", verdict)
         return verdict
 
-    def register_rule(self, rule: Any) -> None:
+    def register_rule(self, rule: GuardrailRule) -> None:
         """注册自定义护栏规则。"""
         self.rule_engine.register_rule(rule)
 
@@ -160,22 +172,16 @@ def build_guardrail_engine(
     Returns:
         装配完毕的 GuardrailEngine。
     """
-    from typing import cast
+    from pathlib import Path
 
-    import yaml
+    from praxis.config.loader import load_yaml_config
 
     rule_engine = RuleEngine()
     rule_engine.register_builtin_rules()
 
     perm_dict: dict[str, Any] = {"default_permission": config.default_permission}
     if config.permissions_file:
-        with open(config.permissions_file, encoding="utf-8") as fh:
-            loaded = cast(object, yaml.safe_load(fh) or {})
-        if isinstance(loaded, dict):
-            perm_dict = {
-                "default_permission": config.default_permission,
-                **cast(dict[str, Any], loaded),
-            }
+        perm_dict.update(load_yaml_config(Path(config.permissions_file)))
     permission_manager = PermissionManager.from_config_dict(perm_dict)
 
     return GuardrailEngine(

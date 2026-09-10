@@ -359,11 +359,16 @@ class TestS11S12OrchestrationSessionChain:
         mock_gw.router = MagicMock()
         session = await factory.create_session(guardrails=guardrails, gateway=mock_gw)
         try:
-            self.assert_session_complete(session, store, guardrails)
+            self.assert_session_complete(session, store)
+            verdict = await session.loop.coordinator.guardrails.check_tool_call(
+                "unconfigured_tool", {}, ToolMetadata(),
+            )
+            assert verdict.verdict is VerdictType.CONFIRM
+            assert session.loop.guardrails.permission_manager.policy == guardrails.permission_manager.policy
         finally:
             await session.terminate()
 
-    def assert_session_complete(self, session, store, guardrails) -> None:
+    def assert_session_complete(self, session, store) -> None:
 
         # 验证所有组件链接完整
         assert session.session_id
@@ -373,7 +378,7 @@ class TestS11S12OrchestrationSessionChain:
         assert session.registry is not None
         assert session.store is store
         assert session.loop.coordinator is not None
-        assert session.loop.guardrails is guardrails
+        assert session.loop.coordinator.guardrails is session.loop.guardrails
         assert session.loop.termination is not None
         assert session.loop.parser is not None
         assert session.loop.emitter is not None

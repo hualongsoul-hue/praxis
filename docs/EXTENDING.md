@@ -1,6 +1,9 @@
 # 扩展 SDK
 
 Praxis 的外部边界使用 Protocol。自定义实现应保证异步关闭幂等、取消安全，并且不修改宿主全局状态。
+自定义流生成器应在自己的 `finally` 中完成资源回收，并保护可能被取消中断的异步清理；Runtime 不会
+替代适配器修复任意不可重试或不安全的关闭实现。通用源生成器在同一生产任务中迭代和关闭；默认
+LiteLLM 的底层传输关闭另行保护取消，并保持其关联 Context，等待清理完成后才传播取消。
 
 ## 审批处理器
 
@@ -65,6 +68,43 @@ Runtime；否则生命周期仍属于宿主。
 安装 `praxis[mcp]` 后可使用 stdio 或 Streamable HTTP 传输。Sampling 始终路由到 Runtime 默认
 模型，Elicitation 在无处理器时拒绝。测试应使用本地 Python stdio Server 覆盖工具、资源、Prompt、
 Sampling、Elicitation、断开和关闭，不依赖公网服务。
+
+## 即时检索与示例注入
+
+通过 `jit_retriever=` 注入标识符目录和按任务分类的 Few-shot 示例。Runtime 构造时、每个会话创建时
+分别复制目录和示例，后续修改不会串扰其他会话。内容加载函数由宿主提供并管理生命周期；它可能被
+多个会话并发调用，必须自行执行访问授权、大小限制与取消处理。
+
+```python
+from praxis import PraxisRuntime, load_config
+from praxis.context.jit_retrieval import ContentLoader, JITRetriever
+
+
+async def read_reference(source: str, identifier: str) -> str | None:
+    if (source, identifier) == ("catalog", "service-contract"):
+        return "服务请求必须携带业务幂等键。"
+    return None
+
+
+async def main() -> None:
+    retriever = JITRetriever()
+    retriever.register_identifier("service-contract", "document", "catalog")
+    retriever.set_content_loader(ContentLoader(read_reference))
+    retriever.add_example("coding", "如何避免重复写入？", "校验业务幂等键后再写入。")
+    async with PraxisRuntime(load_config("examples/config.yaml"), jit_retriever=retriever) as runtime:
+        async with runtime.session() as session:
+            response = await session.run("请读取 service-contract，说明编写服务代码时的要求。")
+            print(response.content)
+```
+
+标识符目录进入 Prompt；设置加载器后会注册 `jit_load_content` 工具，正文只在工具被调用时加载。
+该示例需由宿主调用 `await main()`，并预先设置 `PRAXIS_MODEL_API_KEY`。
+
+## 技能依赖与附属脚本
+
+技能激活前校验声明的工具依赖，以及整批附属脚本的路径、存在性和工具名冲突。任何一项失败都不会
+激活技能或留下部分注册的工具。显式激活返回结构化 `SkillError`；自动发现的候选技能缺少依赖时
+被跳过。默认脚本工具仅返回源码供审查，不执行代码；执行仍需通过受控且获批的工具或宿主执行器。
 
 ## 服务框架集成
 

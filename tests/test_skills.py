@@ -531,9 +531,40 @@ class TestSkillLifecycle:
     async def test_activate_deactivate(self, store: PersistenceStore) -> None:
         reg = ToolRegistry()
         mgr = SkillManager(reg, store)
-        mgr.register_skill(make_skill_def("act"))
+        skill = make_skill_def("act")
+        skill.metadata.tools = []
+        mgr.register_skill(skill)
         assert mgr.activate_skill("act") is True
         assert mgr.deactivate_skill("act") is True
+
+    async def test_activation_rejects_missing_dependencies(self, store: PersistenceStore) -> None:
+        manager = SkillManager(ToolRegistry(), store)
+        manager.register_skill(make_skill_def("missing-dependency"))
+        with pytest.raises(SkillError) as captured:
+            manager.activate_skill("missing-dependency")
+        assert captured.value.details["missing_tools"] == ["read_file"]
+        assert not manager.activation.is_active("missing-dependency")
+
+    async def test_auto_activation_skips_unavailable_skill(self, store: PersistenceStore) -> None:
+        manager = SkillManager(ToolRegistry(), store)
+        manager.register_skill(make_skill_def("missing-dependency"))
+        assert manager.auto_activate_for_task("missing-dependency") == []
+        assert not manager.activation.is_active("missing-dependency")
+
+    async def test_failed_script_registration_does_not_activate_skill(
+        self, store: PersistenceStore, tmp_path: Path,
+    ) -> None:
+        manager = SkillManager(ToolRegistry(), store)
+        skill = make_skill_def("unsafe-script")
+        skill.metadata.tools = []
+        skill.base_path = str(tmp_path)
+        (tmp_path / "safe.py").write_text("print('safe')", encoding="utf-8")
+        skill.scripts = ["safe.py", "../outside.py"]
+        manager.register_skill(skill)
+        with pytest.raises(SkillError):
+            manager.activate_skill(skill.skill_id)
+        assert not manager.activation.is_active(skill.skill_id)
+        assert not manager.bridge.registry.has_tool("skill_unsafe-script_safe")
 
     async def test_evaluate_relevance(self, store: PersistenceStore) -> None:
         reg = ToolRegistry()

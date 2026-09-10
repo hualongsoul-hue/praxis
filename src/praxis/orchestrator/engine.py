@@ -2,6 +2,7 @@
 
 import time
 from collections.abc import AsyncGenerator
+from contextlib import aclosing
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -106,12 +107,13 @@ class OrchestrationEngine:
 
             response: ModelResponse | None = None
             if streaming:
-                async for model_update in self.driver.stream_model(prompt):
-                    for event in self.driver.emitter.events[event_cursor:]:
-                        yield OrchestrationTransition(event=event)
-                    event_cursor = len(self.driver.emitter.events)
-                    if model_update is not None:
-                        response = model_update
+                async with aclosing(self.driver.stream_model(prompt)) as model_stream:
+                    async for model_update in model_stream:
+                        for event in self.driver.emitter.events[event_cursor:]:
+                            yield OrchestrationTransition(event=event)
+                        event_cursor = len(self.driver.emitter.events)
+                        if model_update is not None:
+                            response = model_update
             else:
                 response = await self.driver.complete_model(prompt)
                 for event in self.driver.emitter.events[event_cursor:]:

@@ -4,27 +4,41 @@
 YAML 声明式权限配置（按工具名/类别/路径模式），运行时临时授权。
 """
 
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import ConfigDict, model_validator
 
+from praxis.models.base import SafeBaseModel
 from praxis.models.guardrails import GuardrailVerdict, VerdictType
 from praxis.models.tools import ToolMetadata
 
+PermissionLevel = Literal[VerdictType.AUTO_APPROVE, VerdictType.CONFIRM, VerdictType.DENY]
 
-class PermissionRule(BaseModel):
+
+class PermissionRule(SafeBaseModel):
     """权限规则条目。"""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     tool_name: str | None = None
     category: str | None = None
-    permission: VerdictType = VerdictType.CONFIRM
+    permission: PermissionLevel = VerdictType.CONFIRM
+
+    @model_validator(mode="after")
+    def validate_selector(self) -> "PermissionRule":
+        selectors = [value for value in (self.tool_name, self.category) if value is not None]
+        if len(selectors) != 1 or not selectors[0] or selectors[0] != selectors[0].strip():
+            raise ValueError("权限规则必须指定一个 tool_name 或 category")
+        return self
 
 
-class PermissionPolicy(BaseModel):
+class PermissionPolicy(SafeBaseModel):
     """权限策略配置。"""
 
-    default_permission: VerdictType = VerdictType.CONFIRM
-    rules: list[PermissionRule] = Field(default_factory=lambda: [])
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    default_permission: PermissionLevel = VerdictType.CONFIRM
+    rules: tuple[PermissionRule, ...] = ()
 
 
 class PermissionManager:
@@ -35,7 +49,7 @@ class PermissionManager:
 
     def __init__(self, policy: PermissionPolicy | None = None) -> None:
         self.policy = policy or PermissionPolicy()
-        self.temporary_grants: dict[str, VerdictType] = {}
+        self.temporary_grants: dict[str, PermissionLevel] = {}
 
     def check_permission(
         self,
@@ -68,6 +82,7 @@ class PermissionManager:
                     verdict=rule.permission,
                     reason=f"工具名规则匹配: {tool_name}",
                 )
+        for rule in self.policy.rules:
             if rule.category and rule.category == metadata.category:
                 return GuardrailVerdict(
                     verdict=rule.permission,
@@ -86,9 +101,10 @@ class PermissionManager:
             reason=f"默认策略: {self.policy.default_permission.value}",
         )
 
-    def grant_temporary(self, tool_name: str, permission: VerdictType) -> None:
+    def grant_temporary(self, tool_name: str, permission: PermissionLevel) -> None:
         """运行时临时授权。"""
-        self.temporary_grants[tool_name] = permission
+        rule = PermissionRule(tool_name=tool_name, permission=permission)
+        self.temporary_grants[tool_name] = rule.permission
 
     def revoke_temporary(self, tool_name: str) -> bool:
         """撤销临时授权。返回是否成功撤销。"""
@@ -114,13 +130,4 @@ class PermissionManager:
                   - category: "file_ops"
                     permission: "confirm"
         """
-        rules: list[PermissionRule] = []
-        for rule_dict in config.get("rules", []):
-            rules.append(PermissionRule(**rule_dict))
-
-        default = config.get("default_permission", "confirm")
-        policy = PermissionPolicy(
-            default_permission=VerdictType(default),
-            rules=rules,
-        )
-        return PermissionManager(policy)
+        return PermissionManager(PermissionPolicy.model_validate(config))

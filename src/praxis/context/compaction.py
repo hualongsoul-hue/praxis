@@ -3,9 +3,10 @@
 Token 超过阈值（默认 80%）自动触发，
 调用 S4 summarize 生成摘要，
 保留规则（架构决策/Bug/实现细节保留，冗余丢弃），
-保留最近 5 个关键文件引用，工具结果清除策略。
+按配置保留最近的关键文件引用，不拆分工具请求与结果。
 """
 
+import json
 from typing import Any
 
 from praxis.config.schemas import ContextConfig
@@ -48,9 +49,9 @@ class ContextCompactor:
         """压缩消息历史。
 
         策略：
-        1. 清除旧工具结果原始输出（保留调用记录）
-        2. 将非关键消息合并为摘要
-        3. 保留含关键词的消息
+        1. 将工具请求及其结果分为不可拆分的消息组
+        2. 将非关键消息组合并为摘要
+        3. 完整保留含关键词的消息组
         4. 保留最近的文件引用
 
         Args:
@@ -66,11 +67,18 @@ class ContextCompactor:
         critical: list[dict[str, Any]] = []
         compressible: list[dict[str, Any]] = []
 
-        for msg in messages:
-            if self.is_critical(msg):
-                critical.append(msg)
+        # A function call and every result form one indivisible protocol unit.
+        groups: list[list[dict[str, Any]]] = []
+        for message in messages:
+            if message.get("role") == "tool" and groups and groups[-1][0].get("tool_calls"):
+                groups[-1].append(message)
             else:
-                compressible.append(msg)
+                groups.append([message])
+        for group in groups:
+            if any(self.is_critical(message) for message in group):
+                critical.extend(group)
+            else:
+                compressible.extend(group)
 
         # 生成摘要
         summary = ""
@@ -85,6 +93,13 @@ class ContextCompactor:
                 ),
                 model=self.model,
             )
+            if not summary.strip():
+                return CompactionResult(
+                    original_tokens=original_tokens,
+                    compacted_tokens=original_tokens,
+                    summary="",
+                    retained_file_refs=list(file_refs),
+                )
 
         # 重建消息列表
         compacted: list[dict[str, Any]] = []
@@ -97,14 +112,14 @@ class ContextCompactor:
 
         # 保留最近的文件引用
         keep = self.config.recent_file_refs_keep
-        retained_refs = file_refs[-keep:] if len(file_refs) > keep else list(file_refs)
+        retained_refs = file_refs[-keep:] if keep else []
 
         compacted_tokens = get_token_count(compacted, self.model)
 
         emit_metric(
             "context_compaction",
             float(original_tokens - compacted_tokens),
-            {"original": str(original_tokens), "compacted": str(compacted_tokens)},
+            {},
             "histogram",
         )
         log.info(
@@ -125,38 +140,6 @@ class ContextCompactor:
             summary=summary,
             retained_file_refs=retained_refs,
         )
-
-    def strip_tool_outputs(
-        self,
-        messages: list[dict[str, Any]],
-        keep_recent: int = 3,
-    ) -> int:
-        """清除旧工具输出内容（保留调用记录）。
-
-        轻量级压缩：只清除 tool role 消息的 content，
-        保留最近 keep_recent 条。
-
-        Args:
-            messages: 消息列表（原地修改）。
-            keep_recent: 保留最近的工具结果数。
-
-        Returns:
-            清除的消息数。
-        """
-        tool_indices = [
-            i for i, m in enumerate(messages) if m.get("role") == "tool"
-        ]
-        if len(tool_indices) <= keep_recent:
-            return 0
-
-        to_strip = tool_indices[:-keep_recent]
-        for idx in to_strip:
-            messages[idx] = {
-                "role": "tool",
-                "tool_call_id": messages[idx].get("tool_call_id", ""),
-                "content": "[输出已省略]",
-            }
-        return len(to_strip)
 
     @staticmethod
     def is_critical(msg: dict[str, Any]) -> bool:
@@ -185,4 +168,6 @@ class ContextCompactor:
             content = msg.get("content", "")
             if isinstance(content, str) and content:
                 parts.append(f"[{role}] {content}")
+            if msg.get("tool_calls"):
+                parts.append(f"[tool_calls] {json.dumps(msg['tool_calls'], ensure_ascii=False)}")
         return "\n\n".join(parts)

@@ -5,6 +5,8 @@
 Few-shot 示例管理：按任务类型索引和按需注入。
 """
 
+from collections.abc import Awaitable, Callable
+from copy import deepcopy
 from typing import Any
 
 from praxis.telemetry.logger import get_logger
@@ -59,6 +61,14 @@ class JITRetriever:
         self.identifiers: dict[str, IdentifierEntry] = {}
         self.examples: list[FewShotExample] = []
         self.content_loader: ContentLoader | None = None
+
+    def snapshot(self) -> "JITRetriever":
+        """Isolate mutable indexes while sharing the host-owned content loader."""
+        snapshot = JITRetriever()
+        snapshot.identifiers = deepcopy(self.identifiers)
+        snapshot.examples = deepcopy(self.examples)
+        snapshot.content_loader = self.content_loader
+        return snapshot
 
     def register_identifier(
         self,
@@ -181,7 +191,7 @@ class ContentLoader:
     通过 S5 工具系统或文件系统按需加载完整内容。
     """
 
-    def __init__(self, read_func: Any) -> None:
+    def __init__(self, read_func: Callable[[str, str], Awaitable[str | None]]) -> None:
         self.read_func = read_func
 
     async def load(self, source: str, identifier: str) -> str | None:

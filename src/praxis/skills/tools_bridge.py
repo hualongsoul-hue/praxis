@@ -7,6 +7,7 @@
 from pathlib import Path
 from typing import Any
 
+from praxis.exceptions import SkillError
 from praxis.models.skills import SkillDefinition
 from praxis.models.tools import ToolDefinition, ToolMetadata
 from praxis.skills.paths import resolve_skill_path
@@ -58,15 +59,19 @@ class SkillToolsBridge:
         Returns:
             注册的工具名列表。
         """
-        registered: list[str] = []
+        prepared: list[tuple[ToolDefinition, ToolHandler]] = []
+        names: set[str] = set()
         base = Path(skill.base_path)
 
         for script_rel in skill.scripts:
             script_path = resolve_skill_path(base, script_rel)
             if not script_path.is_file():
-                continue
+                raise SkillError("技能脚本不存在", details={"skill_id": skill.skill_id})
 
             tool_name = f"skill_{skill.skill_id}_{script_path.stem}"
+            if tool_name in names or self.registry.has_tool(tool_name):
+                raise SkillError("技能脚本工具名冲突", details={"tool_name": tool_name})
+            names.add(tool_name)
             handler = executor or self.create_script_reader(script_path)
 
             definition = ToolDefinition(
@@ -88,8 +93,13 @@ class SkillToolsBridge:
                 ),
             )
 
+            prepared.append((definition, handler))
+
+        # Validate the whole batch before making any tools visible.
+        registered: list[str] = []
+        for definition, handler in prepared:
             self.registry.register(definition, handler)
-            registered.append(tool_name)
+            registered.append(definition.name)
 
         self.registered_tools[skill.skill_id] = registered
         log.info(

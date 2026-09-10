@@ -19,6 +19,7 @@ from praxis.exceptions import (
     RateLimitError,
 )
 from praxis.gateway.callbacks import TelemetryCallback
+from praxis.gateway.calls import stream as protocol_stream
 from praxis.gateway.chat import (
     build_usage,
     chat,
@@ -131,6 +132,46 @@ def make_raw_stream_chunk(
         model="gpt-4o",
         system_fingerprint=system_fingerprint,
     )
+
+
+@pytest.mark.parametrize("entrypoint", [chat_stream, protocol_stream])
+async def test_stream_close_awaits_provider_cleanup_before_releasing_slot(entrypoint) -> None:
+    gateway = GatewayRouter(make_config(max_concurrent_requests=1))
+    cleanup_started = asyncio.Event()
+    release = asyncio.Event()
+
+    class ProviderStream:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            return make_raw_stream_chunk(content="partial")
+
+        async def aclose(self):
+            cleanup_started.set()
+            await release.wait()
+            self.closed = True
+
+    provider = ProviderStream()
+    with patch.object(gateway.router, "acompletion", AsyncMock(return_value=provider)):
+        stream = entrypoint(gateway, [{"role": "user", "content": "test"}])
+        assert (await anext(stream)).delta_content == "partial"
+        closing = asyncio.create_task(stream.aclose())
+        try:
+            await asyncio.wait_for(cleanup_started.wait(), timeout=1)
+            assert not closing.done()
+            assert gateway.request_semaphore.locked()
+        finally:
+            release.set()
+            await closing
+        assert provider.closed
+        async with asyncio.timeout(1):
+            async with gateway.request_slot():
+                pass
+        assert not gateway.reservations
 
 
 class TestGatewayRouter:

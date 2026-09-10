@@ -6,11 +6,14 @@
 生命周期的 start()/stop() 由 S12（SessionFactory）管理，Agent 不直接接触。
 """
 
+import asyncio
 import os
 from datetime import UTC, datetime
 from typing import Any, cast
 
 from praxis.config.schemas import MemoryConfig
+from praxis.exceptions import CognitiveMemoryError
+from praxis.lifecycle import AsyncResourceOwner
 from praxis.memory.consolidator import MemoryConsolidator
 from praxis.memory.dream import DreamConsolidator, DreamReport, DreamScheduler
 from praxis.memory.extractor import MemoryExtractor
@@ -180,11 +183,22 @@ class CognitiveMemory:
 
     async def stop(self) -> None:
         """停止后台 Worker 与 Dream 调度器。"""
-        await self.worker.stop()
-        await self.dream_scheduler.stop()
-        await self.save_meta()
+        owner = AsyncResourceOwner()
+        # Reverse registration order gives tasks -> metadata -> index shutdown.
         if self.owns_vector_store:
-            await self.vector_store.aclose()
+            owner.register("memory-index", self.vector_store.aclose)
+        owner.register("memory-metadata", self.save_meta)
+        owner.register("memory-dream", self.dream_scheduler.stop)
+        owner.register("memory-worker", self.worker.stop)
+        failures = await owner.close()
+        for failure in failures:
+            if isinstance(failure, asyncio.CancelledError):
+                raise failure
+        if failures:
+            raise CognitiveMemoryError(
+                "记忆关闭期间发生错误",
+                details={"failure_types": [type(error).__name__ for error in failures]},
+            ) from None
         log.info("CognitiveMemory 已停止", session_id=self.session_id)
 
     # ──────────────────────────────────────────────────────────────────

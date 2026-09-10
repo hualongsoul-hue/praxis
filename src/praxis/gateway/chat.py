@@ -17,6 +17,7 @@ from praxis.gateway.metering import (
 )
 from praxis.gateway.resilience import map_litellm_exception
 from praxis.gateway.router import GatewayRouter, UsageReservation
+from praxis.lifecycle import close_provider_stream
 from praxis.models.responses import (
     FunctionCallDelta,
     ModelResponse,
@@ -288,25 +289,27 @@ async def chat_stream(
                 ),
             )
             started = True
-            with warnings.catch_warnings():
-                # LiteLLM 1.92 introspects Pydantic model instances while
-                # deciding whether a usage chunk is empty. Pydantic 2.11+
-                # emits this specific compatibility warning from that path.
-                warnings.filterwarnings(
-                    "ignore",
-                    message=(
-                        "Accessing the 'model_(?:computed_)?fields' attribute on the instance "
-                        "is deprecated.*"
-                    ),
-                    category=PydanticDeprecatedSince211,
-                )
-                async for raw_chunk in stream:
-                    chunk = convert_stream_chunk(raw_chunk)
-                    if chunk.usage is not None:
-                        final_usage = chunk.usage
-                    if chunk.model:
-                        final_model = chunk.model
-                    yield chunk
+            try:
+                with warnings.catch_warnings():
+                    # LiteLLM introspects Pydantic instances while deciding
+                    # whether a usage chunk is empty. Filter that warning only.
+                    warnings.filterwarnings(
+                        "ignore",
+                        message=(
+                            "Accessing the 'model_(?:computed_)?fields' attribute on the instance "
+                            "is deprecated.*"
+                        ),
+                        category=PydanticDeprecatedSince211,
+                    )
+                    async for raw_chunk in stream:
+                        chunk = convert_stream_chunk(raw_chunk)
+                        if chunk.usage is not None:
+                            final_usage = chunk.usage
+                        if chunk.model:
+                            final_model = chunk.model
+                        yield chunk
+            finally:
+                await close_provider_stream(stream)
     except asyncio.CancelledError:
         raise
     except Exception as exc:

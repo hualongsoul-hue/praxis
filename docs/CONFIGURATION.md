@@ -104,6 +104,23 @@ Windows 可使用绝对路径（例如 `D:\\AgentData\\workspace`）。空 `allo
 `allow_private_networks: true` 只有在 `network_allowed: true` 时才有效并通过配置校验；这两个开关
 不影响受信模型网关的 `api_base`。
 
+`guardrails.permissions_file` 指向独立 YAML 权限文件，其根节点必须是映射，未知字段直接报错。
+每条规则必须且只能指定一个非空 `tool_name` 或 `category`；权限只能是 `auto_approve`、`confirm`
+或 `deny`。如下内容应保存在权限文件中，而不是直接拼入主配置：
+
+```yaml
+default_permission: confirm
+rules:
+  - category: file_ops
+    permission: auto_approve
+  - tool_name: write_file
+    permission: deny
+```
+
+匹配优先级为会话临时授权、工具名规则、类别规则、工具显式元数据、默认权限；因此以上规则无论
+书写顺序如何，`write_file` 都会被拒绝。同层级多个匹配规则按文件顺序取第一条。临时授权只能通过
+受信宿主管理接口设置，且不会影响同一 Runtime 的其他 Session 或新建子代理。
+
 远程 Embedding 以 `embedding_api_base` 为启用开关，只接受 HTTP/HTTPS。没有 Base 时配置
 `embedding_model` 或 `embedding_api_key_env` 会被拒绝；全部未配置时明确使用本地词法检索。
 

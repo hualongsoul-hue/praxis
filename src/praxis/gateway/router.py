@@ -5,7 +5,7 @@ import os
 import threading
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping
-from contextlib import asynccontextmanager
+from contextlib import aclosing, asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -263,8 +263,9 @@ class GatewayRouter:
     ) -> AsyncIterator[ModelResponseChunk]:
         from praxis.gateway.chat import chat_stream
 
-        async for chunk in chat_stream(self, messages, model=model, tools=tools, **kwargs):
-            yield chunk
+        async with aclosing(chat_stream(self, messages, model=model, tools=tools, **kwargs)) as stream:
+            async for chunk in stream:
+                yield chunk
 
     async def health(self) -> bool:
         """Execute a bounded live completion and cache the result for the configured TTL."""

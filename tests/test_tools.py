@@ -1,6 +1,7 @@
 """S5 工具系统验证测试。"""
 
 import asyncio
+import io
 import os
 import socket
 import sys
@@ -779,6 +780,24 @@ class TestWebFetchSecurity:
 
 
 class TestBoundedFileAndSearchSecurity:
+    async def test_file_growth_after_stat_still_uses_bounded_reads(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        target = tmp_path / "growing.txt"
+        target.write_bytes(b"ok")
+        policy = ToolPolicy(ToolsConfig(allowed_paths=[str(tmp_path)], max_file_bytes=4))
+        read_sizes: list[int] = []
+
+        class GrowingFile(io.BytesIO):
+            def read(self, size: int = -1) -> bytes:
+                read_sizes.append(size)
+                return super().read(size)
+
+        monkeypatch.setattr(Path, "open", lambda *args, **kwargs: GrowingFile(b"0123456789"))
+        with pytest.raises(ToolPolicyViolationError, match="大小上限"):
+            await read_file_handler(policy)({"file_path": str(target)})
+        assert read_sizes and all(0 < size <= 5 for size in read_sizes)
+
     async def test_read_file_rejects_oversized_input_before_reading(
         self,
         tmp_path: Path,
@@ -797,7 +816,7 @@ class TestBoundedFileAndSearchSecurity:
             read_attempted = True
             raise AssertionError(f"不应读取已知超限文件: {path}")
 
-        monkeypatch.setattr(Path, "read_bytes", forbidden_read)
+        monkeypatch.setattr(Path, "open", forbidden_read)
         with pytest.raises(ToolPolicyViolationError, match="大小上限"):
             await read_file_handler(policy)({"file_path": str(target)})
         assert read_attempted is False
@@ -813,18 +832,18 @@ class TestBoundedFileAndSearchSecurity:
             allowed_paths=[str(tmp_path)],
             max_file_bytes=64,
         ))
-        original_read_bytes = Path.read_bytes
+        original_open = Path.open
         loop = asyncio.get_running_loop()
         read_started = asyncio.Event()
         release_read = threading.Event()
 
-        def controlled_read(path: Path) -> bytes:
+        def controlled_open(path: Path, *args: Any, **kwargs: Any):
             loop.call_soon_threadsafe(read_started.set)
             if not release_read.wait(timeout=2):
                 raise AssertionError("测试未及时释放文件读取")
-            return original_read_bytes(path)
+            return original_open(path, *args, **kwargs)
 
-        monkeypatch.setattr(Path, "read_bytes", controlled_read)
+        monkeypatch.setattr(Path, "open", controlled_open)
         task = asyncio.create_task(read_file_handler(policy)({"file_path": str(target)}))
         try:
             await asyncio.wait_for(read_started.wait(), timeout=2)

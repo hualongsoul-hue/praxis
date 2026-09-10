@@ -21,7 +21,9 @@ def read_file_bytes_sync(path: Path, policy: ToolPolicy) -> bytes:
         raise ToolPolicyViolationError(
             f"文件超过 {policy.max_file_bytes} 字节大小上限"
         )
-    data = checked.read_bytes()
+    # Metadata can become stale while another process grows the file.
+    with checked.open("rb") as stream:
+        data = stream.read(policy.max_file_bytes + 1)
     policy.check_path(checked)
     if len(data) > policy.max_file_bytes:
         raise ToolPolicyViolationError(

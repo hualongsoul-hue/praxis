@@ -41,20 +41,22 @@ def run(
 ) -> subprocess.CompletedProcess[str]:
     write_console_output(f"[wheel smoke] {' '.join(command)}\n", flush=True)
     try:
-        result = subprocess.run(
+        raw = subprocess.run(
             command,
             cwd=working_directory,
             env=environment,
             check=False,
             capture_output=True,
-            encoding="utf-8",
-            text=True,
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as error:
         raise RuntimeError(
             f"command {command!r} exceeded {timeout:.0f} seconds"
         ) from error
+    # Decode on this thread: Windows pipe reader failures must fail the gate.
+    result = subprocess.CompletedProcess(
+        raw.args, raw.returncode, raw.stdout.decode("utf-8"), raw.stderr.decode("utf-8"),
+    )
     if result.stdout:
         write_console_output(result.stdout)
     if result.stderr:
@@ -166,6 +168,17 @@ def main() -> int:
         )
         if not all(marker in doctor.stdout for marker in expected_doctor_output):
             raise RuntimeError(f"unexpected doctor output: {doctor.stdout!r}")
+        run(
+            str(python),
+            "-I",
+            "-X",
+            "utf8",
+            "-W",
+            "error",
+            str(ROOT / "scripts" / "wheel_runtime_smoke.py"),
+            working_directory=working_directory,
+            environment=isolated_environment,
+        )
         run(
             str(python),
             "-c",

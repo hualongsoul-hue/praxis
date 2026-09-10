@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from typing import Any, cast
 
 from praxis.config.schemas import SkillsConfig
+from praxis.exceptions import SkillError
 from praxis.models.skills import SkillDefinition, SkillIndexEntry
 from praxis.models.tools import ToolDefinition, ToolMetadata
 from praxis.persistence.store import PersistenceStore
@@ -151,18 +152,20 @@ class SkillManager:
         Returns:
             新激活的技能 ID 列表。
         """
-        index = self.get_skill_index()
-        activated_ids = self.activation.auto_activate(
-            task_description=task_description,
-            skill_index=index,
-            available_skills=self.skills,
-            threshold=threshold,
-            max_activate=max_activate,
-        )
-        for skill_id in activated_ids:
-            skill = self.skills.get(skill_id)
-            if skill is not None:
-                self.bridge.register_skill_scripts(skill)
+        ranked = self.evaluate_relevance(task_description)
+        activated_ids: list[str] = []
+        for entry, score in ranked:
+            if score < threshold or len(activated_ids) >= max_activate:
+                break
+            if self.activation.is_active(entry.skill_id):
+                continue
+            try:
+                if self.activate_skill(entry.skill_id):
+                    activated_ids.append(entry.skill_id)
+            except SkillError as error:
+                log.warning(
+                    "技能不可激活", skill_id=entry.skill_id, error_type=type(error).__name__,
+                )
         return activated_ids
 
     def evaluate_relevance(
@@ -178,8 +181,16 @@ class SkillManager:
         skill = self.skills.get(skill_id)
         if skill is None:
             return False
-        self.activation.activate(skill)
+        if self.activation.is_active(skill_id):
+            return True
+        missing = self.bridge.check_tool_dependencies(skill)
+        if missing:
+            raise SkillError(
+                "技能工具依赖缺失",
+                details={"skill_id": skill_id, "missing_tools": missing},
+            )
         self.bridge.register_skill_scripts(skill)
+        self.activation.activate(skill)
         return True
 
     def deactivate_skill(self, skill_id: str) -> bool:

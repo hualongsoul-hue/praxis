@@ -26,6 +26,7 @@ import httpx
 import pytest
 
 from praxis.config.schemas import MemoryConfig, PersistenceConfig
+from praxis.exceptions import CognitiveMemoryError
 from praxis.gateway.router import GatewayRouter
 from praxis.memory.consolidator import MemoryConsolidator
 from praxis.memory.core import CognitiveMemory
@@ -929,6 +930,30 @@ class TestBackgroundWorker:
 
 
 class TestCognitiveMemory:
+    async def test_stop_reclaims_other_resources_after_worker_failure(
+        self, store: PersistenceStore, mock_gateway, monkeypatch,
+    ) -> None:
+        memory = CognitiveMemory(store, mock_gateway, session_id="stop-failure")
+        await memory.start()
+        dream_task = memory.dream_scheduler.task
+        client = memory.vector_store.get_client()
+        stop_worker = memory.worker.stop
+
+        async def fail_after_stopping_worker() -> None:
+            await stop_worker()
+            raise RuntimeError("worker stop failed")
+
+        monkeypatch.setattr(memory.worker, "stop", fail_after_stopping_worker)
+        try:
+            with pytest.raises(CognitiveMemoryError):
+                await memory.stop()
+            assert dream_task is not None and dream_task.done()
+            assert client.is_closed
+        finally:
+            await stop_worker()
+            await memory.dream_scheduler.stop()
+            await memory.vector_store.aclose()
+
     async def test_restart_rebuilds_semantic_index_automatically(
         self,
         store: PersistenceStore,

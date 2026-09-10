@@ -152,20 +152,18 @@ class OrchestrationLoop:
 
         返回 AgentResponse 表示提前终止（如输入被拦截），None 表示继续。
         """
-        # S6: 记录用户消息到工作记忆
         user_text = ctx.turn_context.user_text
-
-        if self.memory is not None:
-            self.memory.append_message(
-                WorkingMemoryMessage(role="user", content=user_text)
-            )
-
         # 输入护栏检查
         input_verdict = await self.guardrails.check_input(user_text)
         if input_verdict.tripwire or input_verdict.verdict == VerdictType.BLOCK:
             return self.make_response(
                 content=f"输入被拒绝: {input_verdict.reason}",
                 reason=TerminationReason.TRIPWIRE,
+            )
+
+        if self.memory is not None:
+            self.memory.append_message(
+                WorkingMemoryMessage(role="user", content=user_text)
             )
 
         # S6: 获取记忆索引和语义检索
@@ -763,9 +761,10 @@ class OrchestrationLoop:
 
     async def stream_run(self, ctx: RunContext) -> AsyncGenerator[AgentEvent, None]:
         """Project public events from the same transition engine used by run()."""
-        async for transition in self.engine.transitions(ctx, streaming=True):
-            if transition.event is not None:
-                yield transition.event
+        async with aclosing(self.engine.transitions(ctx, streaming=True)) as transitions:
+            async for transition in transitions:
+                if transition.event is not None:
+                    yield transition.event
 
     # ── 控制方法 ──────────────────────────────────────────────────────────
 
