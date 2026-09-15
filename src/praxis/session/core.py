@@ -342,6 +342,7 @@ class SessionFactory:
         tools_config: ToolsConfig | None = None,
         include_builtins: bool = True,
         jit_retriever: JITRetriever | None = None,
+        session_id: str | None = None,
     ) -> Session:
         """创建新会话。
 
@@ -357,12 +358,22 @@ class SessionFactory:
             verifier_registry: S10 验证器注册表（可选）。
             tools_config: S5 工具系统配置（沙箱/超时等）；None 使用默认。
             include_builtins: 是否自动注册内置工具（仅在创建新 registry 时生效）。
+            session_id: 宿主提供的会话身份；None 时生成新的身份。
 
         Returns:
             初始化完毕的 Session。
         """
+        if session_id is not None:
+            if not session_id.strip():
+                raise ValueError("session_id must not be empty")
+            if memory is not None and memory.session_id != session_id:
+                raise ValueError("memory.session_id must match session_id")
         guardrails = guardrails.for_session()
-        metadata = SessionMetadata(status=SessionStatus.INITIALIZING)
+        metadata = (
+            SessionMetadata(session_id=session_id, status=SessionStatus.INITIALIZING)
+            if session_id is not None
+            else SessionMetadata(status=SessionStatus.INITIALIZING)
+        )
         model_capabilities = gateway.capabilities(model)
         input_resolver = InputResolver(self.input_config)
 

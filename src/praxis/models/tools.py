@@ -71,6 +71,14 @@ class ToolMetadata(BaseModel):
     readonly: bool = False
     idempotent: bool = False
     timeout_seconds: float | None = Field(default=None, gt=0)
+    interactive: bool = Field(
+        default=False,
+        description=(
+            "Host interaction handler: waits until completion or task cancellation, without "
+            "ordinary tool timeout or execution leases. The host owns limits and synchronization "
+            "for any I/O or business writes performed by the handler."
+        ),
+    )
     tags: Sequence[str] = ()
 
     @field_validator("tags")

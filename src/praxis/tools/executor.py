@@ -76,7 +76,14 @@ class ToolExecutor:
         timeout = meta.timeout_seconds or self.sandbox.default_timeout
 
         try:
-            if meta.readonly:
+            if meta.interactive:
+                # Host waits must not occupy shared tool capacity. Authorization and
+                # argument validation still apply; host I/O and writes need their own
+                # bounded operations and synchronization. Cancellation propagates.
+                with operation_span("praxis.tool.execute") as span:
+                    span.set_attribute("praxis.tool", name)
+                    content = await entry.handler(arguments)
+            elif meta.readonly:
                 read_limit = (
                     self.resources.read_lease()
                     if self.resources is not None

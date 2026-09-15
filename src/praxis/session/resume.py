@@ -6,6 +6,8 @@ resume_session 从 S3 加载检查点，
 
 from typing import Any, cast
 
+from praxis.config.schemas import ToolsConfig
+from praxis.context.jit_retrieval import JITRetriever
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.memory.core import CognitiveMemory
 from praxis.models.orchestrator import LoopState
@@ -51,6 +53,9 @@ class SessionResumer:
         memory: CognitiveMemory | None = None,
         skill_manager: SkillManager | None = None,
         verifier_registry: VerifierRegistry | None = None,
+        tools_config: ToolsConfig | None = None,
+        include_builtins: bool = True,
+        jit_retriever: JITRetriever | None = None,
     ) -> Session | None:
         """从检查点恢复会话。
 
@@ -63,6 +68,12 @@ class SessionResumer:
             memory: S6 记忆管线（可选）。
             skill_manager: S14 技能管理器（可选）。
             verifier_registry: S10 验证器注册表（可选）。
+            tools_config: 宿主的工具安全策略；恢复时显式传递，默认保持关闭敏感能力。
+            include_builtins: 是否注册内置工具（仅在未提供 registry 时生效）。
+            jit_retriever: 宿主的内容加载器（可选）。
+
+        输入策略使用 factory.input_config，模型能力重新由 gateway.capabilities 解析。
+        安全策略与输入策略由可信宿主提供，不从检查点反序列化授权配置。
 
         Returns:
             恢复后的 Session，检查点不存在时返回 None。
@@ -89,6 +100,10 @@ class SessionResumer:
             memory=memory,
             skill_manager=skill_manager,
             verifier_registry=verifier_registry,
+            tools_config=tools_config,
+            include_builtins=include_builtins,
+            jit_retriever=jit_retriever,
+            session_id=snapshot.metadata.session_id,
         )
 
         # 恢复有状态组件
