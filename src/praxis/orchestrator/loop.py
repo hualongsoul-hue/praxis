@@ -376,13 +376,14 @@ class OrchestrationLoop:
     def check_final_termination(
         self, parsed: ParsedOutput, finish_reason: str | None,
     ) -> TerminationReason | None:
-        """终止条件检查（自然终止 / 安全拒绝）。"""
+        """在执行工具之前检查自然终止、安全拒绝和提供商输出截断。"""
         safety_refusal = finish_reason == "content_filter"
         return self.termination.evaluate(
             self.state,
             safety_refusal=safety_refusal,
             is_final_response=parsed.is_final,
             token_usage=self.assembler.get_token_usage(),
+            output_exhausted=finish_reason == "length",
         )
 
     async def handle_final_response(
@@ -391,8 +392,8 @@ class OrchestrationLoop:
         reason: TerminationReason,
     ) -> AgentResponse:
         """处理最终响应：输出护栏、记忆记录、历史更新。"""
-        # 输出护栏（仅自然终止时检查）
-        if reason == TerminationReason.NATURAL and parsed.content:
+        # 截断正文仍需通过与自然结束正文相同的输出护栏。
+        if reason in (TerminationReason.NATURAL, TerminationReason.TOKEN_EXHAUSTED) and parsed.content:
             out_verdict = await self.guardrails.check_output(parsed.content)
             if out_verdict.tripwire or out_verdict.verdict == VerdictType.BLOCK:
                 return self.make_response(
