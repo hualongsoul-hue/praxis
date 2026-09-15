@@ -78,7 +78,7 @@ class MCPConnectionManager:
         connection = self.ensure_connection(config)
         connection.status = MCPServerStatus.CONNECTING
 
-        capabilities = session.get_server_capabilities()
+        capabilities = session.server_capabilities
         negotiated = MCPServerCapabilities(
             tools=capabilities.tools is not None if capabilities else False,
             resources=capabilities.resources is not None if capabilities else False,

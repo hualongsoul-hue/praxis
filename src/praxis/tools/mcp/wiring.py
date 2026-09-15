@@ -35,13 +35,13 @@ def make_sampling_callback(server_name: str, manager: SamplingManager) -> Any:
             messages.append({"role": getattr(message, "role", "user"), "content": text})
         preferences = cast(
             dict[str, Any],
-            params.modelPreferences.model_dump() if params.modelPreferences else {},
+            params.model_preferences.model_dump() if params.model_preferences else {},
         )
         request = MCPSamplingRequest(
             server_name=server_name,
             messages=messages,
             model_preferences=preferences,
-            max_tokens=params.maxTokens or 1024,
+            max_tokens=params.max_tokens or 1024,
         )
         try:
             result = await manager.handle_sampling(request)
@@ -61,7 +61,7 @@ def make_elicitation_callback(server_name: str, manager: ElicitationManager) -> 
     from mcp.types import ElicitResult, ErrorData
 
     async def callback(context: Any, params: Any) -> Any:
-        schema = getattr(params, "requestedSchema", None)
+        schema = getattr(params, "requested_schema", None)
         if schema is not None and hasattr(schema, "model_dump"):
             schema = schema.model_dump()
         request = MCPElicitationRequest(

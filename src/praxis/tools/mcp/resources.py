@@ -6,7 +6,13 @@ resources/list 发现 + resources/read 读取 + 资源模板 + resources/subscri
 from typing import Any
 
 from mcp import ClientSession
-from pydantic import AnyUrl
+from mcp.types import (
+    EmptyResult,
+    SubscribeRequest,
+    SubscribeRequestParams,
+    UnsubscribeRequest,
+    UnsubscribeRequestParams,
+)
 
 from praxis.models.mcp import MCPResourceContent, MCPResourceInfo
 from praxis.telemetry.logger import get_logger
@@ -49,7 +55,7 @@ class MCPResourcesBridge:
                 uri=str(r.uri),
                 name=r.name or "",
                 description=r.description or "",
-                mime_type=r.mimeType or "text/plain",
+                mime_type=r.mime_type or "text/plain",
             ))
 
         log.info("MCP 资源已列出", server=server_name, count=len(resources))
@@ -72,12 +78,12 @@ class MCPResourcesBridge:
 
         result = await session.list_resource_templates()
         templates: list[dict[str, Any]] = []
-        for t in result.resourceTemplates:
+        for t in result.resource_templates:
             templates.append({
-                "uri_template": str(t.uriTemplate),
+                "uri_template": t.uri_template,
                 "name": t.name or "",
                 "description": t.description or "",
-                "mime_type": t.mimeType or "text/plain",
+                "mime_type": t.mime_type or "text/plain",
             })
         return templates
 
@@ -97,14 +103,14 @@ class MCPResourcesBridge:
         if session is None:
             raise RuntimeError(f"MCP Server 未连接: {server_name}")
 
-        result = await session.read_resource(AnyUrl(uri))
+        result = await session.read_resource(uri)
 
         # 提取第一个内容块
         if result.contents:
             content = result.contents[0]
             text = getattr(content, "text", None)
             blob = getattr(content, "blob", None)
-            mime_type = getattr(content, "mimeType", "text/plain") or "text/plain"
+            mime_type = content.mime_type or "text/plain"
             return MCPResourceContent(
                 uri=uri,
                 mime_type=mime_type,
@@ -125,7 +131,12 @@ class MCPResourcesBridge:
         if session is None:
             raise RuntimeError(f"MCP Server 未连接: {server_name}")
 
-        await session.subscribe_resource(AnyUrl(uri))
+        # Praxis explicitly negotiates the initialize-based MCP protocol, in
+        # which resource subscriptions remain supported. Use typed requests
+        # instead of the SDK helpers deprecated for the discovery protocol.
+        await session.send_request(
+            SubscribeRequest(params=SubscribeRequestParams(uri=uri)), EmptyResult,
+        )
         self.subscriptions.setdefault(server_name, set()).add(uri)
         log.info("已订阅资源", server=server_name, uri=uri)
 
@@ -135,7 +146,9 @@ class MCPResourcesBridge:
         if session is None:
             return
 
-        await session.unsubscribe_resource(AnyUrl(uri))
+        await session.send_request(
+            UnsubscribeRequest(params=UnsubscribeRequestParams(uri=uri)), EmptyResult,
+        )
         subs = self.subscriptions.get(server_name)
         if subs:
             subs.discard(uri)

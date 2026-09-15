@@ -69,6 +69,13 @@ Runtime；否则生命周期仍属于宿主。
 模型，Elicitation 在无处理器时拒绝。测试应使用本地 Python stdio Server 覆盖工具、资源、Prompt、
 Sampling、Elicitation、断开和关闭，不依赖公网服务。
 
+当前使用 MCP Python SDK 2.2，并通过 `ClientSession.initialize()` 协商握手协议（最高
+`2025-11-25`），保留现有 Sampling、Roots 与资源订阅语义；不宣称实现 `2026-07-28` 的
+discovery、InputRequired 或新订阅协议。SDK 版本与 MCP 协议版本是两个不同的概念。
+适配器使用 v2 的 snake_case Python 字段、字符串资源 URI 与 `httpx2` HTTP 客户端。
+资源订阅和 Roots 通知通过 SDK 的公开类型化请求/通知接口发送，不调用已弃用的辅助方法。
+本地 stdio 进程及真实 TCP Streamable HTTP 回归测试均覆盖请求和关闭。
+
 ## 即时检索与示例注入
 
 通过 `jit_retriever=` 注入标识符目录和按任务分类的 Few-shot 示例。Runtime 构造时、每个会话创建时

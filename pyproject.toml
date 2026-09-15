@@ -18,16 +18,18 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "pydantic>=2.9,<3",
-    "litellm>=1.99.0,<2",
-    "httpx>=0.27,<1",
-    "aiosqlite>=0.20,<1",
-    "sqlalchemy[asyncio]>=2.0,<3",
-    "opentelemetry-api>=1.27,<2",
-    "opentelemetry-sdk>=1.27,<2",
-    "pyyaml>=6.0,<7",
-    "jsonschema>=4.20,<5",
-    "json-repair>=0.60.1,<1",
+    "pydantic>=2.13.5,<3",
+    # 1.101.0 builds ReadOnly TypedDict fields with Pydantic warnings before
+    # sending requests; incompatible with warning-strict hosts (see upgrade notes).
+    "litellm>=1.100.1,<2,!=1.101.0",
+    "httpx>=0.28.1,<1",
+    "aiosqlite>=0.22.1,<1",
+    "sqlalchemy[asyncio]>=2.0.53,<3",
+    "opentelemetry-api>=1.44.0,<2",
+    "opentelemetry-sdk>=1.44.0,<2",
+    "pyyaml>=6.0.3,<7",
+    "jsonschema>=4.26.0,<5",
+    "json-repair>=0.63.4,<1",
 ]
 
 [project.urls]
@@ -37,27 +39,27 @@ Issues = "https://github.com/hualongsoul-hue/praxis/issues"
 
 [dependency-groups]
 dev = [
-    "hypothesis>=6.135,<7",
-    "pytest>=8.0",
-    "pytest-asyncio>=0.24",
-    "pytest-cov>=6.0",
-    "pip-audit>=2.9",
-    "pip>=26.2",
-    "pyright>=1.1.403",
-    "ruff>=0.12",
+    "hypothesis>=6.168.0,<7",
+    "pytest>=9.1.1,<10",
+    "pytest-asyncio>=1.4.0,<2",
+    "pytest-cov>=7.1.0,<8",
+    "pip-audit>=2.10.1,<3",
+    "pip>=26.2.1,<27",
+    "pyright>=1.1.414,<2",
+    "ruff>=0.16.7,<0.17",
 ]
 
 [project.scripts]
 praxis = "praxis.__main__:main"
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.0,<2"]
-otlp = ["opentelemetry-exporter-otlp-proto-grpc>=1.27"]
-redis = ["redis>=5.0,<8"]
-visual = ["playwright>=1.40,<2"]
+mcp = ["mcp>=2.2.0,<3", "httpx2>=2.13.0,<3"]
+otlp = ["opentelemetry-exporter-otlp-proto-grpc>=1.44.0,<2"]
+redis = ["redis>=8.1.0,<9"]
+visual = ["playwright>=1.62.0,<2"]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.32.0,<2"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]

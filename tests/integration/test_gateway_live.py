@@ -194,8 +194,9 @@ async def test_live_stream_can_be_cancelled(live_gateway: GatewayRouter) -> None
     finally:
         if not task.done():
             task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await task
+        # A provider can fail before the first chunk. Retrieve that completed
+        # task's exception too, without masking the test's original failure.
+        await asyncio.gather(task, return_exceptions=True)
 
     response = None
     error_category: str | None = None

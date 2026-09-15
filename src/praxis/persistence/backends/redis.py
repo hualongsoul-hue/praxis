@@ -4,7 +4,7 @@
 键格式：``praxis:{namespace}:{key}``。
 """
 
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncIterator
 from typing import cast
 
 import redis.asyncio as aioredis
@@ -26,10 +26,7 @@ class RedisBackend:
         if not url:
             raise PersistenceError("Redis 后端需要配置 redis_url")
         client = aioredis.from_url(url, decode_responses=False)
-        await cast(
-            Awaitable[bool],
-            client.ping(),  # pyright: ignore[reportUnknownMemberType]
-        )
+        await client.ping()  # pyright: ignore[reportUnknownMemberType]
         return cls(client)
 
     def full_key(self, namespace: str, key: str) -> str:
@@ -44,7 +41,7 @@ class RedisBackend:
 
     async def load(self, namespace: str, key: str) -> bytes | None:
         result = await self.client.get(self.full_key(namespace, key))
-        return bytes(result) if result else None
+        return result.encode("utf-8") if isinstance(result, str) else result
 
     async def delete(self, namespace: str, key: str) -> None:
         await self.client.delete(self.full_key(namespace, key))

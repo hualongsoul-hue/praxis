@@ -9,8 +9,23 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from anyio import ClosedResourceError
-from mcp.shared.exceptions import McpError
-from mcp.types import TextContent
+from mcp.shared.exceptions import MCPError
+from mcp.types import (
+    CONNECTION_CLOSED,
+    CallToolResult,
+    EmptyResult,
+    ListResourcesResult,
+    ListResourceTemplatesResult,
+    ListToolsResult,
+    ReadResourceResult,
+    Resource,
+    ResourceTemplate,
+    RootsListChangedNotification,
+    ServerCapabilities,
+    TextContent,
+    TextResourceContents,
+    Tool,
+)
 
 from praxis.models.mcp import (
     MCPElicitationRequest,
@@ -41,47 +56,38 @@ def make_mock_session() -> MagicMock:
     session = MagicMock()
 
     # tools
-    mock_tool = MagicMock()
-    mock_tool.name = "echo"
-    mock_tool.description = "Echo tool"
-    mock_tool.inputSchema = {"type": "object", "properties": {"msg": {"type": "string"}}}
-    tools_result = MagicMock()
-    tools_result.tools = [mock_tool]
+    mock_tool = Tool(
+        name="echo", description="Echo tool",
+        input_schema={"type": "object", "properties": {"msg": {"type": "string"}}},
+    )
+    tools_result = ListToolsResult(tools=[mock_tool])
     session.list_tools = AsyncMock(return_value=tools_result)
 
-    call_result = MagicMock()
-    call_result.content = [TextContent(type="text", text="hello")]
+    call_result = CallToolResult(content=[TextContent(type="text", text="hello")])
     session.call_tool = AsyncMock(return_value=call_result)
 
     # resources
-    mock_resource = MagicMock()
-    mock_resource.uri = "file:///test.txt"
-    mock_resource.name = "test.txt"
-    mock_resource.description = "Test file"
-    mock_resource.mimeType = "text/plain"
-    resources_result = MagicMock()
-    resources_result.resources = [mock_resource]
+    mock_resource = Resource(
+        uri="file:///test.txt", name="test.txt", description="Test file", mime_type="text/plain",
+    )
+    resources_result = ListResourcesResult(resources=[mock_resource])
     session.list_resources = AsyncMock(return_value=resources_result)
 
-    mock_template = MagicMock()
-    mock_template.uriTemplate = "weather://{city}"
-    mock_template.name = "weather"
-    mock_template.description = "Weather"
-    mock_template.mimeType = "application/json"
-    templates_result = MagicMock()
-    templates_result.resourceTemplates = [mock_template]
+    mock_template = ResourceTemplate(
+        uri_template="weather://{city}", name="weather", description="Weather",
+        mime_type="application/json",
+    )
+    templates_result = ListResourceTemplatesResult(resource_templates=[mock_template])
     session.list_resource_templates = AsyncMock(return_value=templates_result)
 
-    mock_content = MagicMock()
-    mock_content.text = "file content"
-    mock_content.blob = None
-    mock_content.mimeType = "text/plain"
-    read_result = MagicMock()
-    read_result.contents = [mock_content]
+    mock_content = TextResourceContents(
+        uri="file:///test.txt", text="file content", mime_type="text/plain",
+    )
+    read_result = ReadResourceResult(contents=[mock_content])
     session.read_resource = AsyncMock(return_value=read_result)
 
-    session.subscribe_resource = AsyncMock()
-    session.unsubscribe_resource = AsyncMock()
+    session.send_request = AsyncMock(return_value=EmptyResult())
+    session.send_notification = AsyncMock()
 
     # prompts
     mock_prompt = MagicMock()
@@ -110,15 +116,12 @@ def make_mock_session() -> MagicMock:
     session.complete = AsyncMock(return_value=complete_result)
 
     # roots
-    session.send_roots_list_changed = AsyncMock()
     session.send_ping = AsyncMock()
 
     # capabilities
-    caps = MagicMock()
-    caps.tools = MagicMock()
-    caps.resources = MagicMock()
-    caps.prompts = MagicMock()
-    session.get_server_capabilities = MagicMock(return_value=caps)
+    session.server_capabilities = ServerCapabilities.model_validate({
+        "tools": {}, "resources": {}, "prompts": {},
+    })
 
     session.initialize = AsyncMock()
 
@@ -217,6 +220,10 @@ class TestMCPResourcesBridge:
 
         await bridge.subscribe_resource("srv", "file:///test.txt")
         assert "file:///test.txt" in bridge.subscriptions["srv"]
+        request, result_type = session.send_request.await_args.args
+        assert request.method == "resources/subscribe"
+        assert request.params.uri == "file:///test.txt"
+        assert result_type is EmptyResult
 
     async def test_unsubscribe_resource(self) -> None:
         bridge = MCPResourcesBridge()
@@ -225,6 +232,9 @@ class TestMCPResourcesBridge:
         await bridge.subscribe_resource("srv", "file:///test.txt")
         await bridge.unsubscribe_resource("srv", "file:///test.txt")
         assert "file:///test.txt" not in bridge.subscriptions.get("srv", set())
+        request = session.send_request.await_args.args[0]
+        assert request.method == "resources/unsubscribe"
+        assert request.params.uri == "file:///test.txt"
 
     async def test_disconnected_raises(self) -> None:
         bridge = MCPResourcesBridge()
@@ -313,7 +323,8 @@ class TestRootsManager:
         snapshots: list[list[str]] = []
 
         class RecordingRootsSession:
-            async def send_roots_list_changed(self) -> None:
+            async def send_notification(self, notification: RootsListChangedNotification) -> None:
+                assert notification.method == "notifications/roots/list_changed"
                 snapshots.append(mgr.get_roots())
 
         session = RecordingRootsSession()
@@ -726,7 +737,7 @@ class TestMCPSamplingElicitationWiring:
             messages=[SamplingMessage(
                 role="user", content=TextContent(type="text", text="你好"),
             )],
-            maxTokens=256,
+            max_tokens=256,
         )
         result = await cb(None, params)
         assert isinstance(result, CreateMessageResult)
@@ -735,6 +746,7 @@ class TestMCPSamplingElicitationWiring:
         req = manager.handle_sampling.await_args.args[0]
         assert req.server_name == "srv1"
         assert req.messages[0]["content"] == "你好"
+        assert req.max_tokens == 256
 
     async def test_sampling_cannot_override_runtime_default_model(self) -> None:
         from praxis.models.mcp import MCPSamplingRequest
@@ -775,13 +787,14 @@ class TestMCPSamplingElicitationWiring:
 
         async def handler(req: MCPElicitationRequest) -> MCPElicitationResponse:
             assert req.server_name == "srv1"
+            assert req.request_schema["properties"]["name"] == {"type": "string"}
             return MCPElicitationResponse(accepted=True, data={"name": "Alice"})
 
         manager.set_handler(handler)
         cb = make_elicitation_callback("srv1", manager)
         params = ElicitRequestFormParams(
             message="请输入姓名",
-            requestedSchema={"type": "object", "properties": {"name": {"type": "string"}}},
+            requested_schema={"type": "object", "properties": {"name": {"type": "string"}}},
         )
         result = await cb(None, params)
         assert isinstance(result, ElicitResult)
@@ -797,7 +810,7 @@ class TestMCPSamplingElicitationWiring:
 
         manager = ElicitationManager()
         cb = make_elicitation_callback("srv1", manager)
-        params = ElicitRequestFormParams(message="确认？", requestedSchema={"type": "object"})
+        params = ElicitRequestFormParams(message="确认？", requested_schema={"type": "object"})
         result = await cb(None, params)
         assert isinstance(result, ElicitResult)
         assert result.action == "decline"
@@ -955,8 +968,9 @@ class TestMCPStdioIntegration:
         assert sampling_requests == ["Please sample a response"]
         assert elicitation_requests == ["Provide approval"]
 
-        with pytest.raises(ClosedResourceError):
+        with pytest.raises(MCPError) as closed:
             await session.list_tools()
+        assert closed.value.code == CONNECTION_CLOSED
 
     async def test_stdio_process_death_is_detected_and_restarted(self) -> None:
         from contextlib import AsyncExitStack
@@ -973,7 +987,7 @@ class TestMCPStdioIntegration:
         )
         async with AsyncExitStack() as stack:
             manager = await connect_mcp_servers(ToolRegistry(), [config], stack)
-            with pytest.raises(McpError):
+            with pytest.raises(MCPError):
                 await manager.tools_bridge.call_tool(
                     "stdio-restart",
                     "terminate_server",

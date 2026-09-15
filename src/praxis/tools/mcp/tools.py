@@ -54,7 +54,7 @@ class MCPToolsBridge:
             info = MCPToolInfo(
                 name=tool.name,
                 description=tool.description or "",
-                input_schema=tool.inputSchema if tool.inputSchema else {},
+                input_schema=tool.input_schema if tool.input_schema else {},
                 server_name=server_name,
             )
             tools.append(info)
@@ -64,7 +64,7 @@ class MCPToolsBridge:
             definition = ToolDefinition(
                 name=mcp_name,
                 description=f"[MCP:{server_name}] {tool.description or tool.name}",
-                parameters=tool.inputSchema if tool.inputSchema else {"type": "object", "properties": {}},
+                parameters=tool.input_schema or {"type": "object", "properties": {}},
                 metadata=ToolMetadata(
                     category="mcp",
                     readonly=False,

@@ -9,7 +9,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 
-import httpx
+import httpx2
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamable_http_client
@@ -68,7 +68,7 @@ async def create_http_transport(
     Yields:
         已初始化的 ClientSession。
     """
-    async with httpx.AsyncClient(
+    async with httpx2.AsyncClient(
         headers=config.headers or None,
         timeout=config.timeout,
     ) as http_client:

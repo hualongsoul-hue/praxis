@@ -155,6 +155,20 @@ class FakeRedis:
 
 
 class TestRedisBackendEdges:
+    @pytest.mark.parametrize(("stored", "expected"), [
+        (b"", b""),
+        (b"\x00\xff", b"\x00\xff"),
+        ("中文", b"\xe4\xb8\xad\xe6\x96\x87"),
+        (None, None),
+    ])
+    async def test_load_preserves_empty_binary_and_decoded_values(
+        self, stored: bytes | str | None, expected: bytes | None,
+    ) -> None:
+        client = FakeRedis()
+        client.get = AsyncMock(return_value=stored)
+        backend = RedisBackend(client)  # type: ignore[arg-type]
+        assert await backend.load("ns", "payload") == expected
+
     async def test_create_requires_url_and_pings_client(self) -> None:
         with pytest.raises(PersistenceError, match="redis_url"):
             await RedisBackend.create(None)

@@ -4,6 +4,7 @@
 """
 
 from mcp import ClientSession
+from mcp.types import RootsListChangedNotification
 
 from praxis.telemetry.logger import get_logger
 
@@ -40,7 +41,8 @@ class RootsManager:
     async def notify_roots_changed(self) -> None:
         """通知所有 MCP Server 工作目录已变更。"""
         for server_name, session in self.sessions.items():
-            await session.send_roots_list_changed()
+            # Roots is part of the initialize-based protocol used by Praxis.
+            await session.send_notification(RootsListChangedNotification())
             log.info("已通知 Roots 变更", server=server_name)
 
     def disconnect_server(self, server_name: str) -> None:

@@ -3,11 +3,18 @@
 import os
 import signal
 
-from mcp.server.fastmcp import Context, FastMCP
-from mcp.types import SamplingMessage, TextContent
+from mcp.server.mcpserver import Context, MCPServer
+from mcp.shared.message import ServerMessageMetadata
+from mcp.types import (
+    CreateMessageRequest,
+    CreateMessageRequestParams,
+    CreateMessageResult,
+    SamplingMessage,
+    TextContent,
+)
 from pydantic import BaseModel
 
-server = FastMCP("praxis-stdio-test", log_level="ERROR")
+server = MCPServer("praxis-stdio-test", log_level="ERROR")
 
 
 class Approval(BaseModel):
@@ -32,15 +39,17 @@ async def terminate_server() -> str:
 @server.tool()
 async def request_sampling(ctx: Context) -> str:
     """Ask the connected client to sample a response."""
-    result = await ctx.request_context.session.create_message(
-        messages=[
-            SamplingMessage(
-                role="user",
-                content=TextContent(type="text", text="Please sample a response"),
-            )
-        ],
-        max_tokens=32,
-        related_request_id=ctx.request_id,
+    # Exercise sampling on the negotiated handshake protocol, not the
+    # deprecated convenience API for the 2026 discovery protocol.
+    result = await ctx.session.send_request(
+        CreateMessageRequest(params=CreateMessageRequestParams(
+            messages=[SamplingMessage(
+                role="user", content=TextContent(type="text", text="Please sample a response"),
+            )],
+            max_tokens=32,
+        )),
+        CreateMessageResult,
+        metadata=ServerMessageMetadata(related_request_id=ctx.request_id),
     )
     content = result.content
     return content.text if isinstance(content, TextContent) else "unsupported content"
@@ -68,4 +77,4 @@ def greet(name: str) -> str:
 
 
 if __name__ == "__main__":
-    server.run("stdio")
+    server.run(transport="stdio")
