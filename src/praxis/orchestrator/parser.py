@@ -22,7 +22,7 @@ HANDOFF_FUNCTION_PREFIX = "handoff_to_"
 class ParsedOutput:
     """解析后的 LLM 输出。"""
 
-    __slots__ = ("content", "handoff_target", "is_final", "tool_calls")
+    __slots__ = ("content", "handoff_target", "is_final", "refusal", "tool_calls")
 
     def __init__(
         self,
@@ -30,11 +30,13 @@ class ParsedOutput:
         tool_calls: list[ToolCall],
         is_final: bool,
         handoff_target: str | None,
+        refusal: str | None = None,
     ) -> None:
         self.content = content
         self.tool_calls = tool_calls
         self.is_final = is_final
         self.handoff_target = handoff_target
+        self.refusal = refusal
 
 
 class StreamDelta(BaseModel):
@@ -139,6 +141,13 @@ class StreamAccumulator:
 class OutputParser:
     """LLM 输出解析器。"""
 
+    @staticmethod
+    def refusal_suffix(response: ModelResponse) -> str:
+        """Project refusal after content, without repeating identical provider fields."""
+        if not response.refusal or response.refusal == response.content:
+            return ""
+        return ("\n" if response.content else "") + response.refusal
+
     def parse(self, response: ModelResponse) -> ParsedOutput:
         """解析 LLM 响应。
 
@@ -148,7 +157,7 @@ class OutputParser:
         Returns:
             解析结果。
         """
-        content = response.content or ""
+        content = (response.content or "") + self.refusal_suffix(response)
         tool_calls = response.tool_calls or []
 
         is_final = len(tool_calls) == 0
@@ -169,6 +178,7 @@ class OutputParser:
             tool_calls=tool_calls,
             is_final=is_final,
             handoff_target=handoff_target,
+            refusal=response.refusal,
         )
 
     @staticmethod

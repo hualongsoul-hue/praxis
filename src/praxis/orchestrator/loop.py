@@ -377,7 +377,7 @@ class OrchestrationLoop:
         self, parsed: ParsedOutput, finish_reason: str | None,
     ) -> TerminationReason | None:
         """在执行工具之前检查自然终止、安全拒绝和提供商输出截断。"""
-        safety_refusal = finish_reason == "content_filter"
+        safety_refusal = bool(parsed.refusal) or finish_reason == "content_filter"
         return self.termination.evaluate(
             self.state,
             safety_refusal=safety_refusal,
@@ -392,8 +392,12 @@ class OrchestrationLoop:
         reason: TerminationReason,
     ) -> AgentResponse:
         """处理最终响应：输出护栏、记忆记录、历史更新。"""
-        # 截断正文仍需通过与自然结束正文相同的输出护栏。
-        if reason in (TerminationReason.NATURAL, TerminationReason.TOKEN_EXHAUSTED) and parsed.content:
+        # 截断及拒绝正文仍需通过与自然结束正文相同的输出护栏。
+        if reason in (
+            TerminationReason.NATURAL,
+            TerminationReason.TOKEN_EXHAUSTED,
+            TerminationReason.SAFETY_REFUSAL,
+        ) and parsed.content:
             out_verdict = await self.guardrails.check_output(parsed.content)
             if out_verdict.tripwire or out_verdict.verdict == VerdictType.BLOCK:
                 return self.make_response(
@@ -675,6 +679,14 @@ class OrchestrationLoop:
                     await close_result
 
         response = accumulator.build_response()
+        refusal_suffix = self.parser.refusal_suffix(response)
+        if refusal_suffix:
+            self.emitter.emit(
+                "content_delta",
+                turn=self.state.current_turn,
+                data={"text": refusal_suffix},
+            )
+            yield None
         self.emit_model_response(response)
         yield response
 

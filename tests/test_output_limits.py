@@ -60,6 +60,7 @@ class ScriptedOutputGateway:
         # provider can announce truncation only after sending partial output.
         yield ModelResponseChunk(
             id=response.id, delta_content=response.content, model=response.model,
+            delta_reasoning_content=response.reasoning_content,
             delta_tool_calls=[ToolCallDelta(
                 index=index, id=call.id,
                 function=FunctionCallDelta(
@@ -67,6 +68,10 @@ class ScriptedOutputGateway:
                 ),
             ) for index, call in enumerate(response.tool_calls or [])],
         )
+        if response.refusal:
+            midpoint = len(response.refusal) // 2
+            yield ModelResponseChunk(id=response.id, delta_refusal=response.refusal[:midpoint])
+            yield ModelResponseChunk(id=response.id, delta_refusal=response.refusal[midpoint:])
         yield ModelResponseChunk(
             id=response.id, finish_reason=response.finish_reason, usage=response.usage,
         )
