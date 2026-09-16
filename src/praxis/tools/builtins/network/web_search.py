@@ -4,9 +4,11 @@
 当前实现使用 DuckDuckGo HTML 搜索作为无 API Key 的回退方案。
 """
 
+from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urlencode
 
+from praxis.exceptions import ToolExecutionError
 from praxis.models.tools import ToolDefinition, ToolMetadata
 from praxis.network import TransportFactory
 from praxis.tools.policy import ToolPolicy
@@ -37,6 +39,42 @@ DEFINITION = ToolDefinition(
 )
 
 
+class SearchPageParser(HTMLParser):
+    """Parse each anchor independently; unknown/challenge pages fail closed."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.results: list[tuple[str, str]] = []
+        self.href: str | None = None
+        self.title: list[str] = []
+        self.empty = False
+        self.challenge = False
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        classes = (attributes.get("class") or "").split()
+        if "no-results" in classes or "result--no-result" in classes:
+            self.empty = True
+        identity = attributes.get("id") or ""
+        if identity in {"challenge-form", "img-form"} or "anomaly-modal" in classes:
+            self.challenge = True
+        if tag == "a":
+            self.href = attributes.get("href") if "result__a" in classes else None
+            self.title = []
+
+    def handle_data(self, data: str) -> None:
+        if self.href is not None:
+            self.title.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a":
+            title = "".join(self.title).strip()
+            if self.href and title:
+                self.results.append((title, self.href))
+            self.href = None
+            self.title = []
+
+
 def create_handler(
     sandbox: ToolPolicy,
     transport_factory: TransportFactory | None = None,
@@ -54,35 +92,21 @@ def create_handler(
             timeout=15.0,
         )
         if response.status_code != 200:
-            return f"搜索请求失败: HTTP {response.status_code}"
+            raise ToolExecutionError(f"搜索请求失败: HTTP {response.status_code}")
+
+        if response.truncated:
+            raise ToolExecutionError("搜索结果页超过响应字节上限")
 
         text = response.body.decode("utf-8", errors="replace")
-        results: list[str] = []
-        start = 0
-        remaining_results = max_results
-        while remaining_results > 0:
-            remaining_results -= 1
-            idx = text.find('class="result__a"', start)
-            if idx == -1:
-                break
-            href_start = text.rfind('href="', max(0, idx - 200), idx)
-            if href_start == -1:
-                start = idx + 1
-                continue
-            href_start += 6
-            href_end = text.find('"', href_start)
-            url = text[href_start:href_end]
-
-            title_start = text.find(">", idx)
-            title_end = text.find("</a>", title_start)
-            title = text[title_start + 1:title_end].strip()
-            title = title.replace("<b>", "").replace("</b>", "")
-
-            results.append(f"- {title}\n  {url}")
-            start = title_end
-
-        if not results:
+        parser = SearchPageParser()
+        parser.feed(text)
+        parser.close()
+        if parser.challenge:
+            raise ToolExecutionError("搜索提供方要求验证")
+        if not parser.results and parser.empty:
             return f"未找到 '{query}' 的搜索结果"
-        return "\n\n".join(results)
+        if not parser.results:
+            raise ToolExecutionError("无法识别搜索结果页")
+        return "\n\n".join(f"- {title}\n  {url}" for title, url in parser.results[:max_results])
 
     return handle

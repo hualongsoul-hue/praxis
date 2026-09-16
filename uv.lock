@@ -1732,6 +1732,7 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "ruff" },
+    { name = "sse-starlette" },
 ]
 
 [package.metadata]
@@ -1764,6 +1765,7 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=1.4.0,<2" },
     { name = "pytest-cov", specifier = ">=7.1.0,<8" },
     { name = "ruff", specifier = ">=0.16.7,<0.17" },
+    { name = "sse-starlette", specifier = "==3.4.11" },
 ]
 
 [[package]]

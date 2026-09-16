@@ -47,6 +47,7 @@ dev = [
     "pip>=26.2.1,<27",
     "pyright>=1.1.414,<2",
     "ruff>=0.16.7,<0.17",
+    "sse-starlette==3.4.11",
 ]
 
 [project.scripts]

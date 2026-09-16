@@ -330,9 +330,10 @@ class TestBuiltinToolEdges:
         assert "Result" in result
         assert "https://example.com" in result
 
-        assert "HTTP 503" in await handler_for(503, "")({"query": "praxis"})
+        with pytest.raises(Exception, match="HTTP 503"):
+            await handler_for(503, "")({"query": "praxis"})
 
-        assert "未找到" in await handler_for(200, "none")({"query": "praxis"})
+        assert "未找到" in await handler_for(200, '<div class="no-results">No results</div>')({"query": "praxis"})
 
     async def test_autonomy_handlers_and_sleep_validation(self) -> None:
         store = MagicMock()

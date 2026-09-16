@@ -8,6 +8,7 @@ import pytest
 import uvicorn
 from mcp.shared.exceptions import MCPError
 from mcp.types import CONNECTION_CLOSED, CreateMessageResult, TextContent
+from sse_starlette.sse import AppStatus
 
 from praxis.models.mcp import MCPElicitationResponse, MCPServerConfig, MCPTransportType
 from praxis.tools.mcp.elicitation import ElicitationManager
@@ -23,8 +24,11 @@ pytestmark = pytest.mark.e2e
 
 
 @pytest.mark.parametrize("query_url", [False, True])
-async def test_http_tools_resources_prompts_and_callbacks_preserve_session_lifecycle(caplog, query_url) -> None:
+async def test_http_tools_resources_prompts_and_callbacks_preserve_session_lifecycle(caplog, query_url, monkeypatch) -> None:
     """Catch incompatible HTTP clients, lost headers, and broken v2 field mapping."""
+    # Each parameter starts a distinct server. sse-starlette's Uvicorn watcher
+    # leaves this process-global shutdown flag set after the preceding server exits.
+    monkeypatch.setattr(AppStatus, "should_exit", False)
     application = fixture_server.streamable_http_app()
     caplog.set_level(logging.INFO)
     received_headers: list[dict[bytes, bytes]] = []
