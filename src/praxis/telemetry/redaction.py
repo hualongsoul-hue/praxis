@@ -35,8 +35,10 @@ class RedactionPolicy:
             )
         )
 
-    def redact_text(self, value: str, *, max_length: int | None = None) -> str:
-        """Remove credential shapes, URL user-info/query secrets, and bound length."""
+    def redact_text(
+        self, value: str, *, max_length: int | None = None, truncate: bool = True,
+    ) -> str:
+        """Redact credentials; business bodies can explicitly retain their full length."""
         redacted = re.sub(
             r"(?i)\b(?:bearer|basic)\s+[a-z0-9._~+\-/=]+",
             self.redacted_value,
@@ -54,7 +56,7 @@ class RedactionPolicy:
         )
         redacted = self.redact_urls(redacted)
         limit = self.max_string_length if max_length is None else max_length
-        if len(redacted) > limit:
+        if truncate and len(redacted) > limit:
             redacted = redacted[:limit] + self.truncated_suffix
         return redacted
 

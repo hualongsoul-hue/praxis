@@ -359,13 +359,13 @@ class ToolCoordinator:
 
     @staticmethod
     def sanitize_tool_result(result: ToolResult) -> ToolResult:
-        """Create the bounded redacted projection used by model history and checkpoints."""
+        """Preserve complete redacted bodies; bound only diagnostic metadata and errors."""
         metadata = redact_observability_value(result.metadata)
         return result.model_copy(
             update={
                 "content": DEFAULT_REDACTION_POLICY.redact_text(
                     result.content,
-                    max_length=65_536,
+                    truncate=False,
                 ),
                 "error": (
                     DEFAULT_REDACTION_POLICY.redact_text(

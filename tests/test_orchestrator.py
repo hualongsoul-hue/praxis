@@ -542,7 +542,7 @@ class TestToolCoordination:
         assert "tool_call_start" in types
         assert "tool_call_end" in types
 
-    async def test_tool_history_and_events_are_bounded_and_redacted(self) -> None:
+    async def test_tool_history_is_complete_and_events_are_bounded_and_redacted(self) -> None:
         secret = "sk-" + "Z" * 32
         result = ToolResult(
             tool_call_id="tc-secret",
@@ -561,7 +561,7 @@ class TestToolCoordination:
 
         assert outcome.result is not None
         assert secret not in outcome.result.model_dump_json()
-        assert len(outcome.result.content) < 66_000
+        assert outcome.result.content == "token=[REDACTED] " + "x" * 70_000
         serialized_events = "".join(event.model_dump_json() for event in emitter.events)
         assert secret not in serialized_events
         assert "arguments\"" not in serialized_events
