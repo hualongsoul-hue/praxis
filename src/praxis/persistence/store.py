@@ -104,13 +104,22 @@ class PersistenceStore:
         async with self.run_storage_operation():
             return await self.backend.save_if_absent(namespace, key, raw)
 
-    async def load(self, namespace: str, key: str) -> Any | None:
-        """从指定命名空间加载数据，不存在时返回 None。"""
+    async def load_with_presence(
+        self,
+        namespace: str,
+        key: str,
+    ) -> tuple[bool, Any | None]:
+        """加载数据并区分键不存在与已存储的 JSON null。"""
         async with self.run_storage_operation():
             raw = await self.backend.load(namespace, key)
         if raw is None:
-            return None
-        return deserialize(raw)
+            return False, None
+        return True, deserialize(raw)
+
+    async def load(self, namespace: str, key: str) -> Any | None:
+        """从指定命名空间加载数据，不存在时返回 None。"""
+        result = await self.load_with_presence(namespace, key)
+        return result[1]
 
     async def delete(self, namespace: str, key: str) -> None:
         """删除指定命名空间中的数据。"""

@@ -45,6 +45,17 @@ class TestSqliteBackend:
         result = await store.load("test_ns", "nonexistent")
         assert result is None
 
+    async def test_load_with_presence_distinguishes_null_and_absence(
+        self,
+        store: PersistenceStore,
+    ) -> None:
+        await store.save("test_ns", "stored-null", None)
+
+        assert await store.load_with_presence("test_ns", "stored-null") == (True, None)
+        assert await store.load_with_presence("test_ns", "missing") == (False, None)
+        assert await store.load("test_ns", "stored-null") is None
+        assert await store.load("test_ns", "missing") is None
+
     async def test_update(self, store: PersistenceStore) -> None:
         await store.save("test_ns", "key1", {"v": 1})
         await store.save("test_ns", "key1", {"v": 2})
@@ -103,6 +114,17 @@ class TestFilesystemBackend:
         await store.save("test_ns", "key1", {"data": "hello"})
         result = await store.load("test_ns", "key1")
         assert result == {"data": "hello"}
+
+    async def test_load_with_presence_distinguishes_null_and_absence(
+        self,
+        store: PersistenceStore,
+    ) -> None:
+        await store.save("test_ns", "stored-null", None)
+
+        assert await store.load_with_presence("test_ns", "stored-null") == (True, None)
+        assert await store.load_with_presence("test_ns", "missing") == (False, None)
+        assert await store.load("test_ns", "stored-null") is None
+        assert await store.load("test_ns", "missing") is None
 
     async def test_save_if_absent_is_atomic(self, store: PersistenceStore) -> None:
         outcomes = await asyncio.gather(*(

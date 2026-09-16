@@ -8,7 +8,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from praxis.config.schemas import (
     ContextConfig,
@@ -20,7 +20,6 @@ from praxis.config.schemas import (
 )
 from praxis.exceptions import (
     CheckpointCorruptionError,
-    PersistenceError,
     UnsupportedInputModalityError,
 )
 from praxis.guardrails.engine import GuardrailEngine
@@ -598,9 +597,12 @@ class TestCheckpointManager:
         store: PersistenceStore,
     ) -> None:
         mgr = CheckpointManager(store)
-        await store.close()
+        backend = store.backend
+        assert isinstance(backend, SqliteBackend)
+        async with backend.engine.begin() as connection:
+            await connection.exec_driver_sql("DROP TABLE kv_store")
 
-        with pytest.raises(PersistenceError, match="已关闭"):
+        with pytest.raises(OperationalError, match="no such table"):
             await mgr.load_latest("storage-failure")
 
     async def test_extract_snapshot(self, store: PersistenceStore) -> None:

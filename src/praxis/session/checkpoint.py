@@ -33,13 +33,6 @@ class CheckpointManager:
     def __init__(self, store: PersistenceStore) -> None:
         self.store = store
 
-    async def load_stored_value(self, key: str) -> tuple[bool, object | None]:
-        """加载检查点命名空间值，并保留键是否存在的信息。"""
-        keys = await self.store.list_keys(CHECKPOINT_NAMESPACE, prefix=key)
-        if key not in keys:
-            return False, None
-        return True, await self.store.load(CHECKPOINT_NAMESPACE, key)
-
     async def save_checkpoint(
         self,
         metadata: SessionMetadata,
@@ -130,14 +123,17 @@ class CheckpointManager:
             检查点对象，不存在时返回 None。
         """
         key = f"{session_id}:{checkpoint_id}"
-        exists, data = await self.load_stored_value(key)
+        exists, data = await self.store.load_with_presence(CHECKPOINT_NAMESPACE, key)
         if not exists:
             return None
         return Checkpoint.from_storage(cast(object, data))
 
     async def load_latest(self, session_id: str) -> Checkpoint | None:
         """加载最新检查点。"""
-        exists, latest_id = await self.load_stored_value(f"{session_id}:latest")
+        exists, latest_id = await self.store.load_with_presence(
+            CHECKPOINT_NAMESPACE,
+            f"{session_id}:latest",
+        )
         if not exists:
             return None
         if not isinstance(latest_id, str) or not latest_id:
@@ -189,7 +185,10 @@ class CheckpointManager:
     ) -> None:
         """删除检查点。"""
         latest_key = f"{session_id}:latest"
-        latest_exists, latest_id = await self.load_stored_value(latest_key)
+        latest_exists, latest_id = await self.store.load_with_presence(
+            CHECKPOINT_NAMESPACE,
+            latest_key,
+        )
         if latest_exists:
             if not isinstance(latest_id, str) or not latest_id:
                 raise CheckpointCorruptionError("最新检查点引用损坏")

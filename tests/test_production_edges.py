@@ -34,10 +34,13 @@ from praxis.models.responses import (
     ToolCallDelta,
     Usage,
 )
+from praxis.models.session import SessionMetadata
 from praxis.models.verification import VerificationResult, VerificationStatus, VerificationType
 from praxis.orchestrator.parser import OutputParser, StreamAccumulator
 from praxis.persistence.backends.redis import RedisBackend
+from praxis.persistence.store import PersistenceStore
 from praxis.recovery.classifier import classify_by_type_name
+from praxis.session.checkpoint import CheckpointManager
 from praxis.telemetry.tracing import configure_tracing, get_tracer, otlp_processor, start_span
 from praxis.tools.builtins.autonomy.update_notes import create_handler as notes_handler
 from praxis.tools.builtins.autonomy.update_plan import create_handler as plan_handler
@@ -113,6 +116,7 @@ class TestStreamAccumulatorEdges:
 class FakeRedis:
     def __init__(self) -> None:
         self.values: dict[str, bytes] = {}
+        self.get_keys: list[str] = []
         self.scan_keys: list[bytes | str] = []
         self.scan_patterns: list[str] = []
         self.deleted_batches: list[tuple[bytes | str, ...]] = []
@@ -131,6 +135,7 @@ class FakeRedis:
         return True
 
     async def get(self, key: str) -> bytes | None:
+        self.get_keys.append(key)
         return self.values.get(key)
 
     async def delete(self, *keys: bytes | str) -> int:
@@ -207,6 +212,32 @@ class TestRedisBackendEdges:
         assert await backend.clear_namespace("ns") == 501
         assert [len(batch) for batch in client.deleted_batches[-2:]] == [500, 1]
         assert not any(key.startswith("praxis:ns:") for key in client.values)
+
+    async def test_checkpoint_lookup_uses_exact_keys_with_pattern_characters(self) -> None:
+        client = FakeRedis()
+        store = PersistenceStore(
+            RedisBackend(client),  # type: ignore[arg-type]
+            own_backend=False,
+        )
+        manager = CheckpointManager(store)
+        session_id = r"redis[session]*?\identity"
+        checkpoint_id = await manager.save_checkpoint(
+            SessionMetadata(session_id=session_id),
+            {"messages": [{"role": "user", "content": "history"}]},
+            {},
+            {},
+        )
+        client.scan_keys = [key.encode() for key in client.values]
+
+        checkpoint = await manager.load_latest(session_id)
+
+        assert checkpoint is not None
+        assert checkpoint.checkpoint_id == checkpoint_id
+        assert client.get_keys == [
+            f"praxis:checkpoints:{session_id}:latest",
+            f"praxis:checkpoints:{session_id}:{checkpoint_id}",
+        ]
+        assert client.scan_patterns == []
 
 
 class TestVisualVerifierEdges:
