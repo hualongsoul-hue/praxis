@@ -8,6 +8,7 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from praxis.config.schemas import (
     ContextConfig,
@@ -17,7 +18,11 @@ from praxis.config.schemas import (
     PersistenceConfig,
     SessionConfig,
 )
-from praxis.exceptions import UnsupportedInputModalityError
+from praxis.exceptions import (
+    CheckpointCorruptionError,
+    PersistenceError,
+    UnsupportedInputModalityError,
+)
 from praxis.guardrails.engine import GuardrailEngine
 from praxis.guardrails.permissions import PermissionManager
 from praxis.guardrails.rules import RuleEngine
@@ -32,6 +37,7 @@ from praxis.models.session import (
 )
 from praxis.models.tools import ToolExecutionRecord, ToolExecutionState
 from praxis.orchestrator.strategy import PlanStep
+from praxis.persistence.backends.sqlite import SqliteBackend
 from praxis.persistence.store import PersistenceStore, create_store
 from praxis.session.checkpoint import CheckpointManager
 from praxis.session.continuation import ContinuationManager
@@ -497,6 +503,106 @@ class TestCheckpointManager:
         loaded = await mgr.load_checkpoint("sess-del", cp_id)
         assert loaded is None
 
+    async def test_delete_latest_removes_pointer_without_rollback(
+        self,
+        store: PersistenceStore,
+    ) -> None:
+        mgr = CheckpointManager(store)
+        metadata = SessionMetadata(session_id="delete-latest")
+        old_id = await mgr.save_checkpoint(metadata, {}, {}, {}, description="old")
+        latest_id = await mgr.save_checkpoint(metadata, {}, {}, {}, description="latest")
+
+        await mgr.delete_checkpoint("delete-latest", latest_id)
+
+        assert await mgr.load_latest("delete-latest") is None
+        assert await mgr.load_checkpoint("delete-latest", old_id) is not None
+        assert [item.checkpoint_id for item in await mgr.list_checkpoints("delete-latest")] == [
+            old_id,
+        ]
+
+    async def test_delete_old_checkpoint_preserves_latest(
+        self,
+        store: PersistenceStore,
+    ) -> None:
+        mgr = CheckpointManager(store)
+        metadata = SessionMetadata(session_id="delete-old")
+        old_id = await mgr.save_checkpoint(metadata, {}, {}, {}, description="old")
+        latest_id = await mgr.save_checkpoint(metadata, {}, {}, {}, description="latest")
+
+        await mgr.delete_checkpoint("delete-old", old_id)
+
+        latest = await mgr.load_latest("delete-old")
+        assert latest is not None
+        assert latest.checkpoint_id == latest_id
+        assert await mgr.load_checkpoint("delete-old", old_id) is None
+
+    async def test_delete_latest_propagates_body_failure_after_removing_pointer(
+        self,
+        store: PersistenceStore,
+    ) -> None:
+        mgr = CheckpointManager(store)
+        metadata = SessionMetadata(session_id="delete-failure")
+        checkpoint_id = await mgr.save_checkpoint(metadata, {}, {}, {})
+        backend = store.backend
+        assert isinstance(backend, SqliteBackend)
+        async with backend.engine.begin() as connection:
+            await connection.exec_driver_sql(f"""
+                CREATE TRIGGER fail_checkpoint_body_delete
+                BEFORE DELETE ON kv_store
+                WHEN OLD.namespace = 'checkpoints'
+                  AND OLD.key = 'delete-failure:{checkpoint_id}'
+                BEGIN
+                    SELECT RAISE(FAIL, 'synthetic checkpoint delete failure');
+                END
+            """)
+
+        with pytest.raises(IntegrityError, match="synthetic checkpoint delete failure"):
+            await mgr.delete_checkpoint("delete-failure", checkpoint_id)
+
+        assert await mgr.load_latest("delete-failure") is None
+        assert await mgr.load_checkpoint("delete-failure", checkpoint_id) is not None
+
+    async def test_failed_first_latest_write_leaves_safe_orphan_body(
+        self,
+        store: PersistenceStore,
+    ) -> None:
+        mgr = CheckpointManager(store)
+        backend = store.backend
+        assert isinstance(backend, SqliteBackend)
+        async with backend.engine.begin() as connection:
+            await connection.exec_driver_sql("""
+                CREATE TRIGGER fail_first_latest_write
+                BEFORE INSERT ON kv_store
+                WHEN NEW.namespace = 'checkpoints'
+                  AND NEW.key = 'save-failure:latest'
+                BEGIN
+                    SELECT RAISE(FAIL, 'synthetic latest write failure');
+                END
+            """)
+
+        with pytest.raises(IntegrityError, match="synthetic latest write failure"):
+            await mgr.save_checkpoint(
+                SessionMetadata(session_id="save-failure"),
+                {},
+                {},
+                {},
+            )
+
+        keys = await store.list_keys("checkpoints", prefix="save-failure:")
+        assert len(keys) == 1
+        assert not keys[0].endswith(":latest")
+        assert await mgr.load_latest("save-failure") is None
+
+    async def test_storage_failure_propagates_from_latest_lookup(
+        self,
+        store: PersistenceStore,
+    ) -> None:
+        mgr = CheckpointManager(store)
+        await store.close()
+
+        with pytest.raises(PersistenceError, match="已关闭"):
+            await mgr.load_latest("storage-failure")
+
     async def test_extract_snapshot(self, store: PersistenceStore) -> None:
         mgr = CheckpointManager(store)
         metadata = SessionMetadata(session_id="sess-snap", total_turns=5)
@@ -553,6 +659,82 @@ class TestCheckpointManager:
         result = await mgr.load_latest("no-exist")
         assert result is None
 
+    @pytest.mark.parametrize(
+        "latest_value",
+        [None, ["private-marker"], {"unexpected": "private-marker"}],
+    )
+    async def test_load_latest_rejects_malformed_reference(
+        self,
+        store: PersistenceStore,
+        latest_value: object,
+    ) -> None:
+        mgr = CheckpointManager(store)
+        await store.save("checkpoints", "malformed-latest:latest", latest_value)
+
+        with pytest.raises(CheckpointCorruptionError) as exc_info:
+            await mgr.load_latest("malformed-latest")
+
+        assert "private-marker" not in str(exc_info.value)
+
+    async def test_load_latest_rejects_missing_referenced_body(
+        self,
+        store: PersistenceStore,
+    ) -> None:
+        mgr = CheckpointManager(store)
+        await store.save(
+            "checkpoints",
+            "dangling-latest:latest",
+            "private-marker-missing",
+        )
+
+        with pytest.raises(CheckpointCorruptionError) as exc_info:
+            await mgr.load_latest("dangling-latest")
+
+        assert "private-marker" not in str(exc_info.value)
+
+    async def test_load_latest_rejects_nonobject_referenced_body(
+        self,
+        store: PersistenceStore,
+    ) -> None:
+        mgr = CheckpointManager(store)
+        await store.save(
+            "checkpoints",
+            "nonobject-latest:latest",
+            "checkpoint-id",
+        )
+        await store.save(
+            "checkpoints",
+            "nonobject-latest:checkpoint-id",
+            ["private-marker"],
+        )
+
+        with pytest.raises(CheckpointCorruptionError) as exc_info:
+            await mgr.load_latest("nonobject-latest")
+
+        assert "private-marker" not in str(exc_info.value)
+
+    @pytest.mark.parametrize(
+        ("checkpoint_id", "body"),
+        [("null-body", None), ("list-body", ["private-marker"])],
+    )
+    async def test_load_checkpoint_rejects_nonobject_body(
+        self,
+        store: PersistenceStore,
+        checkpoint_id: str,
+        body: object,
+    ) -> None:
+        mgr = CheckpointManager(store)
+        await store.save(
+            "checkpoints",
+            f"nonobject:{checkpoint_id}",
+            body,
+        )
+
+        with pytest.raises(CheckpointCorruptionError) as exc_info:
+            await mgr.load_checkpoint("nonobject", checkpoint_id)
+
+        assert "private-marker" not in str(exc_info.value)
+
 
 # ── Task 13.2: 会话恢复 ─────────────────────────────────────────────────────
 
@@ -599,6 +781,28 @@ class TestSessionResumer:
         resumer = SessionResumer(factory, mgr)
         session = await resumer.resume_session("nonexistent", guardrails, gateway=mock_gateway)
         assert session is None
+
+    async def test_resume_propagates_checkpoint_corruption_before_factory_path(
+        self,
+        store: PersistenceStore,
+        factory: SessionFactory,
+        guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
+    ) -> None:
+        await store.save(
+            "checkpoints",
+            "corrupt-resume:latest",
+            {"unexpected": "private-marker"},
+        )
+        mock_gateway.capabilities.reset_mock()
+
+        with pytest.raises(CheckpointCorruptionError):
+            await SessionResumer(
+                factory,
+                CheckpointManager(store),
+            ).resume_session("corrupt-resume", guardrails, gateway=mock_gateway)
+
+        mock_gateway.capabilities.assert_not_called()
 
     async def test_validate_integrity(
         self,

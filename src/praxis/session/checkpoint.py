@@ -8,6 +8,7 @@
 import time
 from typing import Any, cast
 
+from praxis.exceptions import CheckpointCorruptionError
 from praxis.models.persistence import Checkpoint
 from praxis.models.session import (
     CheckpointInfo,
@@ -31,6 +32,13 @@ class CheckpointManager:
 
     def __init__(self, store: PersistenceStore) -> None:
         self.store = store
+
+    async def load_stored_value(self, key: str) -> tuple[bool, object | None]:
+        """加载检查点命名空间值，并保留键是否存在的信息。"""
+        keys = await self.store.list_keys(CHECKPOINT_NAMESPACE, prefix=key)
+        if key not in keys:
+            return False, None
+        return True, await self.store.load(CHECKPOINT_NAMESPACE, key)
 
     async def save_checkpoint(
         self,
@@ -122,20 +130,22 @@ class CheckpointManager:
             检查点对象，不存在时返回 None。
         """
         key = f"{session_id}:{checkpoint_id}"
-        data = await self.store.load(CHECKPOINT_NAMESPACE, key)
-        if data is None or not isinstance(data, dict):
+        exists, data = await self.load_stored_value(key)
+        if not exists:
             return None
         return Checkpoint.from_storage(cast(object, data))
 
     async def load_latest(self, session_id: str) -> Checkpoint | None:
         """加载最新检查点。"""
-        latest_id = await self.store.load(
-            CHECKPOINT_NAMESPACE,
-            f"{session_id}:latest",
-        )
-        if latest_id is None or not isinstance(latest_id, str):
+        exists, latest_id = await self.load_stored_value(f"{session_id}:latest")
+        if not exists:
             return None
-        return await self.load_checkpoint(session_id, latest_id)
+        if not isinstance(latest_id, str) or not latest_id:
+            raise CheckpointCorruptionError("最新检查点引用损坏")
+        checkpoint = await self.load_checkpoint(session_id, latest_id)
+        if checkpoint is None:
+            raise CheckpointCorruptionError("最新检查点正文缺失")
+        return checkpoint
 
     async def list_checkpoints(self, session_id: str) -> list[CheckpointInfo]:
         """列出会话的所有检查点。
@@ -178,6 +188,13 @@ class CheckpointManager:
         checkpoint_id: str,
     ) -> None:
         """删除检查点。"""
+        latest_key = f"{session_id}:latest"
+        latest_exists, latest_id = await self.load_stored_value(latest_key)
+        if latest_exists:
+            if not isinstance(latest_id, str) or not latest_id:
+                raise CheckpointCorruptionError("最新检查点引用损坏")
+            if latest_id == checkpoint_id:
+                await self.store.delete(CHECKPOINT_NAMESPACE, latest_key)
         key = f"{session_id}:{checkpoint_id}"
         await self.store.delete(CHECKPOINT_NAMESPACE, key)
 
