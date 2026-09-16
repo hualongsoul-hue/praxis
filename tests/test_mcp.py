@@ -987,7 +987,7 @@ class TestMCPStdioIntegration:
         )
         async with AsyncExitStack() as stack:
             manager = await connect_mcp_servers(ToolRegistry(), [config], stack)
-            with pytest.raises(MCPError):
+            with pytest.raises(RuntimeError, match="MCP transport failed"):
                 await manager.tools_bridge.call_tool(
                     "stdio-restart",
                     "terminate_server",

@@ -114,7 +114,20 @@ class MCPToolsBridge:
         if session is None:
             raise RuntimeError(f"MCP Server 未连接: {server_name}")
 
-        result = await session.call_tool(tool_name, arguments)
+        result = None
+        try:
+            result = await session.call_tool(tool_name, arguments)
+        except Exception:
+            # Transport diagnostics may include authentication headers or URLs.
+            # CancelledError is deliberately not caught.
+            pass
+        if result is None:
+            # Raise outside the handler so even __context__ cannot retain secrets.
+            raise RuntimeError("MCP transport failed")
+        if result.is_error:
+            # Error payloads may contain server credentials or private diagnostics.
+            # Raise a non-transient failure; never retry an ambiguous remote action.
+            raise RuntimeError("MCP server reported tool failure")
 
         # 提取文本内容
         texts: list[str] = []

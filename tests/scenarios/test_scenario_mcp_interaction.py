@@ -6,7 +6,7 @@ Server 需要 LLM 分析（Sampling） → 用户确认（Elicitation）。
 
 from unittest.mock import AsyncMock, MagicMock
 
-from mcp.types import ListToolsResult, TextContent, Tool
+from mcp.types import CallToolResult, ListToolsResult, TextContent, Tool
 
 from praxis.gateway.router import GatewayRouter
 from praxis.models.mcp import (
@@ -39,10 +39,9 @@ def make_mock_session() -> MagicMock:
     tools_result = ListToolsResult(tools=[mock_tool])
     session.list_tools = AsyncMock(return_value=tools_result)
 
-    call_result = MagicMock()
-    call_result.content = [
+    call_result = CallToolResult(content=[
         TextContent(type="text", text="航班已预订: NYC → BCN, 确认号 FL-2025")
-    ]
+    ])
     session.call_tool = AsyncMock(return_value=call_result)
 
     return session

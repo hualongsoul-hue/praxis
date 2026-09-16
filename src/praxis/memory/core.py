@@ -208,7 +208,8 @@ class CognitiveMemory:
     def append_message(self, message: WorkingMemoryMessage) -> None:
         """同步追加消息；通知后台 Worker，不阻塞。"""
         self.working_memory.append(message)
-        self.worker.notify(message)
+        if self.config.background_enabled:
+            self.worker.notify(message)
         emit_metric("memory_message_appended", 1.0, {}, "counter")
 
     def get_message_history(self, limit: int | None = None) -> list[WorkingMemoryMessage]:
@@ -395,7 +396,9 @@ class CognitiveMemory:
         )
         # 恢复尚未消费的待提取消息（旧检查点可能仅有 pending_count，缺省为空）
         pending_data = snapshot.get("pending")
-        if isinstance(pending_data, list):
+        if not self.config.background_enabled:
+            self.worker.pending.clear()
+        elif isinstance(pending_data, list):
             self.worker.pending = [
                 WorkingMemoryMessage.model_validate(item)
                 for item in cast(list[object], pending_data)

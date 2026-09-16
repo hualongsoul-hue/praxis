@@ -930,6 +930,29 @@ class TestBackgroundWorker:
 
 
 class TestCognitiveMemory:
+    @pytest.mark.parametrize("enabled", [False, True])
+    async def test_disabled_extraction_never_accumulates_or_restores_backlog(
+        self, store, mock_gateway, enabled,
+    ):
+        config = MemoryConfig(background_enabled=enabled, dream_enabled=False)
+        memory = CognitiveMemory(store, mock_gateway, session_id="bounded", config=config)
+        messages = [WorkingMemoryMessage(role="user", content=str(i)) for i in range(250)]
+        for message in messages:
+            memory.append_message(message)
+        assert len(memory.working_memory.messages) == 200
+        assert memory.worker.pending == (messages if enabled else [])
+        snapshot = memory.export_state()
+        assert snapshot["pending_count"] == (250 if enabled else 0)
+        # Old checkpoints can contain work queued by a disabled extractor.
+        snapshot["pending"] = [m.model_dump(mode="json") for m in messages]
+        snapshot["last_processed_message_id"] = "processed-before-checkpoint"
+        restored = CognitiveMemory(store, mock_gateway, session_id="bounded", config=config)
+        await restored.import_state(snapshot)
+        assert restored.worker.pending == (messages if enabled else [])
+        assert restored.worker.last_processed_message_id == "processed-before-checkpoint"
+        assert restored.working_memory.messages == memory.working_memory.messages
+        assert restored.export_state()["pending_count"] == (250 if enabled else 0)
+
     async def test_stop_reclaims_other_resources_after_worker_failure(
         self, store: PersistenceStore, mock_gateway, monkeypatch,
     ) -> None:
@@ -1015,8 +1038,8 @@ class TestCognitiveMemory:
             ms.append_message(WorkingMemoryMessage(role="user", content="hi"))
             ms.append_message(WorkingMemoryMessage(role="assistant", content="hello"))
             assert len(ms.get_message_history()) == 2
-            # Worker 未启动，但 pending 仍排队
-            assert len(ms.worker.pending) == 2
+            # Disabled extraction retains working history without dead work.
+            assert not ms.worker.pending
         finally:
             await ms.stop()
 
