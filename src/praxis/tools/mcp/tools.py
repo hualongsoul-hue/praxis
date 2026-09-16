@@ -12,6 +12,7 @@ from mcp.types import TextContent
 from praxis.models.mcp import MCPToolInfo
 from praxis.models.tools import ToolDefinition, ToolMetadata
 from praxis.telemetry.logger import get_logger
+from praxis.tools.mcp.calls import invoke_mcp
 from praxis.tools.registry import ToolRegistry
 
 log = get_logger("tools.mcp.tools")
@@ -114,16 +115,7 @@ class MCPToolsBridge:
         if session is None:
             raise RuntimeError(f"MCP Server 未连接: {server_name}")
 
-        result = None
-        try:
-            result = await session.call_tool(tool_name, arguments)
-        except Exception:
-            # Transport diagnostics may include authentication headers or URLs.
-            # CancelledError is deliberately not caught.
-            pass
-        if result is None:
-            # Raise outside the handler so even __context__ cannot retain secrets.
-            raise RuntimeError("MCP transport failed")
+        result = await invoke_mcp(session.call_tool(tool_name, arguments))
         if result.is_error:
             # Error payloads may contain server credentials or private diagnostics.
             # Raise a non-transient failure; never retry an ambiguous remote action.

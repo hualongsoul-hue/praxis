@@ -10,6 +10,7 @@ from mcp.types import PromptReference, TextContent
 
 from praxis.models.mcp import MCPPromptInfo, MCPPromptMessage
 from praxis.telemetry.logger import get_logger
+from praxis.tools.mcp.calls import invoke_mcp
 
 log = get_logger("tools.mcp.prompts")
 
@@ -40,7 +41,7 @@ class MCPPromptsBridge:
         if session is None:
             raise RuntimeError(f"MCP Server 未连接: {server_name}")
 
-        result = await session.list_prompts()
+        result = await invoke_mcp(session.list_prompts())
 
         prompts: list[MCPPromptInfo] = []
         for p in result.prompts:
@@ -81,7 +82,7 @@ class MCPPromptsBridge:
         if session is None:
             raise RuntimeError(f"MCP Server 未连接: {server_name}")
 
-        result = await session.get_prompt(prompt_name, arguments)
+        result = await invoke_mcp(session.get_prompt(prompt_name, arguments))
 
         messages: list[MCPPromptMessage] = []
         for msg in result.messages:

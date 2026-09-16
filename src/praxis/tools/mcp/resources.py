@@ -16,6 +16,7 @@ from mcp.types import (
 
 from praxis.models.mcp import MCPResourceContent, MCPResourceInfo
 from praxis.telemetry.logger import get_logger
+from praxis.tools.mcp.calls import invoke_mcp
 
 log = get_logger("tools.mcp.resources")
 
@@ -47,7 +48,7 @@ class MCPResourcesBridge:
         if session is None:
             raise RuntimeError(f"MCP Server 未连接: {server_name}")
 
-        result = await session.list_resources()
+        result = await invoke_mcp(session.list_resources())
 
         resources: list[MCPResourceInfo] = []
         for r in result.resources:
@@ -103,7 +104,7 @@ class MCPResourcesBridge:
         if session is None:
             raise RuntimeError(f"MCP Server 未连接: {server_name}")
 
-        result = await session.read_resource(uri)
+        result = await invoke_mcp(session.read_resource(uri))
 
         # 提取第一个内容块
         if result.contents:

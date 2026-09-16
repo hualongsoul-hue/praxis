@@ -82,7 +82,7 @@ async def create_http_transport(
             elicitation_callback=elicitation_callback,
         ) as session:
             await session.initialize()
-            log.info("HTTP 连接已建立", server=config.name, url=config.url)
+            log.info("HTTP 连接已建立", server=config.name)
             yield session
 
 

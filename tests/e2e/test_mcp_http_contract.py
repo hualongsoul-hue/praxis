@@ -1,6 +1,7 @@
 """Exercise the MCP SDK transport through real TCP, without an external server."""
 
 import asyncio
+import logging
 import socket
 
 import pytest
@@ -21,9 +22,11 @@ from tests.fixtures.mcp_stdio_server import server as fixture_server
 pytestmark = pytest.mark.e2e
 
 
-async def test_http_tools_resources_prompts_and_callbacks_preserve_session_lifecycle() -> None:
+@pytest.mark.parametrize("query_url", [False, True])
+async def test_http_tools_resources_prompts_and_callbacks_preserve_session_lifecycle(caplog, query_url) -> None:
     """Catch incompatible HTTP clients, lost headers, and broken v2 field mapping."""
     application = fixture_server.streamable_http_app()
+    caplog.set_level(logging.INFO)
     received_headers: list[dict[bytes, bytes]] = []
 
     async def record_requests(scope, receive, send):
@@ -50,8 +53,8 @@ async def test_http_tools_resources_prompts_and_callbacks_preserve_session_lifec
 
             config = MCPServerConfig(
                 name="http-contract", transport=MCPTransportType.HTTP,
-                url=f"http://127.0.0.1:{port}/mcp",
-                headers={"X-Praxis-Test": "forwarded"}, timeout=5,
+                url=f"http://127.0.0.1:{port}/mcp" + ("?opaque=mcp-url-secret-canary" if query_url else ""),
+                headers={"X-Praxis-Test": "mcp-header-secret-canary"}, timeout=5,
             )
             sampled_messages: list[str] = []
 
@@ -103,7 +106,14 @@ async def test_http_tools_resources_prompts_and_callbacks_preserve_session_lifec
             assert closed.value.code == CONNECTION_CLOSED
             assert sampled_messages == ["Please sample a response"]
             assert received_headers
-            assert all(headers.get(b"x-praxis-test") == b"forwarded" for headers in received_headers)
+            assert all(headers.get(b"x-praxis-test") == b"mcp-header-secret-canary" for headers in received_headers)
+            assert "mcp-header-secret-canary" not in str([record.__dict__ for record in caplog.records])
+            native_records = [record.__dict__ for record in caplog.records if record.name.startswith("praxis.")]
+            assert "mcp-url-secret-canary" not in str(native_records)
+            if query_url:
+                # Generic SDK preserves URL compatibility. Hosts needing secret-safe
+                # INFO logs must prohibit URL credentials: httpx2 logs full URLs.
+                assert "mcp-url-secret-canary" in str([record.__dict__ for record in caplog.records if record.name == "httpx2"])
         finally:
             server.should_exit = True
             await asyncio.wait_for(serving, timeout=10)
