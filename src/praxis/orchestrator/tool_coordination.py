@@ -171,6 +171,8 @@ class ToolCoordinator:
 
         # 解析参数
         arguments = self.parse_arguments(raw_args)
+        # History/checkpoints must carry the same parsed values used for execution.
+        tool_call.function.arguments = json.dumps(arguments, ensure_ascii=False, allow_nan=False)
 
         self.emitter.emit(
             "tool_call_start",
