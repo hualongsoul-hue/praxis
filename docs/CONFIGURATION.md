@@ -30,6 +30,14 @@ gateway:
 `api_key_env` 只能是 `PRAXIS_MODEL_API_KEY`。密钥本身不能出现在 YAML 中。所有聊天、总结、判断、
 记忆处理、验证和 MCP Sampling 都使用 `default_model`；MCP Server 的模型 hint 不能覆盖它。
 
+`default_max_output_tokens` 是该部署实际请求的默认输出上限，流式与非流式一致，并用于预算预留。
+直接调用网关时可用正整数 `max_tokens` 或 `max_completion_tokens` 覆盖；SDK 保留调用者选择的
+字段，不会同时传输两种上限。`None` 视为未指定，二者均未指定时发送默认值 `max_tokens`。
+同时指定两个非空上限（即使相同），或传入布尔、零、负数、浮点数、字符串，会在预留和发送前拒绝。
+SDK 不裁剪响应；提供方是否执行上限、如何计入推理 token，仍由端点协议决定。收到 `length` 时保留
+部分正文并按输出耗尽终止，不执行该次响应中的工具。已派发调用被取消且没有最终用量时保守结算预估值，
+排队尚未派发的取消则释放预留，不计费用。
+
 `capabilities` 描述当前端点已验证的能力，不是 SDK 支持列表。Praxis 的输入传输层支持图片、音频、
 视频和文件；但只有在至少三个独立真实健康窗口中稳定成功的端点模态才能配置为 `true`。`false`
 会在任何文件或网络 I/O 之前返回 `UnsupportedInputModalityError`，避免把未验证能力交给远端碰运气。

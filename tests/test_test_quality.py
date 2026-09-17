@@ -117,6 +117,8 @@ def implementation_coupled_gateway_mocks(root: Path) -> list[str]:
     allowed = {
         "integration/test_gateway_litellm.py",
         "test_gateway.py",
+        # Native Gateway/Session integration: only the external transport is scripted.
+        "test_gateway_output_defaults.py",
     }
     findings: list[str] = []
     for path in sorted(root.rglob("*.py")):

@@ -122,11 +122,33 @@ def convert_stream_chunk(raw: Any) -> ModelResponseChunk:
     )
 
 
+def resolve_output_limit(
+    deployment: ModelDeployment, kwargs: dict[str, Any],
+) -> tuple[dict[str, Any], int]:
+    """Resolve one provider cap, preserving either public spelling and treating null as absent."""
+    options = dict(kwargs)
+    limits: dict[str, int] = {}
+    for name in ("max_tokens", "max_completion_tokens"):
+        value = options.pop(name, None)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{name} must be a positive integer or None")
+        limits[name] = value
+    if len(limits) > 1:
+        raise ValueError("Specify only one of max_tokens and max_completion_tokens")
+    name, output_tokens = next(
+        iter(limits.items()), ("max_tokens", deployment.default_max_output_tokens),
+    )
+    options[name] = output_tokens
+    return options, output_tokens
+
+
 def prepare_reservation(
     gateway: GatewayRouter,
     deployment: ModelDeployment,
     messages: list[dict[str, Any]],
-    kwargs: dict[str, Any],
+    output_tokens: int,
 ) -> UsageReservation:
     max_budget = gateway.config.max_budget
     max_total_tokens = gateway.config.max_total_tokens
@@ -138,11 +160,6 @@ def prepare_reservation(
         return gateway.reserve_usage(estimated_tokens=0, estimated_cost=None)
 
     prompt_tokens = get_token_count(messages, deployment.model)
-    output_tokens = int(
-        kwargs.get("max_tokens", deployment.default_max_output_tokens)
-        or deployment.default_max_output_tokens
-    )
-    output_tokens = max(output_tokens, 0)
     estimated_cost: float | None = None
     if isinstance(max_budget, (int, float)):
         input_cost = (
@@ -210,11 +227,12 @@ async def chat(
 ) -> ModelResponse:
     model_name = model or gateway.config.default_model
     deployment = gateway.resolve_deployment(model_name)
-    reservation = prepare_reservation(gateway, deployment, messages, kwargs)
+    options, output_tokens = resolve_output_limit(deployment, kwargs)
+    reservation = prepare_reservation(gateway, deployment, messages, output_tokens)
     call_kwargs: dict[str, Any] = {
         "model": model_name,
         "messages": messages,
-        **kwargs,
+        **options,
     }
     if tools:
         call_kwargs["tools"] = tools
@@ -222,14 +240,22 @@ async def chat(
         # bridge, which otherwise imports web-server dependencies for SDK calls.
         call_kwargs["_skip_mcp_handler"] = True
 
+    dispatched = False
     try:
         async with gateway.request_slot():
+            dispatched = True
             raw: Any = cast(
                 Any,
                 await gateway.router.acompletion(  # pyright: ignore[reportUnknownMemberType]
                     **call_kwargs,
                 ),
             )
+    except asyncio.CancelledError:
+        if dispatched:
+            gateway.settle_usage(reservation, actual_tokens=None, actual_cost=None)
+        else:
+            gateway.release_usage(reservation)
+        raise
     except Exception as exc:
         gateway.release_usage(reservation)
         raise map_litellm_exception(exc) from exc
@@ -264,13 +290,14 @@ async def chat_stream(
 ) -> AsyncGenerator[ModelResponseChunk, None]:
     model_name = model or gateway.config.default_model
     deployment = gateway.resolve_deployment(model_name)
-    reservation = prepare_reservation(gateway, deployment, messages, kwargs)
+    options, output_tokens = resolve_output_limit(deployment, kwargs)
+    reservation = prepare_reservation(gateway, deployment, messages, output_tokens)
     call_kwargs: dict[str, Any] = {
         "model": model_name,
         "messages": messages,
         "stream": True,
         "stream_options": {"include_usage": True},
-        **kwargs,
+        **options,
     }
     if tools:
         call_kwargs["tools"] = tools
@@ -279,9 +306,11 @@ async def chat_stream(
     final_usage: Usage | None = None
     final_model = model_name
     started = False
+    dispatched = False
     settled = False
     try:
         async with gateway.request_slot():
+            dispatched = True
             stream: Any = cast(
                 Any,
                 await gateway.router.acompletion(  # pyright: ignore[reportUnknownMemberType]
@@ -311,6 +340,9 @@ async def chat_stream(
             finally:
                 await close_provider_stream(stream)
     except asyncio.CancelledError:
+        if not dispatched:
+            gateway.release_usage(reservation)
+            settled = True
         raise
     except Exception as exc:
         if not started:
