@@ -277,6 +277,7 @@ class OrchestrationLoop:
                     await self.compactor.compact(
                         self.assembler.conversation_history,
                         self.assembler.file_refs,
+                        protected_message=ctx.input_history_message,
                     )
                     self.assembler.compaction_count += 1
                     active_message = ctx.input_history_message

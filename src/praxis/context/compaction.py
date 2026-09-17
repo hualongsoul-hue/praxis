@@ -45,6 +45,8 @@ class ContextCompactor:
         self,
         messages: list[dict[str, Any]],
         file_refs: list[str],
+        *,
+        protected_message: dict[str, Any] | None = None,
     ) -> CompactionResult:
         """压缩消息历史。
 
@@ -57,10 +59,15 @@ class ContextCompactor:
         Args:
             messages: 当前消息列表。
             file_refs: 文件引用列表。
+            protected_message: 当前活动输入的原对象，按身份完整保留；None 保持独立压缩语义。
 
         Returns:
             压缩结果。
         """
+        if protected_message is not None and not any(
+            message is protected_message for message in messages
+        ):
+            raise ValueError("protected message is not in context history")
         original_tokens = get_token_count(messages, self.model)
 
         # 分离关键消息和可压缩消息
@@ -75,7 +82,10 @@ class ContextCompactor:
             else:
                 groups.append([message])
         for group in groups:
-            if any(self.is_critical(message) for message in group):
+            if any(
+                message is protected_message or self.is_critical(message)
+                for message in group
+            ):
                 critical.extend(group)
             else:
                 compressible.extend(group)

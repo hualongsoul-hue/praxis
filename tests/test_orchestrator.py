@@ -930,6 +930,8 @@ class TestOrchestrationLoop:
                 self,
                 messages: list[dict[str, Any]],
                 file_refs: list[str],
+                *,
+                protected_message: dict[str, Any] | None = None,
             ) -> None:
                 copied_structured = [
                     deepcopy(message)
