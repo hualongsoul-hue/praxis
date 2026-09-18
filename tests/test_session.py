@@ -1,6 +1,7 @@
 """S12 会话管理单元测试。"""
 
 import asyncio
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import aclosing
 from pathlib import Path
@@ -778,11 +779,39 @@ class TestSessionResumer:
         factory: SessionFactory,
         guardrails: GuardrailEngine,
         mock_gateway: MagicMock,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
         mgr = CheckpointManager(store)
         resumer = SessionResumer(factory, mgr)
-        session = await resumer.resume_session("nonexistent", guardrails, gateway=mock_gateway)
+        with caplog.at_level(logging.DEBUG, logger="praxis.session.resume"):
+            session = await resumer.resume_session("nonexistent", guardrails, gateway=mock_gateway)
         assert session is None
+        records = [record for record in caplog.records if record.name == "praxis.session.resume"]
+        assert records
+        assert all(record.levelno == logging.DEBUG for record in records)
+        assert records[0].session_id == "nonexistent"
+
+    async def test_explicit_missing_checkpoint_remains_diagnosable(
+        self,
+        store: PersistenceStore,
+        factory: SessionFactory,
+        guardrails: GuardrailEngine,
+        mock_gateway: MagicMock,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        mgr = CheckpointManager(store)
+        # A named restore must not silently substitute another available snapshot.
+        await mgr.save_checkpoint(SessionMetadata(session_id="existing"), {}, {}, {})
+        with caplog.at_level(logging.WARNING, logger="praxis.session.resume"):
+            session = await SessionResumer(factory, mgr).resume_session(
+                "existing", guardrails, gateway=mock_gateway, checkpoint_id="missing-snapshot"
+            )
+        assert session is None
+        records = [record for record in caplog.records if record.name == "praxis.session.resume"]
+        assert len(records) == 1
+        assert records[0].levelno == logging.WARNING
+        assert records[0].session_id == "existing"
+        assert records[0].checkpoint_id == "missing-snapshot"
 
     async def test_resume_propagates_checkpoint_corruption_before_factory_path(
         self,

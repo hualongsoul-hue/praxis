@@ -86,7 +86,13 @@ class SessionResumer:
             checkpoint = await self.checkpoint_mgr.load_latest(session_id)
 
         if checkpoint is None:
-            log.warning("检查点未找到", session_id=session_id)
+            if checkpoint_id:
+                log.warning(
+                    "指定检查点未找到", session_id=session_id, checkpoint_id=checkpoint_id
+                )
+            else:
+                # 首次加载允许尚无快照；损坏或悬空的 latest 由加载器明确报错。
+                log.debug("会话尚无检查点", session_id=session_id)
             return None
 
         snapshot = await self.checkpoint_mgr.extract_snapshot(checkpoint)
